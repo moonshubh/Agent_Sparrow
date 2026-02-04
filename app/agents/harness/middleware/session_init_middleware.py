@@ -21,9 +21,7 @@ Usage:
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from langchain_core.messages import BaseMessage, SystemMessage
 from loguru import logger
@@ -32,12 +30,17 @@ if TYPE_CHECKING:
     from app.agents.harness.store.workspace_store import SparrowWorkspaceStore
 
 try:
-    from langchain.agents.middleware.types import AgentMiddleware
+    from langchain.agents.middleware.types import AgentMiddleware, AgentState
 
     _MIDDLEWARE_AVAILABLE = True
 except ImportError:
     _MIDDLEWARE_AVAILABLE = False
-    AgentMiddleware = object  # type: ignore
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class AgentState(dict):  # type: ignore[no-redef]
+        pass
 
 
 # System message name for handoff context (used for filtering)
@@ -46,7 +49,7 @@ GOALS_SYSTEM_NAME = "session_active_goals"
 PROGRESS_SYSTEM_NAME = "session_progress_notes"
 
 
-class SessionInitMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else object):
+class SessionInitMiddleware(AgentMiddleware):
     """Middleware that initializes sessions with context from previous runs.
 
     On the first message of a session:
@@ -156,7 +159,7 @@ class SessionInitMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else object
                     todo_lines.append(f"- [{status}] {content}")
                 else:
                     todo_lines.append(f"- {todo}")
-            parts.append(f"**Pending Tasks:**\n" + "\n".join(todo_lines))
+            parts.append("**Pending Tasks:**\n" + "\n".join(todo_lines))
 
         timestamp = handoff.get("timestamp") or handoff.get("captured_at", "")
         if timestamp:
@@ -166,7 +169,10 @@ class SessionInitMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else object
 
         # Truncate if too long
         if len(content) > self.max_context_chars:
-            content = content[: self.max_context_chars - 50] + "\n\n_[Truncated for context limit]_"
+            content = (
+                content[: self.max_context_chars - 50]
+                + "\n\n_[Truncated for context limit]_"
+            )
 
         return content
 
@@ -181,7 +187,9 @@ class SessionInitMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else object
                 if isinstance(feature, dict):
                     name = feature.get("name", "Unknown")
                     status = feature.get("status", "pending")
-                    emoji = "✅" if status == "pass" else "❌" if status == "fail" else "⏳"
+                    emoji = (
+                        "✅" if status == "pass" else "❌" if status == "fail" else "⏳"
+                    )
                     feature_lines.append(f"- {emoji} {name}: {status}")
                 else:
                     feature_lines.append(f"- {feature}")
@@ -193,7 +201,7 @@ class SessionInitMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else object
 
         return "\n\n".join(parts)
 
-    async def before_agent(
+    async def before_agent(  # type: ignore[override]
         self,
         messages: List[BaseMessage],
         config: Dict[str, Any],
@@ -279,7 +287,7 @@ class SessionInitMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else object
 
         return messages
 
-    async def after_agent(
+    async def after_agent(  # type: ignore[override]
         self,
         messages: List[BaseMessage],
         output: BaseMessage,
@@ -320,5 +328,7 @@ def strip_session_context_messages(messages: List[BaseMessage]) -> List[BaseMess
     return [
         msg
         for msg in messages
-        if not (isinstance(msg, SystemMessage) and getattr(msg, "name", "") in context_names)
+        if not (
+            isinstance(msg, SystemMessage) and getattr(msg, "name", "") in context_names
+        )
     ]

@@ -5,7 +5,7 @@ API endpoints for rate limiting monitoring and management.
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core.rate_limiting import BucketRateLimiter, RateLimitConfig
@@ -31,6 +31,7 @@ def get_rate_limiter() -> BucketRateLimiter:
 
 class RateLimitStatus(BaseModel):
     """Rate limit status response model."""
+
     timestamp: datetime
     status: str
     message: str
@@ -39,6 +40,7 @@ class RateLimitStatus(BaseModel):
 
 class ResetRequest(BaseModel):
     """Request model for resetting rate limits."""
+
     bucket: Optional[str] = None
     confirm: bool = False
 
@@ -47,27 +49,27 @@ class ResetRequest(BaseModel):
 async def get_rate_limit_status():
     """
     Get current rate limiting status and usage statistics.
-    
+
     Returns comprehensive information about current rate limit usage,
     circuit breaker states, and system health.
     """
     try:
         rate_limiter = get_rate_limiter()
-        
+
         # Get usage statistics
         stats = await rate_limiter.get_usage_stats()
-        
+
         # Get health check
         health = await rate_limiter.health_check()
-        
+
         # Determine overall status
         status = "healthy"
         message = "Rate limiting system operating normally"
-        
+
         if health["overall"] != "healthy":
             status = "degraded"
             message = "Rate limiting system experiencing issues"
-        
+
         utilization: Dict[str, Dict[str, Optional[float]]] = {}
         for bucket, metadata in stats.buckets.items():
             utilization[bucket] = {
@@ -88,7 +90,7 @@ async def get_rate_limit_status():
         ):
             status = "warning"
             message = "Approaching rate limits"
-        
+
         return RateLimitStatus(
             timestamp=datetime.utcnow(),
             status=status,
@@ -97,14 +99,13 @@ async def get_rate_limit_status():
                 "usage_stats": stats.dict(),
                 "health": health,
                 "utilization": utilization,
-            }
+            },
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to get rate limit status: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve rate limit status: {str(e)}"
+            status_code=500, detail=f"Failed to retrieve rate limit status: {str(e)}"
         )
 
 
@@ -112,7 +113,7 @@ async def get_rate_limit_status():
 async def get_usage_statistics():
     """
     Get detailed usage statistics for all models.
-    
+
     Returns usage data for Flash and Pro models including:
     - Current requests per minute/day
     - Remaining capacity
@@ -123,12 +124,11 @@ async def get_usage_statistics():
         rate_limiter = get_rate_limiter()
         stats = await rate_limiter.get_usage_stats()
         return stats.dict()
-        
+
     except Exception as e:
         logger.error(f"Failed to get usage statistics: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve usage statistics: {str(e)}"
+            status_code=500, detail=f"Failed to retrieve usage statistics: {str(e)}"
         )
 
 
@@ -136,7 +136,7 @@ async def get_usage_statistics():
 async def health_check():
     """
     Comprehensive health check for rate limiting system.
-    
+
     Checks:
     - Redis connectivity
     - Circuit breaker states
@@ -146,23 +146,22 @@ async def health_check():
     try:
         rate_limiter = get_rate_limiter()
         health = await rate_limiter.health_check()
-        
+
         # Return appropriate HTTP status based on health
         if health["overall"] == "unhealthy":
             raise HTTPException(status_code=503, detail=health)
         elif health["overall"] == "degraded":
             # Return 200 but indicate degraded status
             health["warning"] = "System is degraded but operational"
-        
+
         return health
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(
-            status_code=503,
-            detail={"overall": "unhealthy", "error": str(e)}
+            status_code=503, detail={"overall": "unhealthy", "error": str(e)}
         )
 
 
@@ -170,30 +169,29 @@ async def health_check():
 async def check_rate_limit(bucket: str):
     """
     Check if a request would be allowed for the specified bucket.
-    
+
     This is a dry-run check that doesn't consume tokens.
     Useful for preemptive checking before making API calls.
     """
     try:
         rate_limiter = get_rate_limiter()
-        
+
         # Note: This would ideally be a check without consumption
         # For now, we'll check and immediately refund if needed
         result = await rate_limiter.check_and_consume(bucket)
-        
+
         return {
             "bucket": bucket,
             "allowed": result.allowed,
             "metadata": result.metadata.dict(),
             "retry_after": result.retry_after,
-            "blocked_by": result.blocked_by
+            "blocked_by": result.blocked_by,
         }
-        
+
     except Exception as e:
         logger.error(f"Rate limit check failed for {bucket}: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to check rate limit for {bucket}: {str(e)}"
+            status_code=500, detail=f"Failed to check rate limit for {bucket}: {str(e)}"
         )
 
 
@@ -201,37 +199,35 @@ async def check_rate_limit(bucket: str):
 async def reset_rate_limits(request: ResetRequest):
     """
     Reset rate limits for specified bucket or all buckets.
-    
+
     WARNING: This should only be used in development or emergency situations.
     In production, rate limits should reset naturally.
     """
     if not request.confirm:
         raise HTTPException(
-            status_code=400,
-            detail="Must set 'confirm: true' to reset rate limits"
+            status_code=400, detail="Must set 'confirm: true' to reset rate limits"
         )
-    
+
     try:
         rate_limiter = get_rate_limiter()
-        
+
         await rate_limiter.reset_limits(request.bucket)
-        
-        message = f"Reset rate limits for {request.bucket}" if request.bucket else "Reset all rate limits"
+
+        message = (
+            f"Reset rate limits for {request.bucket}"
+            if request.bucket
+            else "Reset all rate limits"
+        )
         logger.warning(f"Rate limits reset via API: {message}")
-        
-        return {
-            "success": True,
-            "message": message,
-            "timestamp": datetime.utcnow()
-        }
-        
+
+        return {"success": True, "message": message, "timestamp": datetime.utcnow()}
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to reset rate limits: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to reset rate limits: {str(e)}"
+            status_code=500, detail=f"Failed to reset rate limits: {str(e)}"
         )
 
 
@@ -239,7 +235,7 @@ async def reset_rate_limits(request: ResetRequest):
 async def get_rate_limit_config():
     """
     Get current rate limiting configuration.
-    
+
     Returns the active configuration including limits, safety margins,
     and circuit breaker settings.
     """
@@ -271,12 +267,11 @@ async def get_rate_limit_config():
             },
             "monitoring_enabled": config.monitoring_enabled,
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to get rate limit config: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve configuration: {str(e)}"
+            status_code=500, detail=f"Failed to retrieve configuration: {str(e)}"
         )
 
 
@@ -284,13 +279,13 @@ async def get_rate_limit_config():
 async def get_rate_limit_metrics():
     """
     Get Prometheus-style metrics for rate limiting.
-    
+
     Returns metrics in a format suitable for monitoring systems.
     """
     try:
         rate_limiter = get_rate_limiter()
         stats = await rate_limiter.get_usage_stats()
-        
+
         metrics: Dict[str, Any] = {}
         for bucket, metadata in stats.buckets.items():
             sanitized = bucket.replace(".", "_").replace("-", "_").replace("/", "_")
@@ -314,12 +309,11 @@ async def get_rate_limit_metrics():
                 "uptime_percentage": stats.uptime_percentage,
             }
         )
-        
+
         return metrics
-        
+
     except Exception as e:
         logger.error(f"Failed to get rate limit metrics: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve metrics: {str(e)}"
+            status_code=500, detail=f"Failed to retrieve metrics: {str(e)}"
         )

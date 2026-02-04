@@ -24,14 +24,25 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 try:
     from langchain.agents.middleware import AgentMiddleware, AgentState
     from langchain.agents.middleware.summarization import SummarizationMiddleware
+
     AGENT_MIDDLEWARE_AVAILABLE = True
 except ImportError:
     AGENT_MIDDLEWARE_AVAILABLE = False
-    AgentMiddleware = object
-    AgentState = Dict[str, Any]
-    SummarizationMiddleware = object
 
-from app.agents.unified.model_context import DEFAULT_CONTEXT_WINDOW, get_model_context_window
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class AgentState(dict):  # type: ignore[no-redef]
+        pass
+
+    class SummarizationMiddleware:  # type: ignore[no-redef]
+        pass
+
+
+from app.agents.unified.model_context import (
+    DEFAULT_CONTEXT_WINDOW,
+    get_model_context_window,
+)
 
 
 def estimate_tokens(messages: List[BaseMessage]) -> int:
@@ -85,7 +96,7 @@ class ContextStats:
         }
 
 
-class FractionBasedSummarizationMiddleware(SummarizationMiddleware if AGENT_MIDDLEWARE_AVAILABLE else object):
+class FractionBasedSummarizationMiddleware(SummarizationMiddleware):
     """Summarization middleware that triggers at a fraction of context window.
 
     Instead of a fixed token threshold, this middleware triggers summarization
@@ -183,7 +194,7 @@ class FractionBasedSummarizationMiddleware(SummarizationMiddleware if AGENT_MIDD
         return self._stats.to_dict()
 
 
-class ContextEditingMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE else object):
+class ContextEditingMiddleware(AgentMiddleware):
     """Middleware that clears old tool results to prevent context overflow.
 
     When the estimated token count exceeds a threshold, this middleware
@@ -231,17 +242,18 @@ class ContextEditingMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE els
         """Middleware name for identification."""
         return "context_editing"
 
-    def before_model(self, state: Any, runtime: Any) -> Optional[Dict[str, Any]]:  # noqa: ARG002
+    def before_model(self, state: Any, runtime: Any) -> Optional[Dict[str, Any]]:
         """Process messages before each model call.
 
         This runs inside the agent loop (model → tools → model → ...). Tool results
         accumulate over multiple iterations, so we must clear older tool results
         repeatedly (not just once at agent start) to prevent context overflow.
         """
+        del runtime
         messages = self._extract_messages(state)
         return self._maybe_clear_tool_results(messages)
 
-    async def abefore_model(self, state: Any, runtime: Any) -> Optional[Dict[str, Any]]:  # noqa: ARG002
+    async def abefore_model(self, state: Any, runtime: Any) -> Optional[Dict[str, Any]]:
         """Async version of before_model."""
         return self.before_model(state, runtime)
 
@@ -284,7 +296,9 @@ class ContextEditingMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE els
             return state.get("messages", [])
         return getattr(state, "messages", [])
 
-    def _maybe_clear_tool_results(self, messages: List[BaseMessage]) -> Optional[Dict[str, Any]]:
+    def _maybe_clear_tool_results(
+        self, messages: List[BaseMessage]
+    ) -> Optional[Dict[str, Any]]:
         if not messages:
             return None
 
@@ -344,11 +358,11 @@ class ContextEditingMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE els
             return messages
 
         # Clear older tool results (keep the most recent ones)
-        indices_to_clear = tool_msg_indices[:-self.keep_recent]
+        indices_to_clear = tool_msg_indices[: -self.keep_recent]
         cleared_indices = {idx for idx, _, _ in indices_to_clear}
         tool_name_by_index = {idx: tool_name for idx, tool_name, _ in indices_to_clear}
 
-        edited_messages = []
+        edited_messages: list[BaseMessage] = []
         for i, msg in enumerate(messages):
             if i in cleared_indices:
                 # Replace with placeholder
@@ -372,7 +386,7 @@ class ContextEditingMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE els
         return self._stats.to_dict()
 
 
-class ModelRetryMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE else object):
+class ModelRetryMiddleware(AgentMiddleware):
     """Middleware that handles context overflow with graceful retry.
 
     When a model call fails due to context length errors:
@@ -447,7 +461,7 @@ class ModelRetryMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE else ob
                 self._stats.retry_attempts += 1
 
                 if attempt < self.max_retries:
-                    delay = self.base_delay * (2 ** attempt)
+                    delay = self.base_delay * (2**attempt)
                     logger.warning(
                         "context_overflow_retry",
                         attempt=attempt + 1,
@@ -473,7 +487,7 @@ class ModelRetryMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE else ob
                 self._stats.retry_attempts += 1
 
                 if attempt < self.max_retries:
-                    delay = self.base_delay * (2 ** attempt)
+                    delay = self.base_delay * (2**attempt)
                     logger.warning(
                         "context_overflow_retry",
                         attempt=attempt + 1,

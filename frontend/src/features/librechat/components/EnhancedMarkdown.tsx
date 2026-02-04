@@ -1,16 +1,16 @@
-'use client';
+"use client";
 
-import React, { memo, useMemo, useEffect, useRef, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import remarkDirective from 'remark-directive';
-import remarkSupersub from 'remark-supersub';
-import rehypeKatex from 'rehype-katex';
-import rehypeHighlight from 'rehype-highlight';
-import type { Components } from 'react-markdown';
-import { CopyCodeButton } from './CopyCodeButton';
-import { cn } from '@/shared/lib/utils';
+import React, { memo, useMemo, useEffect, useRef, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import remarkDirective from "remark-directive";
+import remarkSupersub from "remark-supersub";
+import rehypeKatex from "rehype-katex";
+import rehypeHighlight from "rehype-highlight";
+import type { Components } from "react-markdown";
+import { CopyCodeButton } from "./CopyCodeButton";
+import { cn } from "@/shared/lib/utils";
 import {
   artifactPlugin,
   extractContent,
@@ -18,8 +18,8 @@ import {
   ArtifactBadgeOrButton,
   generateArtifactId,
   ARTIFACT_DEFAULTS,
-} from '../artifacts';
-import type { Artifact, ArtifactType } from '../artifacts';
+} from "../artifacts";
+import type { Artifact, ArtifactType } from "../artifacts";
 
 type ExtendedComponents = Components & {
   artifact?: (props: any) => React.ReactElement | null;
@@ -37,7 +37,7 @@ interface EnhancedMarkdownProps {
   /** Whether to register artifacts (disabled during streaming to avoid partial artifacts) */
   registerArtifacts?: boolean;
   /** Rendering variant for styling behavior */
-  variant?: 'default' | 'librechat';
+  variant?: "default" | "librechat";
   /** Optional component overrides */
   componentsOverride?: Components;
 }
@@ -67,20 +67,21 @@ function preprocessLaTeX(content: string): string {
  * - Syntax highlighting for code blocks
  * - Directives (::artifact, :::thinking)
  * - Copy button for code blocks
- * 
+ *
  * Inspired by LibreChat's Markdown.tsx but adapted for Agent Sparrow.
  */
 export const EnhancedMarkdown = memo(function EnhancedMarkdown({
-  content = '',
+  content = "",
   isLatestMessage = false,
   className,
-  messageId = 'unknown',
+  messageId = "unknown",
   registerArtifacts = true,
-  variant = 'default',
+  variant = "default",
   componentsOverride,
 }: EnhancedMarkdownProps) {
   // Artifact actions for registering artifacts
-  const { addArtifact, setCurrentArtifact, setArtifactsVisible } = useArtifactActions();
+  const { addArtifact, setCurrentArtifact, setArtifactsVisible } =
+    useArtifactActions();
 
   // Track registered artifacts to avoid duplicates
   const registeredArtifactsRef = useRef<Set<string>>(new Set());
@@ -100,15 +101,17 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
 
   // Preprocess content for LaTeX and strip any markdown data URIs
   const processedContent = useMemo(() => {
-    if (!content) return '';
+    if (!content) return "";
 
     // CRITICAL: Strip markdown images with data URIs as final safety net.
     // Pattern: ![alt text](data:image/...) - images are displayed as artifacts, not embedded in chat text.
     const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
-    const replaced = content.replace(MARKDOWN_DATA_URI_PATTERN, '');
+    const replaced = content.replace(MARKDOWN_DATA_URI_PATTERN, "");
     const sanitized = replaced === content ? content : replaced.trim();
     if (replaced !== content) {
-      console.debug('[EnhancedMarkdown] Stripped markdown data URI from content');
+      console.debug(
+        "[EnhancedMarkdown] Stripped markdown data URI from content",
+      );
     }
 
     return preprocessLaTeX(sanitized);
@@ -120,10 +123,10 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
       remarkGfm,
       remarkDirective,
       artifactPlugin,
-      remarkSupersub,  // Superscript/subscript support (e.g., H₂O, E=mc²)
+      remarkSupersub, // Superscript/subscript support (e.g., H₂O, E=mc²)
       [remarkMath, { singleDollarTextMath: true }],
     ],
-    []
+    [],
   );
 
   // Memoize rehype plugins
@@ -138,7 +141,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
         },
       ],
     ],
-    []
+    [],
   );
 
   // Helper to register an artifact - deferred to avoid state updates during render
@@ -153,13 +156,13 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
         });
       }
     },
-    [addArtifact, registerArtifacts]
+    [addArtifact, registerArtifacts],
   );
 
   // Custom components for markdown rendering
   const components: ExtendedComponents = useMemo(() => {
-    const isLibreChat = variant === 'librechat';
-    const artifactTheme = isLibreChat ? 'librechat' : 'default';
+    const isLibreChat = variant === "librechat";
+    const artifactTheme = isLibreChat ? "librechat" : "default";
 
     const baseComponents: ExtendedComponents = {
       // Code blocks with syntax highlighting, copy button, and artifact detection
@@ -176,22 +179,26 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
         artifactLanguage: _artifactLanguage,
         ...props
       }: any) {
-        const match = /language-(\w+)/.exec(codeClassName || '');
-        const language = match ? match[1] : '';
+        const match = /language-(\w+)/.exec(codeClassName || "");
+        const language = match ? match[1] : "";
         const rawCode = extractContent(children);
-        const codeString = rawCode.replace(/\n$/, '');
+        const codeString = rawCode.replace(/\n$/, "");
 
         // react-markdown v10 no longer provides `inline`, so infer it reliably.
         const isInlineCode =
-          typeof inline === 'boolean'
+          typeof inline === "boolean"
             ? inline
-            : !codeClassName && !rawCode.includes('\n');
+            : !codeClassName && !rawCode.includes("\n");
 
         // Check for artifact metadata from the plugin (prefer hProperties over direct props)
         const hProps = node?.data?.hProperties || {};
         const isArtifact = hProps.isArtifact === true || _isArtifact === true;
-        const artifactType = (hProps.artifactType || _artifactType) as ArtifactType | undefined;
-        const artifactTitle = (hProps.artifactTitle || _artifactTitle) as string | undefined;
+        const artifactType = (hProps.artifactType || _artifactType) as
+          | ArtifactType
+          | undefined;
+        const artifactTitle = (hProps.artifactTitle || _artifactTitle) as
+          | string
+          | undefined;
 
         if (isInlineCode) {
           if (isLibreChat) {
@@ -206,9 +213,9 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
             <code
               {...props}
               className={cn(
-                'bg-secondary px-1 py-0.5 rounded text-[0.8em] font-semibold font-mono',
-                'text-terracotta-300',
-                codeClassName
+                "bg-secondary px-1 py-0.5 rounded text-[0.8em] font-semibold font-mono",
+                "text-terracotta-300",
+                codeClassName,
               )}
             >
               {children}
@@ -225,7 +232,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
               artifactType,
               artifactTitle || ARTIFACT_DEFAULTS.title,
               messageId,
-              artifactIndex
+              artifactIndex,
             ),
             type: artifactType,
             title: artifactTitle || ARTIFACT_DEFAULTS.title,
@@ -239,7 +246,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
           registerArtifact(artifact);
 
           // Render artifact button instead of code block for mermaid
-          if (artifactType === 'mermaid') {
+          if (artifactType === "mermaid") {
             if (!registerArtifacts) {
               // During streaming, show the code block inline to avoid partial registration
               if (isLibreChat) {
@@ -255,7 +262,10 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
               return (
                 <div className="relative group my-2 rounded-lg overflow-hidden border border-border shadow-academia-sm">
                   <pre className="overflow-x-auto p-3 bg-[hsl(var(--code-block-bg))]">
-                    <code {...props} className={cn('text-[11px] font-mono', codeClassName)}>
+                    <code
+                      {...props}
+                      className={cn("text-[11px] font-mono", codeClassName)}
+                    >
                       {children}
                     </code>
                   </pre>
@@ -316,7 +326,10 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
                     </div>
                   )}
                   <pre className="overflow-x-auto p-3 bg-[hsl(var(--code-block-bg))]">
-                    <code {...props} className={cn('text-[11px] font-mono', codeClassName)}>
+                    <code
+                      {...props}
+                      className={cn("text-[11px] font-mono", codeClassName)}
+                    >
                       {children}
                     </code>
                   </pre>
@@ -359,7 +372,10 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
               <pre className="overflow-x-auto p-4">
                 <code
                   {...props}
-                  className={cn('text-[12px] font-mono leading-relaxed', codeClassName)}
+                  className={cn(
+                    "text-[12px] font-mono leading-relaxed",
+                    codeClassName,
+                  )}
                 >
                   {children}
                 </code>
@@ -378,7 +394,13 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
         const artifactIndex = getNextArtifactIndex();
 
         const artifact: Artifact = {
-          id: generateArtifactId(identifier, type, title, messageId, artifactIndex),
+          id: generateArtifactId(
+            identifier,
+            type,
+            title,
+            messageId,
+            artifactIndex,
+          ),
           type,
           title,
           content: contentText,
@@ -395,7 +417,9 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
           if (isLibreChat) {
             return (
               <div className="lc-artifact-block">
-                <div className="lc-artifact-inline-title">Artifact: {title}</div>
+                <div className="lc-artifact-inline-title">
+                  Artifact: {title}
+                </div>
                 <pre>
                   <code>{contentText}</code>
                 </pre>
@@ -405,7 +429,9 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
 
           return (
             <div className="my-2 border border-border rounded-lg p-3 bg-secondary/40">
-              <div className="text-xs text-muted-foreground mb-1">Artifact: {title}</div>
+              <div className="text-xs text-muted-foreground mb-1">
+                Artifact: {title}
+              </div>
               <pre className="text-[11px] font-mono overflow-x-auto">
                 <code>{contentText}</code>
               </pre>
@@ -425,27 +451,27 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
       // Images with lazy loading and artifact support for generated images
       img({ src, alt, ...props }: any) {
         // Check if this is a base64 data URL (generated image)
-        const isGeneratedImage = src?.startsWith('data:image/');
+        const isGeneratedImage = src?.startsWith("data:image/");
 
         // Handle generated images with artifact support
         if (isGeneratedImage) {
           // Extract base64 data and mime type
           const dataUrlMatch = src.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          const mimeType = dataUrlMatch?.[1] || 'image/png';
-          const imageData = dataUrlMatch?.[2] || '';
+          const mimeType = dataUrlMatch?.[1] || "image/png";
+          const imageData = dataUrlMatch?.[2] || "";
           const artifactIndex = getNextArtifactIndex();
 
           // Create artifact for the generated image
           const imageArtifact: Artifact = {
             id: generateArtifactId(
-              'generated-image',
-              'image',
-              alt || 'Generated Image',
+              "generated-image",
+              "image",
+              alt || "Generated Image",
               messageId,
-              artifactIndex
+              artifactIndex,
             ),
-            type: 'image',
-            title: alt || 'Generated Image',
+            type: "image",
+            title: alt || "Generated Image",
             content: src,
             messageId,
             imageData,
@@ -470,9 +496,13 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
               <img
                 {...props}
                 src={src}
-                alt={alt || 'Generated image'}
+                alt={alt || "Generated image"}
                 loading="lazy"
-                className={cn('lc-markdown-image', 'lc-generated-image', props.className)}
+                className={cn(
+                  "lc-markdown-image",
+                  "lc-generated-image",
+                  props.className,
+                )}
                 onClick={handleImageClick}
               />
             );
@@ -483,13 +513,13 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
               <img
                 {...props}
                 src={src}
-                alt={alt || 'Generated image'}
+                alt={alt || "Generated image"}
                 loading="lazy"
                 className={cn(
-                  'max-w-[400px] max-h-[300px] w-auto h-auto rounded-lg',
-                  'border border-border shadow-academia-sm',
-                  'cursor-pointer transition-all duration-200',
-                  'hover:shadow-lg hover:border-primary/50'
+                  "max-w-[400px] max-h-[300px] w-auto h-auto rounded-lg",
+                  "border border-border shadow-academia-sm",
+                  "cursor-pointer transition-all duration-200",
+                  "hover:shadow-lg hover:border-primary/50",
                 )}
                 onClick={handleImageClick}
               />
@@ -498,10 +528,10 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
                   <button
                     onClick={handleImageClick}
                     className={cn(
-                      'px-2 py-1 rounded-md text-xs font-medium',
-                      'bg-primary/90 text-primary-foreground',
-                      'hover:bg-primary transition-colors',
-                      'shadow-sm backdrop-blur-sm'
+                      "px-2 py-1 rounded-md text-xs font-medium",
+                      "bg-primary/90 text-primary-foreground",
+                      "hover:bg-primary transition-colors",
+                      "shadow-sm backdrop-blur-sm",
                     )}
                   >
                     View Full Size
@@ -518,9 +548,9 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
             <img
               {...props}
               src={src}
-              alt={alt || ''}
+              alt={alt || ""}
               loading="lazy"
-              className={cn('lc-markdown-image', props.className)}
+              className={cn("lc-markdown-image", props.className)}
             />
           );
         }
@@ -529,11 +559,11 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
           <img
             {...props}
             src={src}
-            alt={alt || ''}
+            alt={alt || ""}
             loading="lazy"
             className={cn(
-              'max-w-full h-auto rounded-lg my-4',
-              'border border-border shadow-academia-sm'
+              "max-w-full h-auto rounded-lg my-4",
+              "border border-border shadow-academia-sm",
             )}
           />
         );
@@ -542,11 +572,11 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
       // Tables with enhanced styling
       table({ children, className: tableClassName, ...props }: any) {
         const wrapperClassName = isLibreChat
-          ? 'lc-markdown-table-wrapper'
-          : 'my-4 overflow-x-auto rounded-lg border border-border';
+          ? "lc-markdown-table-wrapper"
+          : "my-4 overflow-x-auto rounded-lg border border-border";
         const tableClasses = isLibreChat
-          ? 'lc-markdown-table'
-          : 'w-full text-sm border-collapse';
+          ? "lc-markdown-table"
+          : "w-full text-sm border-collapse";
 
         return (
           <div className={wrapperClassName}>
@@ -558,7 +588,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
       },
 
       thead({ children, className: headClassName, ...props }: any) {
-        const classes = isLibreChat ? 'lc-markdown-thead' : 'bg-secondary/50';
+        const classes = isLibreChat ? "lc-markdown-thead" : "bg-secondary/50";
         return (
           <thead {...props} className={cn(classes, headClassName)}>
             {children}
@@ -568,8 +598,8 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
 
       th({ children, className: thClassName, ...props }: any) {
         const classes = isLibreChat
-          ? 'lc-markdown-th'
-          : 'px-4 py-3 text-left font-semibold text-foreground border-b border-border';
+          ? "lc-markdown-th"
+          : "px-4 py-3 text-left font-semibold text-foreground border-b border-border";
         return (
           <th {...props} className={cn(classes, thClassName)}>
             {children}
@@ -579,8 +609,8 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
 
       td({ children, className: tdClassName, ...props }: any) {
         const classes = isLibreChat
-          ? 'lc-markdown-td'
-          : 'px-4 py-3 border-b border-border/50 text-muted-foreground';
+          ? "lc-markdown-td"
+          : "px-4 py-3 border-b border-border/50 text-muted-foreground";
         return (
           <td {...props} className={cn(classes, tdClassName)}>
             {children}
@@ -598,8 +628,20 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
           if (!React.isValidElement(child)) return false;
           const type = (child as React.ReactElement).type;
           // Check for common block-level element types
-          if (typeof type === 'string') {
-            return ['div', 'pre', 'table', 'ul', 'ol', 'blockquote', 'figure', 'hr', 'section', 'header', 'footer'].includes(type);
+          if (typeof type === "string") {
+            return [
+              "div",
+              "pre",
+              "table",
+              "ul",
+              "ol",
+              "blockquote",
+              "figure",
+              "hr",
+              "section",
+              "header",
+              "footer",
+            ].includes(type);
           }
           // Any custom component is treated as block-ish to avoid invalid <p> nesting
           return true;
@@ -623,17 +665,17 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
 
       // Links - open in new tab for external, show clean domain names
       baseComponents.a = ({ href, children, ...props }: any) => {
-        const isExternal = href?.startsWith('http');
+        const isExternal = href?.startsWith("http");
 
         // Extract clean display text if children is a raw URL
         let displayText = children;
         const childStr = String(children);
 
         // If the link text is the same as the href (raw URL), show just the domain
-        if (childStr === href && href?.startsWith('http')) {
+        if (childStr === href && href?.startsWith("http")) {
           try {
             const url = new URL(href);
-            displayText = url.hostname.replace('www.', '');
+            displayText = url.hostname.replace("www.", "");
           } catch {
             // Keep original if URL parsing fails
           }
@@ -643,11 +685,11 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
           <a
             {...props}
             href={href}
-            target={isExternal ? '_blank' : undefined}
-            rel={isExternal ? 'noopener noreferrer' : undefined}
+            target={isExternal ? "_blank" : undefined}
+            rel={isExternal ? "noopener noreferrer" : undefined}
             className={cn(
-              'text-primary hover:text-primary/80 underline underline-offset-2',
-              'transition-colors duration-200'
+              "text-primary hover:text-primary/80 underline underline-offset-2",
+              "transition-colors duration-200",
             )}
           >
             {displayText}
@@ -657,13 +699,19 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
 
       // Lists - tighter spacing like LibreChat
       baseComponents.ul = ({ children, ...props }: any) => (
-        <ul {...props} className="list-disc list-outside my-2 space-y-1 ml-4 pl-1">
+        <ul
+          {...props}
+          className="list-disc list-outside my-2 space-y-1 ml-4 pl-1"
+        >
           {children}
         </ul>
       );
 
       baseComponents.ol = ({ children, ...props }: any) => (
-        <ol {...props} className="list-decimal list-outside my-2 space-y-1 ml-4 pl-1">
+        <ol
+          {...props}
+          className="list-decimal list-outside my-2 space-y-1 ml-4 pl-1"
+        >
           {children}
         </ol>
       );
@@ -679,8 +727,8 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
         <blockquote
           {...props}
           className={cn(
-            'border-l-4 border-accent pl-4 py-2 my-4',
-            'italic text-muted-foreground bg-secondary/20 rounded-r-lg'
+            "border-l-4 border-accent pl-4 py-2 my-4",
+            "italic text-muted-foreground bg-secondary/20 rounded-r-lg",
           )}
         >
           {children}
@@ -689,25 +737,37 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
 
       // Headings - tighter margins like LibreChat
       baseComponents.h1 = ({ children, ...props }: any) => (
-        <h1 {...props} className="text-xl font-bold mb-2 mt-4 first:mt-0 text-foreground">
+        <h1
+          {...props}
+          className="text-xl font-bold mb-2 mt-4 first:mt-0 text-foreground"
+        >
           {children}
         </h1>
       );
 
       baseComponents.h2 = ({ children, ...props }: any) => (
-        <h2 {...props} className="text-lg font-semibold mb-2 mt-3 first:mt-0 text-foreground">
+        <h2
+          {...props}
+          className="text-lg font-semibold mb-2 mt-3 first:mt-0 text-foreground"
+        >
           {children}
         </h2>
       );
 
       baseComponents.h3 = ({ children, ...props }: any) => (
-        <h3 {...props} className="text-base font-semibold mb-1.5 mt-2.5 first:mt-0 text-foreground">
+        <h3
+          {...props}
+          className="text-base font-semibold mb-1.5 mt-2.5 first:mt-0 text-foreground"
+        >
           {children}
         </h3>
       );
 
       baseComponents.h4 = ({ children, ...props }: any) => (
-        <h4 {...props} className="text-sm font-medium mb-1 mt-2 first:mt-0 text-foreground">
+        <h4
+          {...props}
+          className="text-sm font-medium mb-1 mt-2 first:mt-0 text-foreground"
+        >
           {children}
         </h4>
       );
@@ -731,7 +791,9 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
       );
     }
 
-    return componentsOverride ? { ...baseComponents, ...componentsOverride } : baseComponents;
+    return componentsOverride
+      ? { ...baseComponents, ...componentsOverride }
+      : baseComponents;
   }, [
     variant,
     componentsOverride,
@@ -757,8 +819,8 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
   }
 
   const wrapperClassName = cn(
-    variant === 'librechat' ? undefined : 'enhanced-markdown',
-    className
+    variant === "librechat" ? undefined : "enhanced-markdown",
+    className,
   );
 
   return (

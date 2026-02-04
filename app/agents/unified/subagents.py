@@ -33,14 +33,12 @@ from .prompts import (
 from .tools import (
     grounding_search_tool,
     kb_search_tool,
-    log_diagnoser_tool,
     web_search_tool,
     tavily_extract_tool,
     feedme_search_tool,
     get_db_retrieval_tools,
     memory_list_tool,
     memory_search_tool,
-    supabase_query_tool,
     is_firecrawl_agent_enabled,
     # Firecrawl tools for enhanced web scraping (MCP-backed)
     firecrawl_fetch_tool,
@@ -48,7 +46,7 @@ from .tools import (
     firecrawl_crawl_tool,
     firecrawl_extract_tool,
     firecrawl_search_tool,
-    firecrawl_agent_tool,       # NEW: Autonomous data gathering
+    firecrawl_agent_tool,  # NEW: Autonomous data gathering
     firecrawl_agent_status_tool,  # NEW: Check agent job status
 )
 from .minimax_tools import (
@@ -60,25 +58,23 @@ from .minimax_tools import (
 # Import middleware classes for per-subagent configuration
 try:
     # LangChain provides TodoList and Summarization middleware
-    from langchain.agents.middleware import TodoListMiddleware
     from langchain.agents.middleware.summarization import (
         SummarizationMiddleware,
         count_tokens_approximately,
     )
 
     # DeepAgents provides PatchToolCalls middleware
-    from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 
     MIDDLEWARE_AVAILABLE = True
 except ImportError:
     # Fallback if middleware not available
     MIDDLEWARE_AVAILABLE = False
-    logger.warning("DeepAgents middleware not available - subagents will run without middleware")
+    logger.warning(
+        "DeepAgents middleware not available - subagents will run without middleware"
+    )
 
 # Import custom middleware
 try:
-    from app.agents.harness.middleware import ToolResultEvictionMiddleware
-
     CUSTOM_MIDDLEWARE_AVAILABLE = True
 except ImportError:
     CUSTOM_MIDDLEWARE_AVAILABLE = False
@@ -92,9 +88,15 @@ class MiddlewareConfig:
     messages_to_keep: int
 
 
-RESEARCH_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=100000, messages_to_keep=4)
-LOG_ANALYSIS_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=150000, messages_to_keep=6)
-DB_RETRIEVAL_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=80000, messages_to_keep=3)
+RESEARCH_MW_CONFIG = MiddlewareConfig(
+    max_tokens_before_summary=100000, messages_to_keep=4
+)
+LOG_ANALYSIS_MW_CONFIG = MiddlewareConfig(
+    max_tokens_before_summary=150000, messages_to_keep=6
+)
+DB_RETRIEVAL_MW_CONFIG = MiddlewareConfig(
+    max_tokens_before_summary=80000, messages_to_keep=3
+)
 
 
 def _subagent_read_tools() -> List[BaseTool]:
@@ -130,6 +132,7 @@ def _merge_tools(
         seen.add(name)
         merged.append(tool)
     return merged
+
 
 def _get_chat_model(
     model_name: str,
@@ -272,9 +275,11 @@ def _provider_api_key_available(provider: str) -> bool:
     if provider_key == "openrouter":
         # OpenRouter is available if either OpenRouter key or Minimax key is set
         # (Minimax models route through OpenRouter code path)
-        return bool(getattr(settings, "openrouter_api_key", None)) or bool(
-            getattr(settings, "minimax_api_key", None)
-        ) or bool(getattr(settings, "minimax_coding_plan_api_key", None))
+        return (
+            bool(getattr(settings, "openrouter_api_key", None))
+            or bool(getattr(settings, "minimax_api_key", None))
+            or bool(getattr(settings, "minimax_coding_plan_api_key", None))
+        )
     return False
 
 
@@ -329,7 +334,9 @@ def _get_subagent_model(
     model_name = subagent_config.model_id
     provider = subagent_config.provider or "google"
     bucket_name = (
-        f"zendesk.subagents.{subagent_name}" if zendesk else f"subagents.{subagent_name}"
+        f"zendesk.subagents.{subagent_name}"
+        if zendesk
+        else f"subagents.{subagent_name}"
     )
 
     if not _provider_api_key_available(provider):
@@ -399,7 +406,6 @@ def _research_subagent(
     The research agent gathers supporting evidence from:
     - Mailbird knowledge base (kb_search)
     - FeedMe document chunks (feedme_search)
-    - Supabase database (supabase_query)
     - Google grounding search (grounding_search)
     - Tavily web search (web_search)
     - Firecrawl tools (fetch, map, crawl, extract, search)
@@ -423,17 +429,12 @@ def _research_subagent(
     tools: List[BaseTool] = [
         kb_search_tool,
         feedme_search_tool,
-        supabase_query_tool,
         firecrawl_fetch_tool,
         firecrawl_map_tool,
         firecrawl_crawl_tool,
         firecrawl_extract_tool,
         firecrawl_search_tool,
-        *(
-            [firecrawl_agent_tool]
-            if is_firecrawl_agent_enabled()
-            else []
-        ),
+        *([firecrawl_agent_tool] if is_firecrawl_agent_enabled() else []),
         firecrawl_agent_status_tool,
         web_search_tool,
         tavily_extract_tool,
@@ -442,8 +443,8 @@ def _research_subagent(
     ]
     if use_minimax:
         tools = [
-            minimax_web_search_tool,       # AI-powered web search via Minimax
-            minimax_understand_image_tool, # Image analysis via Minimax vision
+            minimax_web_search_tool,  # AI-powered web search via Minimax
+            minimax_understand_image_tool,  # Image analysis via Minimax vision
             *tools,
         ]
         logger.info(
@@ -511,10 +512,12 @@ def _log_diagnoser_subagent(
     # for analyzing error screenshots
     tools = []
     if use_minimax:
-        tools.extend([
-            minimax_understand_image_tool,  # Analyze error screenshots
-            minimax_web_search_tool,        # Research error messages
-        ])
+        tools.extend(
+            [
+                minimax_understand_image_tool,  # Analyze error screenshots
+                minimax_web_search_tool,  # Research error messages
+            ]
+        )
         logger.info(
             "log_diagnoser_subagent_minimax_tools_added",
             model=model_name,
@@ -528,7 +531,11 @@ def _log_diagnoser_subagent(
             "Specialized log analysis agent with web research capabilities. Use when user "
             "provides log files or asks about errors, troubleshooting, or system issues. "
             "Can research error messages and solutions online."
-            + (" Can also analyze error screenshots using Minimax vision." if use_minimax else "")
+            + (
+                " Can also analyze error screenshots using Minimax vision."
+                if use_minimax
+                else ""
+            )
         ),
         "system_prompt": f"{LOG_ANALYSIS_PROMPT}\n\nCurrent date: {current_date}",
         # Keep the log diagnoser deterministic and fast: analyze the provided log
@@ -585,10 +592,12 @@ def _db_retrieval_subagent(
     use_minimax = is_minimax_available()
     tools = []
     if use_minimax:
-        tools.extend([
-            minimax_web_search_tool,
-            minimax_understand_image_tool,
-        ])
+        tools.extend(
+            [
+                minimax_web_search_tool,
+                minimax_understand_image_tool,
+            ]
+        )
         logger.info(
             "db_retrieval_subagent_minimax_tools_added",
             model=model_name,
@@ -610,7 +619,7 @@ def _db_retrieval_subagent(
         "preferred_tool_priority": [
             "db_unified_search",  # semantic/hybrid first
             "db_context_search",  # full doc/context retrieval
-            "db_grep_search",     # exact/pattern matches
+            "db_grep_search",  # exact/pattern matches
         ],
         "model": model,
         "model_name": model_name,

@@ -13,35 +13,30 @@ from .schemas import (
     UserBehaviorAnalytics,
     QueryPattern,
     SearchPerformanceData,
-    
     # Health Monitoring Models
     SystemHealthMetrics,
     ComponentHealth,
     HealthStatus,
     HealthAlert,
     MonitoringConfig,
-    
     # Analytics Insights
     AnalyticsInsights,
     OptimizationRecommendation,
     OptimizationInsight,
-    
     # API Models
     AnalyticsRequest,
     AnalyticsResponse,
     DashboardData,
     ReportConfig,
-    
     # Advanced Analytics
     TrendAnalysis,
     AnomalyDetection,
     PerformanceBenchmark,
-    
     # Enums
     AlertSeverity,
     SearchType,
     UserSegment,
-    OptimizationType
+    OptimizationType,
 )
 
 from .usage_tracker import UsageAnalytics
@@ -56,48 +51,42 @@ __status__ = "Production Ready"
 __all__ = [
     # Core Analytics Classes
     "UsageAnalytics",
-    "PerformanceMonitor", 
+    "PerformanceMonitor",
     "MetricCollector",
     "PerformanceConfig",
-    
     # Data Models
     "SearchEvent",
-    "SearchSession", 
+    "SearchSession",
     "UsageMetrics",
     "SearchBehaviorMetrics",
     "SystemPerformanceMetrics",
     "UserBehaviorAnalytics",
     "QueryPattern",
     "SearchPerformanceData",
-    
     # Health Monitoring
     "SystemHealthMetrics",
     "ComponentHealth",
-    "HealthStatus", 
+    "HealthStatus",
     "HealthAlert",
     "MonitoringConfig",
-    
     # Analytics Insights
     "AnalyticsInsights",
     "OptimizationRecommendation",
     "OptimizationInsight",
-    
     # API Models
     "AnalyticsRequest",
     "AnalyticsResponse",
     "DashboardData",
     "ReportConfig",
-    
     # Advanced Analytics
     "TrendAnalysis",
-    "AnomalyDetection", 
+    "AnomalyDetection",
     "PerformanceBenchmark",
-    
     # Enumerations
     "AlertSeverity",
     "SearchType",
-    "UserSegment", 
-    "OptimizationType"
+    "UserSegment",
+    "OptimizationType",
 ]
 
 # Configuration defaults
@@ -106,7 +95,7 @@ DEFAULT_CONFIG = {
         "enable_real_time": True,
         "buffer_size": 1000,
         "flush_interval_seconds": 60,
-        "cache_ttl_seconds": 300
+        "cache_ttl_seconds": 300,
     },
     "performance": {
         "collection_interval_seconds": 5,
@@ -116,58 +105,61 @@ DEFAULT_CONFIG = {
             "error_rate_threshold": 0.05,
             "memory_usage_threshold": 0.8,
             "cpu_usage_threshold": 0.85,
-            "cache_hit_rate_threshold": 0.7
-        }
+            "cache_hit_rate_threshold": 0.7,
+        },
     },
     "health_monitoring": {
         "check_interval_seconds": 30,
         "critical_services": ["database", "redis", "search_engine", "ai_models"],
-        "notification_channels": ["email", "slack", "webhook"]
-    }
+        "notification_channels": ["email", "slack", "webhook"],
+    },
 }
+
 
 def get_default_config():
     """Get default analytics configuration"""
     return DEFAULT_CONFIG.copy()
 
+
 def create_analytics_system(db, redis_client, config=None):
     """
     Factory function to create a complete analytics system
-    
+
     Args:
         db: Database session
         redis_client: Redis client
         config: Optional configuration override
-        
+
     Returns:
         Tuple of (UsageAnalytics, PerformanceMonitor)
     """
     if config is None:
         config = get_default_config()
-    
+
     # Create usage analytics
     usage_analytics = UsageAnalytics(
         db=db,
         redis_client=redis_client,
         enable_real_time=config["analytics"]["enable_real_time"],
         buffer_size=config["analytics"]["buffer_size"],
-        flush_interval_seconds=config["analytics"]["flush_interval_seconds"]
+        flush_interval_seconds=config["analytics"]["flush_interval_seconds"],
     )
-    
+
     # Create performance monitor
     perf_config = PerformanceConfig(
-        collection_interval_seconds=config["performance"]["collection_interval_seconds"],
+        collection_interval_seconds=config["performance"][
+            "collection_interval_seconds"
+        ],
         retention_days=config["performance"]["retention_days"],
-        alert_thresholds=config["performance"]["alert_thresholds"]
+        alert_thresholds=config["performance"]["alert_thresholds"],
     )
-    
+
     performance_monitor = PerformanceMonitor(
-        db=db,
-        redis_client=redis_client,
-        config=perf_config
+        db=db, redis_client=redis_client, config=perf_config
     )
-    
+
     return usage_analytics, performance_monitor
+
 
 # Module documentation
 __doc__ = """

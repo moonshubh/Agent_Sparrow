@@ -5,7 +5,7 @@
  * These validators ensure type safety at runtime when receiving events from the backend.
  */
 
-import { z } from 'zod';
+import { z } from "zod";
 import type {
   AgentThinkingTraceEvent,
   AgentTimelineUpdateEvent,
@@ -18,7 +18,7 @@ import type {
   TimelineOperation,
   TodoItem,
   ToolEvidenceCard,
-} from './event-types';
+} from "./event-types";
 
 // -----------------------------------------------------------------------------
 // Trace Step Schema
@@ -27,7 +27,7 @@ import type {
 export const TraceStepSchema = z.object({
   id: z.string(),
   timestamp: z.string(),
-  type: z.enum(['thought', 'action', 'result']),
+  type: z.enum(["thought", "action", "result"]),
   content: z.string(),
   metadata: z.record(z.string(), z.unknown()),
 });
@@ -38,9 +38,9 @@ export const TraceStepSchema = z.object({
 
 export const TimelineOperationSchema = z.object({
   id: z.string(),
-  type: z.enum(['agent', 'tool', 'thought', 'todo']),
+  type: z.enum(["agent", "tool", "thought", "todo"]),
   name: z.string(),
-  status: z.enum(['pending', 'running', 'success', 'error']),
+  status: z.enum(["pending", "running", "success", "error"]),
   parent: z.string().optional(),
   children: z.array(z.string()),
   startTime: z.string().optional(),
@@ -56,7 +56,7 @@ export const TimelineOperationSchema = z.object({
 export const TodoItemSchema = z.object({
   id: z.string(),
   title: z.string(),
-  status: z.enum(['pending', 'in_progress', 'done']),
+  status: z.enum(["pending", "in_progress", "done"]),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -103,26 +103,28 @@ export const AgentTodosUpdateEventSchema = z.object({
 
 export const GenuiStateUpdateEventSchema = z.record(z.string(), z.unknown());
 
-export const ImageArtifactEventSchema = z.object({
-  id: z.string(),
-  type: z.literal('image'),
-  title: z.string(),
-  content: z.string(),
-  messageId: z.string(),
-  imageUrl: z.string().url().optional(),
-  imageData: z.string().optional(),
-  mimeType: z.string(),
-  altText: z.string().optional(),
-  aspectRatio: z.string().optional(),
-  resolution: z.string().optional(),
-  pageUrl: z.string().url().optional(),
-}).refine((value) => Boolean(value.imageUrl || value.imageData), {
-  message: 'imageUrl or imageData required',
-});
+export const ImageArtifactEventSchema = z
+  .object({
+    id: z.string(),
+    type: z.literal("image"),
+    title: z.string(),
+    content: z.string(),
+    messageId: z.string(),
+    imageUrl: z.string().url().optional(),
+    imageData: z.string().optional(),
+    mimeType: z.string(),
+    altText: z.string().optional(),
+    aspectRatio: z.string().optional(),
+    resolution: z.string().optional(),
+    pageUrl: z.string().url().optional(),
+  })
+  .refine((value) => Boolean(value.imageUrl || value.imageData), {
+    message: "imageUrl or imageData required",
+  });
 
 export const ArticleArtifactEventSchema = z.object({
   id: z.string(),
-  type: z.literal('article'),
+  type: z.literal("article"),
   title: z.string(),
   content: z.string(),
   messageId: z.string(),
@@ -132,29 +134,31 @@ export const ArticleArtifactEventSchema = z.object({
 // Subagent Event Schemas
 // -----------------------------------------------------------------------------
 
-export const SubagentSpawnEventSchema: z.ZodSchema<SubagentSpawnEvent> = z.object({
-  subagentType: z.string(),
-  toolCallId: z.string(),
-  parentAgentId: z.string().optional(),
-  task: z.string(),
-  timestamp: z.string(),
-});
+export const SubagentSpawnEventSchema: z.ZodSchema<SubagentSpawnEvent> =
+  z.object({
+    subagentType: z.string(),
+    toolCallId: z.string(),
+    parentAgentId: z.string().optional(),
+    task: z.string(),
+    timestamp: z.string(),
+  });
 
 export const SubagentEndEventSchema: z.ZodSchema<SubagentEndEvent> = z.object({
   subagentType: z.string(),
   toolCallId: z.string(),
-  status: z.enum(['success', 'error']),
+  status: z.enum(["success", "error"]),
   reportPath: z.string(),
   excerpt: z.string(),
   timestamp: z.string(),
 });
 
-export const SubagentThinkingDeltaEventSchema: z.ZodSchema<SubagentThinkingDeltaEvent> = z.object({
-  toolCallId: z.string(),
-  delta: z.string(),
-  timestamp: z.string(),
-  subagentType: z.string().optional(),
-});
+export const SubagentThinkingDeltaEventSchema: z.ZodSchema<SubagentThinkingDeltaEvent> =
+  z.object({
+    toolCallId: z.string(),
+    delta: z.string(),
+    timestamp: z.string(),
+    subagentType: z.string().optional(),
+  });
 
 // -----------------------------------------------------------------------------
 // Validation Utilities
@@ -175,7 +179,7 @@ export interface ValidationResult<T> {
  */
 export function validateEvent<T>(
   schema: z.ZodSchema<T>,
-  data: unknown
+  data: unknown,
 ): ValidationResult<T> {
   const result = schema.safeParse(data);
 
@@ -199,14 +203,17 @@ export function validateEvent<T>(
 export function validateOrNull<T>(
   schema: z.ZodSchema<T>,
   data: unknown,
-  eventName?: string
+  eventName?: string,
 ): T | null {
   const result = validateEvent(schema, data);
 
   if (!result.success) {
-    console.warn(`[AG-UI] Event validation failed${eventName ? ` for ${eventName}` : ''}:`, result.error);
+    console.warn(
+      `[AG-UI] Event validation failed${eventName ? ` for ${eventName}` : ""}:`,
+      result.error,
+    );
     if (result.issues) {
-      console.warn('[AG-UI] Validation issues:', result.issues);
+      console.warn("[AG-UI] Validation issues:", result.issues);
     }
     return null;
   }
@@ -218,27 +225,39 @@ export function validateOrNull<T>(
  * Validate a thinking trace event.
  */
 export function validateThinkingTrace(
-  data: unknown
+  data: unknown,
 ): AgentThinkingTraceEvent | null {
-  return validateOrNull(AgentThinkingTraceEventSchema, data, 'agent_thinking_trace');
+  return validateOrNull(
+    AgentThinkingTraceEventSchema,
+    data,
+    "agent_thinking_trace",
+  );
 }
 
 /**
  * Validate a timeline update event.
  */
 export function validateTimelineUpdate(
-  data: unknown
+  data: unknown,
 ): AgentTimelineUpdateEvent | null {
-  return validateOrNull(AgentTimelineUpdateEventSchema, data, 'agent_timeline_update');
+  return validateOrNull(
+    AgentTimelineUpdateEventSchema,
+    data,
+    "agent_timeline_update",
+  );
 }
 
 /**
  * Validate a tool evidence event.
  */
 export function validateToolEvidence(
-  data: unknown
+  data: unknown,
 ): ToolEvidenceUpdateEvent | null {
-  const result = validateOrNull(ToolEvidenceUpdateEventSchema, data, 'tool_evidence_update');
+  const result = validateOrNull(
+    ToolEvidenceUpdateEventSchema,
+    data,
+    "tool_evidence_update",
+  );
   if (!result) return null;
   // Ensure output is present (transform guarantees this)
   return result;
@@ -248,54 +267,64 @@ export function validateToolEvidence(
  * Validate a todos update event.
  */
 export function validateTodosUpdate(
-  data: unknown
+  data: unknown,
 ): AgentTodosUpdateEvent | null {
-  return validateOrNull(AgentTodosUpdateEventSchema, data, 'agent_todos_update');
+  return validateOrNull(
+    AgentTodosUpdateEventSchema,
+    data,
+    "agent_todos_update",
+  );
 }
 
 /**
  * Validate a GenUI state update event.
  */
 export function validateGenuiState(
-  data: unknown
+  data: unknown,
 ): Record<string, unknown> | null {
-  return validateOrNull(GenuiStateUpdateEventSchema, data, 'genui_state_update');
+  return validateOrNull(
+    GenuiStateUpdateEventSchema,
+    data,
+    "genui_state_update",
+  );
 }
 
 /**
  * Validate an image artifact event.
  */
 export function validateImageArtifact(
-  data: unknown
+  data: unknown,
 ): z.infer<typeof ImageArtifactEventSchema> | null {
-  return validateOrNull(ImageArtifactEventSchema, data, 'image_artifact');
+  return validateOrNull(ImageArtifactEventSchema, data, "image_artifact");
 }
 
 /**
  * Validate an article artifact event.
  */
 export function validateArticleArtifact(
-  data: unknown
+  data: unknown,
 ): z.infer<typeof ArticleArtifactEventSchema> | null {
-  return validateOrNull(ArticleArtifactEventSchema, data, 'article_artifact');
+  return validateOrNull(ArticleArtifactEventSchema, data, "article_artifact");
 }
 
 export function validateSubagentSpawn(
-  data: unknown
+  data: unknown,
 ): SubagentSpawnEvent | null {
-  return validateOrNull(SubagentSpawnEventSchema, data, 'subagent_spawn');
+  return validateOrNull(SubagentSpawnEventSchema, data, "subagent_spawn");
 }
 
-export function validateSubagentEnd(
-  data: unknown
-): SubagentEndEvent | null {
-  return validateOrNull(SubagentEndEventSchema, data, 'subagent_end');
+export function validateSubagentEnd(data: unknown): SubagentEndEvent | null {
+  return validateOrNull(SubagentEndEventSchema, data, "subagent_end");
 }
 
 export function validateSubagentThinkingDelta(
-  data: unknown
+  data: unknown,
 ): SubagentThinkingDeltaEvent | null {
-  return validateOrNull(SubagentThinkingDeltaEventSchema, data, 'subagent_thinking_delta');
+  return validateOrNull(
+    SubagentThinkingDeltaEventSchema,
+    data,
+    "subagent_thinking_delta",
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -329,11 +358,13 @@ export const eventValidators = {
  */
 export function validateCustomEvent(
   eventName: string,
-  data: unknown
+  data: unknown,
 ): unknown | null {
   const validator = eventValidators[eventName as keyof typeof eventValidators];
   if (!validator) {
-    console.warn(`[AG-UI] Unknown event type '${eventName}' - discarding event`);
+    console.warn(
+      `[AG-UI] Unknown event type '${eventName}' - discarding event`,
+    );
     return null; // Return null for unknown events (consistent with validation failures)
   }
   return validator(data);

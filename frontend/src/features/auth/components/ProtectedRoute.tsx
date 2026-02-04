@@ -1,38 +1,38 @@
-"use client"
+"use client";
 
-import React, { useEffect } from 'react'
-import { usePathname } from 'next/navigation'
-import { useAuth } from '@/features/auth/hooks/useAuth'
-import { Loader2 } from 'lucide-react'
+import React, { useEffect } from "react";
+import { usePathname } from "next/navigation";
+import { useAuth } from "@/features/auth/hooks/useAuth";
+import { Loader2 } from "lucide-react";
 
 interface ProtectedRouteProps {
-  children: React.ReactNode
-  requiredRole?: string[]
-  fallback?: React.ReactNode
-  redirectTo?: string
+  children: React.ReactNode;
+  requiredRole?: string[];
+  fallback?: React.ReactNode;
+  redirectTo?: string;
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   children,
   requiredRole,
   fallback,
-  redirectTo = '/login'
+  redirectTo = "/login",
 }) => {
-  const { user, isLoading, isAuthenticated } = useAuth()
-  const pathname = usePathname() ?? '/'
+  const { user, isLoading, isAuthenticated } = useAuth();
+  const pathname = usePathname() ?? "/";
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    if (typeof window === "undefined") return;
     if (!isLoading && !isAuthenticated) {
-      const returnUrl = encodeURIComponent(pathname)
-      window.location.href = `${redirectTo}?returnUrl=${returnUrl}`
+      const returnUrl = encodeURIComponent(pathname);
+      window.location.href = `${redirectTo}?returnUrl=${returnUrl}`;
     }
-  }, [isLoading, isAuthenticated, pathname, redirectTo])
+  }, [isLoading, isAuthenticated, pathname, redirectTo]);
 
   // Show loading state
   if (isLoading) {
     return (
-      <div 
+      <div
         className="flex h-screen items-center justify-center"
         role="status"
         aria-live="polite"
@@ -43,7 +43,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
           <p className="text-sm text-muted-foreground">Loading...</p>
         </div>
       </div>
-    )
+    );
   }
 
   // Not authenticated
@@ -51,7 +51,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     return fallback ? (
       <>{fallback}</>
     ) : (
-      <main 
+      <main
         className="flex h-screen items-center justify-center"
         role="alert"
         aria-live="assertive"
@@ -63,17 +63,17 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
           </p>
         </section>
       </main>
-    )
+    );
   }
 
   // Check role-based access if required
   if (requiredRole && requiredRole.length > 0) {
-    const userRole = user?.user_metadata?.role || user?.app_metadata?.role
-    const hasRequiredRole = requiredRole.some(role => role === userRole)
+    const userRole = user?.user_metadata?.role || user?.app_metadata?.role;
+    const hasRequiredRole = requiredRole.some((role) => role === userRole);
 
     if (!hasRequiredRole) {
       return (
-        <main 
+        <main
           className="flex h-screen items-center justify-center"
           role="alert"
           aria-live="assertive"
@@ -85,29 +85,29 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
             </p>
           </section>
         </main>
-      )
+      );
     }
   }
 
   // Authenticated and authorized
-  return <>{children}</>
-}
+  return <>{children}</>;
+};
 
 // Higher-order component for protecting pages
 export function withAuth<P extends object>(
   Component: React.ComponentType<P>,
-  options?: Omit<ProtectedRouteProps, 'children'>
+  options?: Omit<ProtectedRouteProps, "children">,
 ) {
-  const ProtectedComponent = function(props: P) {
+  const ProtectedComponent = function (props: P) {
     return (
       <ProtectedRoute {...options}>
         <Component {...props} />
       </ProtectedRoute>
-    )
-  }
-  
+    );
+  };
+
   // Add displayName for better debugging experience
-  ProtectedComponent.displayName = `withAuth(${Component.displayName || Component.name || 'Component'})`
-  
-  return ProtectedComponent
+  ProtectedComponent.displayName = `withAuth(${Component.displayName || Component.name || "Component"})`;
+
+  return ProtectedComponent;
 }

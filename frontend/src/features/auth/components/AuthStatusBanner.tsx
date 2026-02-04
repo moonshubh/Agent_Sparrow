@@ -1,24 +1,24 @@
-'use client';
+"use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/alert';
-import { Button } from '@/shared/ui/button';
-import { Badge } from '@/shared/ui/badge';
-import { Card } from '@/shared/ui/card';
-import { 
-  ShieldOff, 
-  ShieldCheck, 
+import React, { useState, useEffect, useCallback } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/shared/ui/alert";
+import { Button } from "@/shared/ui/button";
+import { Badge } from "@/shared/ui/badge";
+import { Card } from "@/shared/ui/card";
+import {
+  ShieldOff,
+  ShieldCheck,
   AlertTriangle,
   Clock,
   RefreshCw,
   LogIn,
   X,
   CheckCircle,
-  Info
-} from 'lucide-react';
-import { useAuth } from '@/features/auth/hooks/useAuth';
-import { cn } from '@/shared/lib/utils';
-import { toast } from 'sonner';
+  Info,
+} from "lucide-react";
+import { useAuth } from "@/features/auth/hooks/useAuth";
+import { cn } from "@/shared/lib/utils";
+import { toast } from "sonner";
 
 interface AuthStatusBannerProps {
   className?: string;
@@ -33,7 +33,7 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
   dismissible = true,
   compact = false,
   autoRefresh = false,
-  onAuthChange
+  onAuthChange,
 }) => {
   const { user, session, isAuthenticated, isLoading, refreshToken } = useAuth();
   const [isDismissed, setIsDismissed] = useState(false);
@@ -44,10 +44,10 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
     setIsRefreshing(true);
     try {
       await refreshToken();
-      toast.success('Session refreshed successfully');
+      toast.success("Session refreshed successfully");
       setSessionExpiryWarning(false);
     } catch (error) {
-      toast.error('Failed to refresh session');
+      toast.error("Failed to refresh session");
     } finally {
       setIsRefreshing(false);
     }
@@ -73,7 +73,7 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
 
       if (expiryTime - now <= fiveMinutes) {
         setSessionExpiryWarning(true);
-        
+
         if (autoRefresh) {
           handleRefresh();
         }
@@ -106,9 +106,9 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
   }
 
   const getBannerVariant = () => {
-    if (!isAuthenticated) return 'destructive';
-    if (sessionExpiryWarning) return 'warning';
-    return 'default';
+    if (!isAuthenticated) return "destructive";
+    if (sessionExpiryWarning) return "warning";
+    return "default";
   };
 
   const getBannerIcon = () => {
@@ -118,36 +118,42 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
   };
 
   const getBannerTitle = () => {
-    if (!isAuthenticated) return 'Authentication Required';
-    if (sessionExpiryWarning) return 'Session Expiring Soon';
-    return 'Authenticated';
+    if (!isAuthenticated) return "Authentication Required";
+    if (sessionExpiryWarning) return "Session Expiring Soon";
+    return "Authenticated";
   };
 
   const getBannerDescription = () => {
     if (!isAuthenticated) {
-      return 'Please sign in to access all features and save your chat history.';
+      return "Please sign in to access all features and save your chat history.";
     }
     if (sessionExpiryWarning) {
-      return 'Your session will expire soon. Refresh to stay signed in.';
+      return "Your session will expire soon. Refresh to stay signed in.";
     }
     return `Signed in as ${user?.email}`;
   };
 
   if (compact) {
     return (
-      <div className={cn(
-        "flex items-center gap-2 px-3 py-1.5 rounded-lg glass-effect",
-        "border transition-all duration-200",
-        !isAuthenticated && "border-destructive/50 bg-destructive/10",
-        sessionExpiryWarning && "border-yellow-500/50 bg-yellow-500/10",
-        isAuthenticated && !sessionExpiryWarning && "border-green-500/50 bg-green-500/10",
-        className
-      )}>
+      <div
+        className={cn(
+          "flex items-center gap-2 px-3 py-1.5 rounded-lg glass-effect",
+          "border transition-all duration-200",
+          !isAuthenticated && "border-destructive/50 bg-destructive/10",
+          sessionExpiryWarning && "border-yellow-500/50 bg-yellow-500/10",
+          isAuthenticated &&
+            !sessionExpiryWarning &&
+            "border-green-500/50 bg-green-500/10",
+          className,
+        )}
+      >
         {getBannerIcon()}
         <span className="text-xs font-medium">
-          {!isAuthenticated ? 'Not authenticated' : 
-           sessionExpiryWarning ? 'Session expiring' : 
-           'Authenticated'}
+          {!isAuthenticated
+            ? "Not authenticated"
+            : sessionExpiryWarning
+              ? "Session expiring"
+              : "Authenticated"}
         </span>
         {sessionExpiryWarning && (
           <Button
@@ -157,19 +163,13 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
             disabled={isRefreshing}
             className="h-5 px-1.5"
           >
-            <RefreshCw className={cn(
-              "h-3 w-3",
-              isRefreshing && "animate-spin"
-            )} />
+            <RefreshCw
+              className={cn("h-3 w-3", isRefreshing && "animate-spin")}
+            />
           </Button>
         )}
         {!isAuthenticated && (
-          <Button
-            size="sm"
-            variant="ghost"
-            asChild
-            className="h-5 px-1.5"
-          >
+          <Button size="sm" variant="ghost" asChild className="h-5 px-1.5">
             <a href="/login">
               <LogIn className="h-3 w-3" />
             </a>
@@ -180,11 +180,11 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
   }
 
   return (
-    <Alert 
+    <Alert
       className={cn(
         "glass-effect backdrop-blur-xl",
         "animate-in slide-in-from-top duration-300",
-        className
+        className,
       )}
       variant={getBannerVariant() as any}
     >
@@ -198,14 +198,10 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
             <AlertDescription className="text-xs">
               {getBannerDescription()}
             </AlertDescription>
-            
+
             {!isAuthenticated && (
               <div className="flex items-center gap-2 mt-2">
-                <Button
-                  size="sm"
-                  variant="default"
-                  asChild
-                >
+                <Button size="sm" variant="default" asChild>
                   <a href="/login" className="flex items-center gap-1">
                     <LogIn className="h-3 w-3" />
                     Sign In
@@ -216,7 +212,7 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
                 </span>
               </div>
             )}
-            
+
             {sessionExpiryWarning && (
               <div className="flex items-center gap-2 mt-2">
                 <Button
@@ -225,22 +221,25 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
                   onClick={handleRefresh}
                   disabled={isRefreshing}
                 >
-                  <RefreshCw className={cn(
-                    "h-3 w-3 mr-1",
-                    isRefreshing && "animate-spin"
-                  )} />
+                  <RefreshCw
+                    className={cn(
+                      "h-3 w-3 mr-1",
+                      isRefreshing && "animate-spin",
+                    )}
+                  />
                   Refresh Session
                 </Button>
                 {session?.expires_at && (
                   <span className="text-xs text-muted-foreground">
-                    Expires {new Date(session.expires_at * 1000).toLocaleTimeString()}
+                    Expires{" "}
+                    {new Date(session.expires_at * 1000).toLocaleTimeString()}
                   </span>
                 )}
               </div>
             )}
           </div>
         </div>
-        
+
         {dismissible && (
           <Button
             size="sm"
@@ -257,25 +256,33 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
 };
 
 // Persistent auth status indicator
-export const AuthStatusIndicator: React.FC<{ className?: string }> = ({ className }) => {
+export const AuthStatusIndicator: React.FC<{ className?: string }> = ({
+  className,
+}) => {
   const { isAuthenticated, user } = useAuth();
 
   return (
-    <div className={cn(
-      "flex items-center gap-2 px-2.5 py-1 rounded-full glass-effect",
-      "border transition-all duration-200",
-      isAuthenticated ? "border-green-500/30" : "border-yellow-500/30",
-      className
-    )}>
+    <div
+      className={cn(
+        "flex items-center gap-2 px-2.5 py-1 rounded-full glass-effect",
+        "border transition-all duration-200",
+        isAuthenticated ? "border-green-500/30" : "border-yellow-500/30",
+        className,
+      )}
+    >
       {isAuthenticated ? (
         <>
           <CheckCircle className="h-3 w-3 text-green-500" />
-          <span className="text-xs font-medium text-green-500">Authenticated</span>
+          <span className="text-xs font-medium text-green-500">
+            Authenticated
+          </span>
         </>
       ) : (
         <>
           <AlertTriangle className="h-3 w-3 text-yellow-500" />
-          <span className="text-xs font-medium text-yellow-500">Guest Mode</span>
+          <span className="text-xs font-medium text-yellow-500">
+            Guest Mode
+          </span>
         </>
       )}
     </div>

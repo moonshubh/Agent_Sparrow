@@ -15,9 +15,9 @@ from .schemas import (
 )
 
 __all__ = [
-    'FeedMeConversation',
-    'ConversationCreate',
-    'ConversationUpdate',
-    'TranscriptUploadRequest',
-    'ProcessingStatus',
+    "FeedMeConversation",
+    "ConversationCreate",
+    "ConversationUpdate",
+    "TranscriptUploadRequest",
+    "ProcessingStatus",
 ]

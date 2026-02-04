@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import is_dataclass, replace
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
+
 from langgraph.checkpoint.memory import InMemorySaver
 
 from .postgres_checkpointer import _redact_data_urls  # reuse the same sanitizer
@@ -17,13 +19,17 @@ class SanitizingMemorySaver(InMemorySaver):
 
     async def aput(  # type: ignore[override]
         self,
-        config: dict[str, Any],
+        config: RunnableConfig,
         checkpoint: Any,
         metadata: Any,
         new_versions: Any = None,
-    ) -> dict[str, Any]:
+    ) -> RunnableConfig:
         try:
-            if is_dataclass(checkpoint) and hasattr(checkpoint, "channel_values"):
+            if (
+                is_dataclass(checkpoint)
+                and not isinstance(checkpoint, type)
+                and hasattr(checkpoint, "channel_values")
+            ):
                 channel_values = getattr(checkpoint, "channel_values")
                 if isinstance(channel_values, dict):
                     checkpoint = replace(
@@ -36,4 +42,3 @@ class SanitizingMemorySaver(InMemorySaver):
             # Never fail checkpointing due to sanitization.
             pass
         return await super().aput(config, checkpoint, metadata, new_versions)
-

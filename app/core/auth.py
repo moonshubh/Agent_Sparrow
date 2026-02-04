@@ -5,7 +5,7 @@ Provides basic authentication and permission verification functions.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -20,11 +20,11 @@ class User(BaseModel):
 async def verify_user_permission(user_id: str, permission: str) -> bool:
     """
     Verify if a user has a specific permission.
-    
+
     Args:
         user_id: The ID of the user
         permission: The permission to check
-        
+
     Returns:
         bool: True if the user has the permission, False otherwise
     """
@@ -37,10 +37,10 @@ async def verify_user_permission(user_id: str, permission: str) -> bool:
 async def get_current_user(token: Optional[str] = None) -> User:
     """
     Get the current authenticated user from a token.
-    
+
     Args:
         token: The authentication token
-        
+
     Returns:
         Dict containing user information or None if not authenticated
     """
@@ -48,20 +48,23 @@ async def get_current_user(token: Optional[str] = None) -> User:
     return User(
         id="default_user",
         email="user@example.com",
-        permissions=["read", "write", "approve"]
+        permissions=["read", "write", "approve"],
     )
 
 
 async def require_permission(permission: str):
     """
     Decorator to require a specific permission for an endpoint.
-    
+
     Args:
         permission: The required permission
     """
+
     def decorator(func):
         async def wrapper(*args, **kwargs):
             # Placeholder - in production would check actual permissions
             return await func(*args, **kwargs)
+
         return wrapper
+
     return decorator

@@ -576,8 +576,8 @@ or task.
 
 
 def get_coordinator_prompt(
-    model: str = None,
-    provider: str = None,
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
     include_skills: bool = True,
     current_date: Optional[str] = None,
     zendesk: bool = False,
@@ -604,7 +604,7 @@ def get_coordinator_prompt(
     model_display_names = _get_model_display_names()
     provider_display_names = _get_provider_display_names()
 
-    def _format_model_name(raw: str, prov: Optional[str]) -> str:
+    def _format_model_name(raw: Optional[str], prov: Optional[str]) -> str:
         normalized = (raw or "").strip().lower()
         if not normalized and prov:
             return provider_display_names.get(prov.lower(), "advanced AI")

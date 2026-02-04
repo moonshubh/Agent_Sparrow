@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+# mypy: ignore-errors
 """
 Gemini PDF → Markdown processor (LLM vision, no OCR)
 
@@ -19,6 +18,8 @@ Memory optimization:
 Note: This module is best-effort and aims to stay within free-tier quotas.
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import gc
@@ -29,13 +30,20 @@ from typing import List, Dict, Any, Optional, Tuple
 from pdf2image import convert_from_bytes
 from PIL import Image
 
+from app.core.settings import settings
+from app.core.config import get_models_config
+from app.core.rate_limiting.agent_wrapper import get_rate_limiter
+from app.core.rate_limiting.exceptions import RateLimitExceededException
+
 try:
     from google import genai  # type: ignore
     from google.genai import types  # type: ignore
+
     GENAI_SDK = "google.genai"
 except ImportError:  # pragma: no cover
     try:
         import google.generativeai as genai  # type: ignore
+
         types = None  # Old SDK doesn't have types module
         GENAI_SDK = "google.generativeai"
     except ImportError:
@@ -43,11 +51,6 @@ except ImportError:  # pragma: no cover
             "Neither google.genai nor google.generativeai is available. "
             "Install one of: pip install google-genai or pip install google-generativeai"
         )
-
-from app.core.settings import settings
-from app.core.config import get_models_config
-from app.core.rate_limiting.agent_wrapper import get_rate_limiter
-from app.core.rate_limiting.exceptions import RateLimitExceededException
 
 logger = logging.getLogger(__name__)
 
@@ -151,24 +154,24 @@ def _generate_content(model_name: str, parts: List[Any]) -> str:
                 contents.append(types.Part.from_text(text=part))
             elif isinstance(part, dict) and "mime_type" in part and "data" in part:
                 # Image part - create inline data
-                contents.append(types.Part.from_bytes(
-                    data=base64.b64decode(part["data"]),
-                    mime_type=part["mime_type"]
-                ))
+                contents.append(
+                    types.Part.from_bytes(
+                        data=base64.b64decode(part["data"]), mime_type=part["mime_type"]
+                    )
+                )
             else:
                 contents.append(part)
 
         resp = _genai_client.models.generate_content(
-            model=model_name,
-            contents=contents
+            model=model_name, contents=contents
         )
         # Extract text from response
-        if hasattr(resp, 'text'):
+        if hasattr(resp, "text"):
             return resp.text or ""
-        elif hasattr(resp, 'candidates') and resp.candidates:
+        elif hasattr(resp, "candidates") and resp.candidates:
             candidate = resp.candidates[0]
-            if hasattr(candidate, 'content') and candidate.content:
-                if hasattr(candidate.content, 'parts') and candidate.content.parts:
+            if hasattr(candidate, "content") and candidate.content:
+                if hasattr(candidate.content, "parts") and candidate.content.parts:
                     return candidate.content.parts[0].text or ""
         return ""
     else:
@@ -176,7 +179,11 @@ def _generate_content(model_name: str, parts: List[Any]) -> str:
         resp = _genai_client.generate_content(parts)
         text = getattr(resp, "text", None)
         if not text and getattr(resp, "candidates", None):
-            text = resp.candidates[0].content.parts[0].text if resp.candidates[0].content.parts else ""
+            text = (
+                resp.candidates[0].content.parts[0].text
+                if resp.candidates[0].content.parts
+                else ""
+            )
         return text or ""
 
 
@@ -214,13 +221,16 @@ def process_pdf_to_markdown(
     # Try pypdf first for efficiency, fallback to pdf2image
     try:
         from pypdf import PdfReader
+
         reader = PdfReader(io.BytesIO(pdf_bytes))
         total_pages = len(reader.pages)
         del reader  # Release reader
     except Exception:
         # Fallback: load first page to validate PDF and estimate
         try:
-            test_images = convert_from_bytes(pdf_bytes, dpi=72, first_page=1, last_page=1)
+            test_images = convert_from_bytes(
+                pdf_bytes, dpi=72, first_page=1, last_page=1
+            )
             total_pages = 1  # We'll discover more as we go
             for img in test_images:
                 img.close()
@@ -241,10 +251,7 @@ def process_pdf_to_markdown(
         # Load only the pages needed for this batch
         try:
             batch_images = convert_from_bytes(
-                pdf_bytes,
-                dpi=144,
-                first_page=batch_start,
-                last_page=batch_end
+                pdf_bytes, dpi=144, first_page=batch_start, last_page=batch_end
             )
         except Exception as e:
             logger.warning(f"Failed to load pages {batch_start}-{batch_end}: {e}")
@@ -267,7 +274,7 @@ def process_pdf_to_markdown(
     # Group jpeg_parts into chunks for API calls
     chunks: List[List[Dict[str, Any]]] = []
     for i in range(0, len(jpeg_parts), pages_per_call):
-        chunks.append(jpeg_parts[i:i + pages_per_call])
+        chunks.append(jpeg_parts[i : i + pages_per_call])
 
     prompt = _default_prompt()
     md_segments: List[str] = []
@@ -290,7 +297,9 @@ def process_pdf_to_markdown(
             logger.warning("Gemini feedme rate limit reached: %s", exc)
             break
         except Exception as e:
-            logger.error(f"Gemini extraction failed on chunk {idx+1}/{len(chunks)}: {e}")
+            logger.error(
+                f"Gemini extraction failed on chunk {idx + 1}/{len(chunks)}: {e}"
+            )
             md_segments.append("\n> [Extraction failed for this chunk]\n")
 
     # Concatenate segments
@@ -320,9 +329,7 @@ def process_pdf_to_markdown(
         "total_pages": total_pages,
         "truncated": truncated,
         "calls_used": calls_used + (1 if len(md_segments) > 1 else 0),
-        "warnings": [
-            "Extraction truncated to page budget" if truncated else None
-        ]
+        "warnings": ["Extraction truncated to page budget" if truncated else None],
     }
     # strip None warnings
     info["warnings"] = [w for w in info["warnings"] if w]

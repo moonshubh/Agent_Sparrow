@@ -4,7 +4,7 @@
  */
 export const sectionIcon = {
   summary: "📝",
-  issues: "🚩", 
+  issues: "🚩",
   fixes: "💡",
 } as const;
 
@@ -14,8 +14,16 @@ export const sectionIcon = {
  */
 export const sectionPatterns = [
   { pattern: /^(executive\s+summary|summary)$/i, emoji: sectionIcon.summary },
-  { pattern: /^(key\s+issues?\s+identified?|issues?\s+found|identified\s+issues?|problems?\s+detected|issues?)$/i, emoji: sectionIcon.issues },
-  { pattern: /^(recommended\s+solutions?|solutions?|solution|fixes?|recommendations?)$/i, emoji: sectionIcon.fixes },
+  {
+    pattern:
+      /^(key\s+issues?\s+identified?|issues?\s+found|identified\s+issues?|problems?\s+detected|issues?)$/i,
+    emoji: sectionIcon.issues,
+  },
+  {
+    pattern:
+      /^(recommended\s+solutions?|solutions?|solution|fixes?|recommendations?)$/i,
+    emoji: sectionIcon.fixes,
+  },
 ] as const;
 
 /**
@@ -25,12 +33,12 @@ export const sectionPatterns = [
  * @returns The escaped string.
  */
 function escapeHtml(unsafe: string): string {
-    return unsafe
-         .replace(/&/g, "&amp;")
-         .replace(/</g, "&lt;")
-         .replace(/>/g, "&gt;")
-         .replace(/"/g, "&quot;")
-         .replace(/'/g, "&#039;");
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 /**
@@ -48,4 +56,4 @@ export function accessibleEmoji(emoji: string, label: string): string {
 /**
  * Non-breaking space character for proper emoji spacing
  */
-export const NBSP = '\u00A0';
+export const NBSP = "\u00A0";

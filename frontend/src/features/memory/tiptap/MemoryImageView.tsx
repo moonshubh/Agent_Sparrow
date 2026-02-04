@@ -1,19 +1,23 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
-import { resolveMemoryAssetUrl } from '@/features/memory/lib/memoryAssetResolver';
-import { parseMemoryImageSrc, parseDimensionValue, withSizeFragment } from '@/features/memory/lib/memoryImageSizing';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
+import { resolveMemoryAssetUrl } from "@/features/memory/lib/memoryAssetResolver";
+import {
+  parseMemoryImageSrc,
+  parseDimensionValue,
+  withSizeFragment,
+} from "@/features/memory/lib/memoryImageSizing";
 
 type ResizeHandle =
-  | 'top-left'
-  | 'top'
-  | 'top-right'
-  | 'right'
-  | 'bottom-right'
-  | 'bottom'
-  | 'bottom-left'
-  | 'left';
+  | "top-left"
+  | "top"
+  | "top-right"
+  | "right"
+  | "bottom-right"
+  | "bottom"
+  | "bottom-left"
+  | "left";
 
 type DragState = {
   startX: number;
@@ -35,45 +39,56 @@ const clamp = (value: number, min: number, max?: number) => {
   return Math.max(value, min);
 };
 
-export function MemoryImageView({ node, editor, selected, updateAttributes }: NodeViewProps) {
-  const src = node.attrs.src || '';
-  const alt = node.attrs.alt || '';
-  const { baseSrc, width: parsedWidth, height: parsedHeight } = useMemo(
-    () => parseMemoryImageSrc(src),
-    [src]
-  );
+export function MemoryImageView({
+  node,
+  editor,
+  selected,
+  updateAttributes,
+}: NodeViewProps) {
+  const src = node.attrs.src || "";
+  const alt = node.attrs.alt || "";
+  const {
+    baseSrc,
+    width: parsedWidth,
+    height: parsedHeight,
+  } = useMemo(() => parseMemoryImageSrc(src), [src]);
   const initialWidth = parseDimensionValue(node.attrs.width) ?? parsedWidth;
   const initialHeight = parseDimensionValue(node.attrs.height) ?? parsedHeight;
+  const derivedSize = useMemo(
+    () => ({ width: initialWidth, height: initialHeight }),
+    [initialWidth, initialHeight],
+  );
 
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
   const [hasError, setHasError] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
-  const [size, setSize] = useState<{ width?: number; height?: number }>({
-    width: initialWidth,
-    height: initialHeight,
-  });
+  const [size, setSize] = useState<{ width?: number; height?: number }>(
+    derivedSize,
+  );
 
   const sizeRef = useRef(size);
   const dragRef = useRef<DragState | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
-  useEffect(() => {
-    sizeRef.current = size;
-  }, [size]);
+  const displaySize = isResizing ? size : derivedSize;
 
   useEffect(() => {
-    setSize({ width: initialWidth, height: initialHeight });
-  }, [initialWidth, initialHeight]);
+    sizeRef.current = displaySize;
+  }, [displaySize]);
 
   useEffect(() => {
     let active = true;
     let revoke: (() => void) | undefined;
-    setHasError(false);
-    setResolvedSrc(null);
 
     const run = async () => {
       try {
+        setHasError(false);
+        setResolvedSrc(null);
+        if (!baseSrc) {
+          setHasError(true);
+          return;
+        }
         const resolved = await resolveMemoryAssetUrl(baseSrc);
         if (!active || !resolved) return;
         revoke = resolved.revoke;
@@ -84,11 +99,7 @@ export function MemoryImageView({ node, editor, selected, updateAttributes }: No
       }
     };
 
-    if (baseSrc) {
-      void run();
-    } else {
-      setHasError(true);
-    }
+    void run();
 
     return () => {
       active = false;
@@ -130,10 +141,20 @@ export function MemoryImageView({ node, editor, selected, updateAttributes }: No
         const dx = moveEvent.clientX - startX;
         const dy = moveEvent.clientY - startY;
 
-        const affectsWidth = handle.includes('right') || handle.includes('left');
-        const affectsHeight = handle.includes('bottom') || handle.includes('top');
-        const widthDelta = affectsWidth ? (handle.includes('right') ? dx : -dx) : 0;
-        const heightDelta = affectsHeight ? (handle.includes('bottom') ? dy : -dy) : 0;
+        const affectsWidth =
+          handle.includes("right") || handle.includes("left");
+        const affectsHeight =
+          handle.includes("bottom") || handle.includes("top");
+        const widthDelta = affectsWidth
+          ? handle.includes("right")
+            ? dx
+            : -dx
+          : 0;
+        const heightDelta = affectsHeight
+          ? handle.includes("bottom")
+            ? dy
+            : -dy
+          : 0;
 
         const nextWidth = affectsWidth
           ? clamp(startWidth + widthDelta, MIN_WIDTH, maxWidth)
@@ -148,8 +169,8 @@ export function MemoryImageView({ node, editor, selected, updateAttributes }: No
       };
 
       const handleUp = () => {
-        window.removeEventListener('pointermove', handleMove);
-        window.removeEventListener('pointerup', handleUp);
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
         setIsResizing(false);
 
         const { width, height } = sizeRef.current;
@@ -161,17 +182,19 @@ export function MemoryImageView({ node, editor, selected, updateAttributes }: No
         });
       };
 
-      window.addEventListener('pointermove', handleMove);
-      window.addEventListener('pointerup', handleUp);
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleUp);
     },
-    [baseSrc, editor, updateAttributes]
+    [baseSrc, editor, updateAttributes],
   );
 
-  const showHandles = Boolean(selected && editor?.isEditable && resolvedSrc && !hasError);
+  const showHandles = Boolean(
+    selected && editor?.isEditable && resolvedSrc && !hasError,
+  );
 
   return (
     <NodeViewWrapper
-      className={`memory-image-node${showHandles ? ' is-selected' : ''}${isResizing ? ' is-resizing' : ''}`}
+      className={`memory-image-node${showHandles ? " is-selected" : ""}${isResizing ? " is-resizing" : ""}`}
     >
       {resolvedSrc && !hasError ? (
         <div className="memory-image-frame" ref={frameRef}>
@@ -182,43 +205,53 @@ export function MemoryImageView({ node, editor, selected, updateAttributes }: No
               alt={alt}
               draggable={false}
               style={{
-                width: size.width ? `${size.width}px` : undefined,
-                height: size.height ? `${size.height}px` : undefined,
+                width: displaySize.width ? `${displaySize.width}px` : undefined,
+                height: displaySize.height
+                  ? `${displaySize.height}px`
+                  : undefined,
               }}
             />
             {showHandles && (
               <>
                 <div
                   className="memory-image-handle handle-top-left"
-                  onPointerDown={(event) => handlePointerDown(event, 'top-left')}
+                  onPointerDown={(event) =>
+                    handlePointerDown(event, "top-left")
+                  }
                 />
                 <div
                   className="memory-image-handle handle-top"
-                  onPointerDown={(event) => handlePointerDown(event, 'top')}
+                  onPointerDown={(event) => handlePointerDown(event, "top")}
                 />
                 <div
                   className="memory-image-handle handle-top-right"
-                  onPointerDown={(event) => handlePointerDown(event, 'top-right')}
+                  onPointerDown={(event) =>
+                    handlePointerDown(event, "top-right")
+                  }
                 />
                 <div
                   className="memory-image-handle handle-right"
-                  onPointerDown={(event) => handlePointerDown(event, 'right')}
+                  onPointerDown={(event) => handlePointerDown(event, "right")}
                 />
                 <div
                   className="memory-image-handle handle-bottom-left"
-                  onPointerDown={(event) => handlePointerDown(event, 'bottom-left')}
+                  onPointerDown={(event) =>
+                    handlePointerDown(event, "bottom-left")
+                  }
                 />
                 <div
                   className="memory-image-handle handle-bottom"
-                  onPointerDown={(event) => handlePointerDown(event, 'bottom')}
+                  onPointerDown={(event) => handlePointerDown(event, "bottom")}
                 />
                 <div
                   className="memory-image-handle handle-bottom-right"
-                  onPointerDown={(event) => handlePointerDown(event, 'bottom-right')}
+                  onPointerDown={(event) =>
+                    handlePointerDown(event, "bottom-right")
+                  }
                 />
                 <div
                   className="memory-image-handle handle-left"
-                  onPointerDown={(event) => handlePointerDown(event, 'left')}
+                  onPointerDown={(event) => handlePointerDown(event, "left")}
                 />
               </>
             )}

@@ -8,6 +8,7 @@ Other modules can do:
 All logs are JSON-formatted and include ISO timestamps. The bound *trace_id* helps
 correlate log entries across processes and stages of a single analysis run.
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,7 +35,9 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 # structlog configuration – JSON renderer for production-friendly logs.
 # ---------------------------------------------------------------------------
 structlog.configure(
-    wrapper_class=structlog.make_filtering_bound_logger(getattr(logging, LOG_LEVEL, logging.INFO)),
+    wrapper_class=structlog.make_filtering_bound_logger(
+        getattr(logging, LOG_LEVEL, logging.INFO)
+    ),
     context_class=dict,
     logger_factory=structlog.PrintLoggerFactory(),  # prints via stdlib logging config
     processors=[

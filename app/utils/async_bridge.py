@@ -25,4 +25,5 @@ def run_coro_blocking(coro: Awaitable[T], timeout: Optional[float] = 30) -> T:
 
     with _futures.ThreadPoolExecutor(max_workers=1) as ex:
         fut = ex.submit(lambda: asyncio.run(asyncio.wait_for(coro, timeout=timeout)))
-        return fut.result(timeout=timeout + 1)
+        result_timeout = None if timeout is None else timeout + 1
+        return fut.result(timeout=result_timeout)

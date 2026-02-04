@@ -1,78 +1,84 @@
-'use client'
+"use client";
 
-import React, { useEffect, useState } from 'react'
-import { AlertCircle, CheckCircle, RefreshCw, XCircle } from 'lucide-react'
-import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/alert'
-import { Button } from '@/shared/ui/button'
-import backendHealthMonitor, { HealthCheckResult } from '@/services/monitoring/backend-health-check'
+import React, { useEffect, useState } from "react";
+import { AlertCircle, CheckCircle, RefreshCw, XCircle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/shared/ui/alert";
+import { Button } from "@/shared/ui/button";
+import backendHealthMonitor, {
+  HealthCheckResult,
+} from "@/services/monitoring/backend-health-check";
 
 export interface BackendHealthAlertProps {
-  className?: string
-  showWhenHealthy?: boolean
-  autoHide?: boolean
-  autoHideDelay?: number
+  className?: string;
+  showWhenHealthy?: boolean;
+  autoHide?: boolean;
+  autoHideDelay?: number;
 }
 
 export function BackendHealthAlert({
-  className = '',
+  className = "",
   showWhenHealthy = false,
   autoHide = true,
   autoHideDelay = 5000,
 }: BackendHealthAlertProps) {
-  const [healthStatus, setHealthStatus] = useState<HealthCheckResult | null>(null)
-  const [isVisible, setIsVisible] = useState(false)
-  const [isChecking, setIsChecking] = useState(false)
+  const [healthStatus, setHealthStatus] = useState<HealthCheckResult | null>(
+    null,
+  );
+  const [isVisible, setIsVisible] = useState(false);
+  const [isChecking, setIsChecking] = useState(false);
 
   useEffect(() => {
     // Subscribe to health changes
-    const unsubscribe = backendHealthMonitor.subscribeToHealthChanges((status) => {
-      setHealthStatus(status)
+    const unsubscribe = backendHealthMonitor.subscribeToHealthChanges(
+      (status) => {
+        setHealthStatus(status);
 
-      // Show alert based on health status
-      if (!status.healthy) {
-        setIsVisible(true)
-      } else if (showWhenHealthy) {
-        setIsVisible(true)
+        // Show alert based on health status
+        if (!status.healthy) {
+          setIsVisible(true);
+        } else if (showWhenHealthy) {
+          setIsVisible(true);
 
-        // Auto-hide after delay if healthy
-        if (autoHide) {
-          setTimeout(() => {
-            setIsVisible(false)
-          }, autoHideDelay)
+          // Auto-hide after delay if healthy
+          if (autoHide) {
+            setTimeout(() => {
+              setIsVisible(false);
+            }, autoHideDelay);
+          }
+        } else {
+          setIsVisible(false);
         }
-      } else {
-        setIsVisible(false)
-      }
-    })
+      },
+    );
 
     // Perform initial health check
-    backendHealthMonitor.checkHealth().catch(console.error)
+    backendHealthMonitor.checkHealth().catch(console.error);
 
-    return unsubscribe
-  }, [showWhenHealthy, autoHide, autoHideDelay])
+    return unsubscribe;
+  }, [showWhenHealthy, autoHide, autoHideDelay]);
 
   const handleRetryCheck = async () => {
-    setIsChecking(true)
+    setIsChecking(true);
     try {
-      await backendHealthMonitor.checkHealth()
+      await backendHealthMonitor.checkHealth();
     } catch (error) {
-      console.error('Health check failed:', error)
+      console.error("Health check failed:", error);
     } finally {
-      setIsChecking(false)
+      setIsChecking(false);
     }
-  }
+  };
 
   if (!isVisible || !healthStatus) {
-    return null
+    return null;
   }
 
-  const isHealthy = healthStatus.healthy
-  const isDevelopment = process.env.NODE_ENV === 'development'
+  const isHealthy = healthStatus.healthy;
+  const isDevelopment = process.env.NODE_ENV === "development";
 
   return (
     <Alert
-      className={`${className} ${isHealthy ? 'border-green-500' : 'border-red-500'}`}
-      variant={isHealthy ? 'default' : 'destructive'}
+      className={`${className} ${isHealthy ? "border-green-500" : "border-red-500"}`}
+      variant={isHealthy ? "default" : "destructive"}
     >
       <div className="flex items-start gap-3">
         {isHealthy ? (
@@ -83,19 +89,24 @@ export function BackendHealthAlert({
 
         <div className="flex-1">
           <AlertTitle className="mb-2">
-            {isHealthy ? 'Backend Connected' : 'Backend Connection Issue'}
+            {isHealthy ? "Backend Connected" : "Backend Connection Issue"}
           </AlertTitle>
 
           <AlertDescription className="space-y-2">
             {isHealthy ? (
-              <p>Successfully connected to backend service at {healthStatus.backend_url}</p>
+              <p>
+                Successfully connected to backend service at{" "}
+                {healthStatus.backend_url}
+              </p>
             ) : (
               <>
                 <p className="font-medium">{healthStatus.error}</p>
 
                 {healthStatus.suggestion && (
                   <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-900 rounded-md">
-                    <p className="text-sm whitespace-pre-wrap">{healthStatus.suggestion}</p>
+                    <p className="text-sm whitespace-pre-wrap">
+                      {healthStatus.suggestion}
+                    </p>
                   </div>
                 )}
 
@@ -138,7 +149,7 @@ export function BackendHealthAlert({
         )}
       </div>
     </Alert>
-  )
+  );
 }
 
-export default BackendHealthAlert
+export default BackendHealthAlert;

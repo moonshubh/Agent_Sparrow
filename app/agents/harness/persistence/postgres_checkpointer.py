@@ -25,10 +25,18 @@ def _redact_data_urls(value: Any) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
-            if key in {"data_url", "dataUrl"} and isinstance(item, str) and item.startswith(_DATA_URL_PREFIX):
+            if (
+                key in {"data_url", "dataUrl"}
+                and isinstance(item, str)
+                and item.startswith(_DATA_URL_PREFIX)
+            ):
                 redacted[key] = f"<redacted data_url len={len(item)}>"
                 continue
-            if key == "url" and isinstance(item, str) and item.startswith(_DATA_URL_PREFIX):
+            if (
+                key == "url"
+                and isinstance(item, str)
+                and item.startswith(_DATA_URL_PREFIX)
+            ):
                 redacted[key] = f"<redacted data_uri len={len(item)}>"
                 continue
             redacted[key] = _redact_data_urls(item)
@@ -44,14 +52,18 @@ class CheckpointResult:
         checkpoint: The retrieved checkpoint state dictionary.
         config: The configuration used for the retrieval.
     """
+
     checkpoint: dict[str, Any]
     config: dict[str, Any]
 
 
 # Factory method used by tests to patch the pool
-def create_connection_pool(db_url: str, max_size: int, max_overflow: int):  # pragma: no cover - patched in tests
+def create_connection_pool(
+    db_url: str, max_size: int, max_overflow: int
+):  # pragma: no cover - patched in tests
     try:
-        from psycopg_pool import AsyncConnectionPool
+        from psycopg_pool import AsyncConnectionPool  # type: ignore[import-not-found]
+
         return AsyncConnectionPool(db_url, max_size=max_size, max_overflow=max_overflow)
     except Exception as e:
         raise RuntimeError("psycopg_pool not available") from e
@@ -96,26 +108,21 @@ class SupabaseCheckpointer:
                 except Exception:
                     # Non-fatal in tests; continue to CREATE IF NOT EXISTS
                     logger.debug("Table existence check failed for %s", tbl)
-            await conn.execute(
-                """
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS langgraph_nodes (
                   id TEXT PRIMARY KEY,
                   data JSONB
                 )
-                """
-            )
-            await conn.execute(
-                """
+                """)
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS langgraph_edges (
                   id TEXT PRIMARY KEY,
                   src TEXT,
                   dst TEXT,
                   data JSONB
                 )
-                """
-            )
-            await conn.execute(
-                """
+                """)
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS langgraph_checkpoints (
                   checkpoint_id TEXT PRIMARY KEY,
                   thread_id TEXT,
@@ -125,16 +132,13 @@ class SupabaseCheckpointer:
                   metadata JSONB,
                   created_at TIMESTAMP DEFAULT NOW()
                 )
-                """
-            )
-            await conn.execute(
-                """
+                """)
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS langgraph_meta (
                   key TEXT PRIMARY KEY,
                   value JSONB
                 )
-                """
-            )
+                """)
 
     async def aput(
         self,
@@ -158,11 +162,15 @@ class SupabaseCheckpointer:
             else:
                 converted: dict[str, Any] | None = None
                 try:
-                    if hasattr(checkpoint, "model_dump") and callable(getattr(checkpoint, "model_dump")):
+                    if hasattr(checkpoint, "model_dump") and callable(
+                        getattr(checkpoint, "model_dump")
+                    ):
                         converted = checkpoint.model_dump()  # type: ignore[attr-defined]
-                    elif hasattr(checkpoint, "dict") and callable(getattr(checkpoint, "dict")):
+                    elif hasattr(checkpoint, "dict") and callable(
+                        getattr(checkpoint, "dict")
+                    ):
                         converted = checkpoint.dict()  # type: ignore[attr-defined]
-                    elif is_dataclass(checkpoint):
+                    elif is_dataclass(checkpoint) and not isinstance(checkpoint, type):
                         converted = asdict(checkpoint)
                     elif hasattr(checkpoint, "__dict__"):
                         converted = dict(getattr(checkpoint, "__dict__"))
@@ -171,23 +179,56 @@ class SupabaseCheckpointer:
                 checkpoint_payload = converted or {}
 
         # Ensure we have the expected shape even when conversion above fails
-        if not isinstance(checkpoint_payload, dict) or "channel_values" not in checkpoint_payload:
+        if (
+            not isinstance(checkpoint_payload, dict)
+            or "channel_values" not in checkpoint_payload
+        ):
             try:
-                channel_values = getattr(checkpoint, "channel_values", {}) if checkpoint is not None else {}
-                channel_versions = getattr(checkpoint, "channel_versions", {}) if checkpoint is not None else {}
-                versions_seen = getattr(checkpoint, "versions_seen", {}) if checkpoint is not None else {}
-                pending_sends = getattr(checkpoint, "pending_sends", []) if checkpoint is not None else []
+                channel_values = (
+                    getattr(checkpoint, "channel_values", {})
+                    if checkpoint is not None
+                    else {}
+                )
+                channel_versions = (
+                    getattr(checkpoint, "channel_versions", {})
+                    if checkpoint is not None
+                    else {}
+                )
+                versions_seen = (
+                    getattr(checkpoint, "versions_seen", {})
+                    if checkpoint is not None
+                    else {}
+                )
+                pending_sends = (
+                    getattr(checkpoint, "pending_sends", [])
+                    if checkpoint is not None
+                    else []
+                )
                 v = getattr(checkpoint, "v", 1) if checkpoint is not None else 1
-                cid = getattr(checkpoint, "id", None) if checkpoint is not None else None
+                cid = (
+                    getattr(checkpoint, "id", None) if checkpoint is not None else None
+                )
                 ts = getattr(checkpoint, "ts", None) if checkpoint is not None else None
                 checkpoint_payload = {
                     "v": v,
                     "id": str(cid) if cid is not None else uuid.uuid4().hex,
                     "ts": ts,
-                    "channel_values": dict(channel_values) if isinstance(channel_values, dict) else {},
-                    "channel_versions": dict(channel_versions) if isinstance(channel_versions, dict) else {},
-                    "versions_seen": dict(versions_seen) if isinstance(versions_seen, dict) else {},
-                    "pending_sends": list(pending_sends) if isinstance(pending_sends, (list, tuple)) else [],
+                    "channel_values": (
+                        dict(channel_values) if isinstance(channel_values, dict) else {}
+                    ),
+                    "channel_versions": (
+                        dict(channel_versions)
+                        if isinstance(channel_versions, dict)
+                        else {}
+                    ),
+                    "versions_seen": (
+                        dict(versions_seen) if isinstance(versions_seen, dict) else {}
+                    ),
+                    "pending_sends": (
+                        list(pending_sends)
+                        if isinstance(pending_sends, (list, tuple))
+                        else []
+                    ),
                 }
             except Exception:
                 checkpoint_payload = {}
@@ -241,7 +282,9 @@ class SupabaseCheckpointer:
                     ),
                 )
             except Exception:
-                logger.exception("Failed to persist checkpoint for thread_id %s", thread_id)
+                logger.exception(
+                    "Failed to persist checkpoint for thread_id %s", thread_id
+                )
                 raise
         # Cache last checkpoint per thread for recovery in mocked environments
         try:
@@ -276,7 +319,9 @@ class SupabaseCheckpointer:
             row = await res.fetchone()
             # Handle mocked results without concrete row payloads
             if not row or type(row).__name__.endswith("Mock"):
-                checkpoint = self._last_checkpoints.get(str(thread_id), default_checkpoint)
+                checkpoint = self._last_checkpoints.get(
+                    str(thread_id), default_checkpoint
+                )
             else:
                 # Support multiple row shapes used by tests/mocks
                 if isinstance(row, dict):
@@ -287,8 +332,10 @@ class SupabaseCheckpointer:
                     raw_state = row[0]
 
                 # Normalize checkpoint to a dict using shared utility
-                checkpoint = decode_json(raw_state, default_checkpoint)
-                if not isinstance(checkpoint, dict):
+                decoded = decode_json(raw_state, default_checkpoint)
+                if isinstance(decoded, dict):
+                    checkpoint = decoded
+                else:
                     checkpoint = default_checkpoint
 
         return CheckpointResult(checkpoint, config)
@@ -305,13 +352,11 @@ class SupabaseCheckpointer:
     async def alist(self, config: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         """List checkpoints; iterate over mocked result from conn.execute()."""
         async with self.pool.connection() as conn:
-            result = await conn.execute(
-                """
+            result = await conn.execute("""
                 SELECT thread_id, checkpoint_id, state, created_at
                 FROM langgraph_checkpoints
                 ORDER BY created_at DESC
-                """
-            )
+                """)
             async for row in result:  # type: ignore
                 yield row
 
@@ -323,7 +368,9 @@ class SupabaseCheckpointer:
         """
         return 1
 
-    async def aput_writes(self, config: dict[str, Any], writes: Any, task_id: str | None = None) -> None:
+    async def aput_writes(
+        self, config: dict[str, Any], writes: Any, task_id: str | None = None
+    ) -> None:
         """Persist writes emitted by the workflow.
 
         Minimal no-op stub for tests; production implementations would store

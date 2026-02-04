@@ -69,9 +69,14 @@ def _extract_original_recipients_count(
     comments: Iterable[dict[str, Any]] | None = None,
 ) -> int:
     t = ticket or {}
-    via = t.get("via") if isinstance(t.get("via"), dict) else {}
-    source = via.get("source") if isinstance(via, dict) else {}
-    from_obj = source.get("from") if isinstance(source, dict) else {}
+    via_val = t.get("via")
+    via = via_val if isinstance(via_val, dict) else {}
+    source = via.get("source")
+    if not isinstance(source, dict):
+        source = {}
+    from_obj = source.get("from")
+    if not isinstance(from_obj, dict):
+        from_obj = {}
     recipients = from_obj.get("original_recipients")
     if isinstance(recipients, list):
         count = len([r for r in recipients if isinstance(r, str) and r.strip()])
@@ -82,9 +87,14 @@ def _extract_original_recipients_count(
         for comment in comments:
             if not isinstance(comment, dict):
                 continue
-            via = comment.get("via") if isinstance(comment.get("via"), dict) else {}
-            source = via.get("source") if isinstance(via, dict) else {}
-            from_obj = source.get("from") if isinstance(source, dict) else {}
+            via_val = comment.get("via")
+            via = via_val if isinstance(via_val, dict) else {}
+            source = via.get("source")
+            if not isinstance(source, dict):
+                source = {}
+            from_obj = source.get("from")
+            if not isinstance(from_obj, dict):
+                from_obj = {}
             recipients = from_obj.get("original_recipients")
             if isinstance(recipients, list):
                 count = len([r for r in recipients if isinstance(r, str) and r.strip()])
@@ -203,12 +213,14 @@ async def _classify_explicit_images(
         try:
             prompt = (
                 "Classify the image content. Respond with ONLY valid JSON in this format: "
-                "{\"label\":\"explicit_adult|suggestive|benign|uncertain\","
-                "\"confidence\":0.0-1.0}. Do not add any other text."
+                '{"label":"explicit_adult|suggestive|benign|uncertain",'
+                '"confidence":0.0-1.0}. Do not add any other text.'
             )
-            result = await minimax_understand_image_tool(
-                prompt=prompt,
-                image_url=thumb_path,
+            result = await minimax_understand_image_tool.ainvoke(
+                {
+                    "prompt": prompt,
+                    "image_url": thumb_path,
+                }
             )
             label, confidence = _parse_minimax_classification(result)
             logger.info(
@@ -223,7 +235,9 @@ async def _classify_explicit_images(
             try:
                 Path(thumb_path).unlink(missing_ok=True)
             except OSError as exc:
-                logger.debug("spam_guard_thumbnail_cleanup_failed", error=str(exc)[:180])
+                logger.debug(
+                    "spam_guard_thumbnail_cleanup_failed", error=str(exc)[:180]
+                )
 
     return "uncertain", 0.0
 

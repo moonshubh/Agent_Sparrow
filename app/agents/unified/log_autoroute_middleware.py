@@ -28,9 +28,16 @@ try:
 
     MIDDLEWARE_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
-    AgentMiddleware = object  # type: ignore[assignment]
-    ModelRequest = object  # type: ignore[assignment]
-    ModelResponse = object  # type: ignore[assignment]
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class ModelRequest:  # type: ignore[no-redef]
+        pass
+
+    class ModelResponse:  # type: ignore[no-redef]
+        pass
+
     MIDDLEWARE_AVAILABLE = False
 
 
@@ -64,9 +71,14 @@ def _extract_last_user_objective(messages: list[BaseMessage]) -> str:
     return ""
 
 
-def _find_log_autoroute_instruction(messages: list[BaseMessage]) -> Optional[SystemMessage]:
+def _find_log_autoroute_instruction(
+    messages: list[BaseMessage],
+) -> Optional[SystemMessage]:
     for msg in messages:
-        if isinstance(msg, SystemMessage) and getattr(msg, "name", None) == _AUTOROUTE_MESSAGE_NAME:
+        if (
+            isinstance(msg, SystemMessage)
+            and getattr(msg, "name", None) == _AUTOROUTE_MESSAGE_NAME
+        ):
             return msg
     return None
 
@@ -189,7 +201,9 @@ def _compute_signature(pairs: list[tuple[str, str]]) -> str:
         {"file": file_name, "sha256": _sha256_text(block)}
         for file_name, block in sorted(pairs, key=lambda item: item[0].lower())
     ]
-    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    encoded = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
     return _sha256_text(encoded)
 
 
@@ -197,13 +211,15 @@ def _find_prev_signature(messages: list[BaseMessage]) -> Optional[str]:
     for msg in messages:
         if not isinstance(msg, AIMessage):
             continue
-        sig = (getattr(msg, "additional_kwargs", {}) or {}).get(_AUTOROUTE_SIGNATURE_KEY)
+        sig = (getattr(msg, "additional_kwargs", {}) or {}).get(
+            _AUTOROUTE_SIGNATURE_KEY
+        )
         if isinstance(sig, str) and sig:
             return sig
     return None
 
 
-class LogAutorouteMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object):
+class LogAutorouteMiddleware(AgentMiddleware):
     """Force per-file log analysis tool calls when log attachments are present."""
 
     @property
@@ -228,7 +244,9 @@ class LogAutorouteMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object
         if instruction is None:
             return await handler(request)
 
-        file_names = _parse_file_names_from_instruction(_coerce_message_text(instruction))
+        file_names = _parse_file_names_from_instruction(
+            _coerce_message_text(instruction)
+        )
         selected: list[tuple[str, str]] = []
 
         attachments = _get_state_attachments(getattr(request, "state", None))
@@ -256,9 +274,9 @@ class LogAutorouteMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object
 
             if file_names:
                 for name in file_names:
-                    block = attachment_blocks.get(name.strip().lower())
-                    if block:
-                        selected.append((name.strip(), block))
+                    block_text = attachment_blocks.get(name.strip().lower())
+                    if isinstance(block_text, str) and block_text:
+                        selected.append((name.strip(), block_text))
             else:
                 selected = [(name, block) for name, block in attachment_blocks.items()]
 
@@ -272,18 +290,20 @@ class LogAutorouteMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object
 
         user_objective = _extract_last_user_objective(list(request.messages or []))
         tool_calls: list[dict[str, Any]] = []
-        for file_name, block in selected:
-            log_content = _strip_attachment_header(block)
-            tool_calls.append({
-                # OpenAI tool_call_id expects a call_* format; keep synthetic IDs compatible.
-                "id": f"call_{uuid4().hex}",
-                "name": _LOG_TOOL_NAME,
-                "args": {
-                    "file_name": file_name.strip(),
-                    "log_content": log_content,
-                    "question": user_objective or None,
-                },
-            })
+        for file_name, block_content in selected:
+            log_content = _strip_attachment_header(block_content)
+            tool_calls.append(
+                {
+                    # OpenAI tool_call_id expects a call_* format; keep synthetic IDs compatible.
+                    "id": f"call_{uuid4().hex}",
+                    "name": _LOG_TOOL_NAME,
+                    "args": {
+                        "file_name": file_name.strip(),
+                        "log_content": log_content,
+                        "question": user_objective or None,
+                    },
+                }
+            )
 
         # Return a single tool-call batch (parallelizable): one log analysis call per file.
         response = AIMessage(

@@ -1,60 +1,65 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback } from "react";
 
 interface UsePollingOptions {
-  enabled: boolean
-  interval: number
-  onPoll: () => Promise<void>
-  onError?: (error: Error) => void
+  enabled: boolean;
+  interval: number;
+  onPoll: () => Promise<void>;
+  onError?: (error: Error) => void;
 }
 
-export function usePolling({ enabled, interval, onPoll, onError }: UsePollingOptions) {
-  const intervalIdRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const mountedRef = useRef(true)
+export function usePolling({
+  enabled,
+  interval,
+  onPoll,
+  onError,
+}: UsePollingOptions) {
+  const intervalIdRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
   const stopPolling = useCallback(() => {
     if (intervalIdRef.current) {
-      clearInterval(intervalIdRef.current)
-      intervalIdRef.current = null
+      clearInterval(intervalIdRef.current);
+      intervalIdRef.current = null;
     }
-  }, [])
+  }, []);
 
   const startPolling = useCallback(() => {
-    stopPolling() // Clear any existing interval
+    stopPolling(); // Clear any existing interval
 
-    if (!enabled) return
+    if (!enabled) return;
 
     const pollWithErrorHandling = async () => {
-      if (!mountedRef.current) return
+      if (!mountedRef.current) return;
 
       try {
-        await onPoll()
+        await onPoll();
       } catch (error) {
-        onError?.(error instanceof Error ? error : new Error(String(error)))
+        onError?.(error instanceof Error ? error : new Error(String(error)));
       }
-    }
+    };
 
     // Initial poll
-    void pollWithErrorHandling()
+    void pollWithErrorHandling();
 
     // Set up interval for subsequent polls
-    intervalIdRef.current = setInterval(pollWithErrorHandling, interval)
-  }, [enabled, interval, onPoll, onError, stopPolling])
+    intervalIdRef.current = setInterval(pollWithErrorHandling, interval);
+  }, [enabled, interval, onPoll, onError, stopPolling]);
 
   useEffect(() => {
-    mountedRef.current = true
+    mountedRef.current = true;
 
     if (enabled) {
-      startPolling()
+      startPolling();
     }
 
     return () => {
-      mountedRef.current = false
-      stopPolling()
-    }
-  }, [enabled, startPolling, stopPolling])
+      mountedRef.current = false;
+      stopPolling();
+    };
+  }, [enabled, startPolling, stopPolling]);
 
   return {
     startPolling,
     stopPolling,
     isPolling: enabled,
-  }
+  };
 }

@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import dynamic from 'next/dynamic';
+import dynamic from "next/dynamic";
 
 // Dynamic import to avoid SSR issues with 3D graph
 const MemoryClient = dynamic(
-  () => import('@/features/memory/components/MemoryClient'),
+  () => import("@/features/memory/components/MemoryClient"),
   {
     ssr: false,
     loading: () => (
@@ -13,7 +13,7 @@ const MemoryClient = dynamic(
         <p>Loading Memory UI...</p>
       </div>
     ),
-  }
+  },
 );
 
 export default function MemoryPage() {

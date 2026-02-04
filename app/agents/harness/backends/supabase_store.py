@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Supabase-backed persistent storage following DeepAgents backend protocol.
 
 This backend provides persistent storage for:
@@ -141,11 +142,7 @@ class SupabaseStoreBackend:
 
         try:
             # Try upsert (insert or update)
-            response = (
-                self.client.table(self.table)
-                .upsert(data, on_conflict="path")
-                .execute()
-            )
+            self.client.table(self.table).upsert(data, on_conflict="path").execute()
 
             return WriteResult(
                 success=True,

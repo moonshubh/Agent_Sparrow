@@ -1,7 +1,10 @@
-import type { AnyExtension } from '@tiptap/core';
-import { createExtensions, type ExtensionOptions } from '@/features/librechat/components/tiptap/extensions';
-import { MemoryImageExtension } from './MemoryImageExtension';
-import Underline from '@tiptap/extension-underline';
+import type { AnyExtension } from "@tiptap/core";
+import {
+  createExtensions,
+  type ExtensionOptions,
+} from "@/features/librechat/components/tiptap/extensions";
+import { MemoryImageExtension } from "./MemoryImageExtension";
+import Underline from "@tiptap/extension-underline";
 
 export const createMemoryExtensions = (options: ExtensionOptions = {}) => {
   const extensions = createExtensions({

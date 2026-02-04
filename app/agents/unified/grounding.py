@@ -8,6 +8,7 @@ Fallback chain for search:
 For URL fetching and scraping tasks, Firecrawl tools should be used directly
 (not through this service) as the PRIMARY tool.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +24,9 @@ from app.tools.research_tools import FirecrawlTool, TavilySearchTool
 
 from .quota_manager import QuotaExceededError
 
-GROUNDING_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GROUNDING_ENDPOINT = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
 
 
 class GroundingServiceError(RuntimeError):
@@ -53,19 +56,29 @@ class GeminiGroundingService:
         grounding_cfg = config.internal["grounding"]
         self.model = model or grounding_cfg.model_id
         self.timeout = timeout or settings.grounding_timeout_sec
-        resolved_enabled = enabled if enabled is not None else settings.enable_grounding_search
+        resolved_enabled = (
+            enabled if enabled is not None else settings.enable_grounding_search
+        )
         self.enabled = bool(resolved_enabled and self.api_key)
         self.max_results_default = settings.grounding_max_results
         self.snippet_limit = settings.grounding_snippet_chars
         self._tavily: Optional[TavilySearchTool] = None
         self._firecrawl: Optional[FirecrawlTool] = None
 
-    async def search_with_grounding(self, query: str, max_results: Optional[int] = None) -> Dict[str, Any]:
+    async def search_with_grounding(
+        self, query: str, max_results: Optional[int] = None
+    ) -> Dict[str, Any]:
         if not self.enabled:
-            raise GroundingUnavailableError("Grounding search is disabled or missing GEMINI_API_KEY")
+            raise GroundingUnavailableError(
+                "Grounding search is disabled or missing GEMINI_API_KEY"
+            )
         normalized_query = (query or "").strip()
         if not normalized_query:
-            return {"source": "gemini_grounding", "results": [], "langsmith_metadata": {}}
+            return {
+                "source": "gemini_grounding",
+                "results": [],
+                "langsmith_metadata": {},
+            }
 
         limit = self._resolve_limit(max_results)
         if self.rate_limiter:
@@ -96,7 +109,9 @@ class GeminiGroundingService:
             "langsmith_metadata": langsmith_metadata,
         }
 
-    async def fallback_search(self, query: str, max_results: Optional[int] = None, reason: str = "error") -> Dict[str, Any]:
+    async def fallback_search(
+        self, query: str, max_results: Optional[int] = None, reason: str = "error"
+    ) -> Dict[str, Any]:
         """Fallback chain: Tavily → Firecrawl.
 
         When Gemini Grounding is unavailable or quota exceeded:
@@ -125,7 +140,10 @@ class GeminiGroundingService:
         # Step 1: Try Tavily first
         try:
             tavily_result = await asyncio.to_thread(tavily.search, query, limit)
-            urls = tavily_result.get("urls", [])
+            if isinstance(tavily_result, dict):
+                urls = tavily_result.get("urls", []) or []
+            else:
+                urls = []
             tavily_success = bool(urls)
             services_used.append("tavily")
         except Exception as exc:  # pragma: no cover - network failure
@@ -137,10 +155,12 @@ class GeminiGroundingService:
         if not tavily_success:
             try:
                 firecrawl = self._get_firecrawl()
-                if not firecrawl.disabled:
+                if not getattr(firecrawl, "disabled", False):
                     firecrawl_result = await asyncio.to_thread(firecrawl.search, query)
                     firecrawl_urls: List[str] = []
-                    if isinstance(firecrawl_result, dict) and not firecrawl_result.get("error"):
+                    if isinstance(firecrawl_result, dict) and not firecrawl_result.get(
+                        "error"
+                    ):
                         data = firecrawl_result.get("data") or {}
                         data_items: List[Dict[str, Any]] = []
                         if isinstance(data, dict):
@@ -148,10 +168,16 @@ class GeminiGroundingService:
                                 items = data.get(bucket) or []
                                 if isinstance(items, list):
                                     data_items.extend(
-                                        [item for item in items if isinstance(item, dict)]
+                                        [
+                                            item
+                                            for item in items
+                                            if isinstance(item, dict)
+                                        ]
                                     )
                         elif isinstance(data, list):
-                            data_items = [item for item in data if isinstance(item, dict)]
+                            data_items = [
+                                item for item in data if isinstance(item, dict)
+                            ]
                         for item in data_items[:limit]:
                             if item.get("url"):
                                 firecrawl_urls.append(item["url"])
@@ -160,7 +186,9 @@ class GeminiGroundingService:
                         services_used.append("firecrawl")
                         fallback_payload["source"] = "firecrawl_fallback"
             except Exception as exc:  # pragma: no cover - network failure
-                self.logger.warning("grounding_fallback_firecrawl_error", error=str(exc))
+                self.logger.warning(
+                    "grounding_fallback_firecrawl_error", error=str(exc)
+                )
 
         fallback_payload["results"] = [{"url": url} for url in urls]
 
@@ -187,23 +215,60 @@ class GeminiGroundingService:
                         }
                     )
 
+        # If Tavily only returned URLs (no structured snippets), try Firecrawl scrape.
+        if urls and not extracts:
+            try:
+                firecrawl = self._get_firecrawl()
+                if not getattr(firecrawl, "disabled", False):
+                    for url in urls[: min(3, len(urls))]:
+                        scrape_result = await asyncio.to_thread(
+                            firecrawl.scrape_url, url
+                        )
+                        if not isinstance(scrape_result, dict) or scrape_result.get(
+                            "error"
+                        ):
+                            continue
+                        snippet = self._trim_snippet(
+                            scrape_result.get("content")
+                            or scrape_result.get("markdown")
+                            or scrape_result.get("text")
+                            or ""
+                        )
+                        if not snippet:
+                            continue
+                        extracts.append(
+                            {
+                                "url": url,
+                                "snippet": snippet,
+                                "source": "firecrawl",
+                            }
+                        )
+                    if extracts:
+                        firecrawl_success = True
+                        if "firecrawl" not in services_used:
+                            services_used.append("firecrawl")
+            except Exception as exc:  # pragma: no cover - network failure
+                self.logger.warning(
+                    "grounding_fallback_firecrawl_scrape_error", error=str(exc)
+                )
+
         # Process Firecrawl results for snippets (if Tavily failed)
         if isinstance(firecrawl_result, dict) and not firecrawl_result.get("error"):
             data = firecrawl_result.get("data") or {}
-            data_items: List[Dict[str, Any]] = []
+            snippet_items: List[Dict[str, Any]] = []
             if isinstance(data, dict):
                 for bucket in ("web", "news", "images"):
                     items = data.get(bucket) or []
                     if isinstance(items, list):
-                        data_items.extend([item for item in items if isinstance(item, dict)])
+                        snippet_items.extend(
+                            [item for item in items if isinstance(item, dict)]
+                        )
             elif isinstance(data, list):
-                data_items = [item for item in data if isinstance(item, dict)]
-            for item in data_items[: min(3, len(data_items))]:
+                snippet_items = [item for item in data if isinstance(item, dict)]
+            for item in snippet_items[: min(3, len(snippet_items))]:
                 url = item.get("url") or ""
                 snippet = self._trim_snippet(
-                    item.get("description")
-                    or item.get("title")
-                    or ""
+                    item.get("description") or item.get("title") or ""
                 )
                 if url or snippet:
                     extracts.append(
@@ -259,13 +324,25 @@ class GeminiGroundingService:
             response.raise_for_status()
             return response.json()
 
-    def _normalize_response(self, payload: Dict[str, Any], limit: int) -> List[Dict[str, Any]]:
+    def _normalize_response(
+        self, payload: Dict[str, Any], limit: int
+    ) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         candidates = payload.get("candidates") or []
         for candidate in candidates:
-            metadata = candidate.get("groundingMetadata") or candidate.get("grounding_metadata") or {}
-            chunks = metadata.get("groundingChunks") or metadata.get("grounding_chunks") or []
-            chunk_refs = {chunk.get("id") or chunk.get("chunkId"): chunk for chunk in chunks}
+            metadata = (
+                candidate.get("groundingMetadata")
+                or candidate.get("grounding_metadata")
+                or {}
+            )
+            chunks = (
+                metadata.get("groundingChunks")
+                or metadata.get("grounding_chunks")
+                or []
+            )
+            chunk_refs = {
+                chunk.get("id") or chunk.get("chunkId"): chunk for chunk in chunks
+            }
             citations = metadata.get("citations") or []
             citation_map = self._map_citations(citations)
             for chunk_id, chunk in chunk_refs.items():
@@ -287,7 +364,9 @@ class GeminiGroundingService:
                 results.append(
                     {
                         "id": chunk_id,
-                        "title": web_info.get("title") or web_info.get("uri") or "Grounded evidence",
+                        "title": web_info.get("title")
+                        or web_info.get("uri")
+                        or "Grounded evidence",
                         "url": web_info.get("uri"),
                         "snippet": snippet,
                         "score": chunk.get("confidenceScore") or chunk.get("score"),
@@ -322,7 +401,9 @@ class GeminiGroundingService:
     def _map_citations(self, citations: List[Dict[str, Any]]) -> Dict[str, Any]:
         mapping: Dict[str, Any] = {}
         for citation in citations:
-            reference_id = citation.get("chunkReference") or citation.get("chunk_reference")
+            reference_id = citation.get("chunkReference") or citation.get(
+                "chunk_reference"
+            )
             if not reference_id:
                 continue
             mapping[reference_id] = {

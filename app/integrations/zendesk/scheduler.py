@@ -29,7 +29,6 @@ from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.unified.tools import (
     kb_search_tool,
     db_unified_search_tool,
-    db_context_search_tool,
     firecrawl_search_tool,
     firecrawl_fetch_tool,
     firecrawl_map_tool,
@@ -38,11 +37,13 @@ from app.agents.unified.tools import (
 )
 import re
 from app.integrations.zendesk.attachments import (
+    AttachmentInfo,
     fetch_ticket_attachments,
     summarize_attachments,
     convert_to_unified_attachments,
 )
 from app.security.pii_redactor import redact_pii
+from pydantic import SecretStr
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class ZendeskReplyResult:
     macros_used: list[str]
     learning_messages: list[Any]
     context_report: dict[str, Any] | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class ZendeskQueryAgentProductContext:
@@ -463,9 +465,7 @@ def _zendesk_extract_attachment_signals(attachment_block: str) -> tuple[str, ...
     candidates: list[str] = []
 
     # Domain / hostname-like tokens (e.g., smtp.gmail.com)
-    candidates.extend(
-        re.findall(r"\b[a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,}\b", block)
-    )
+    candidates.extend(re.findall(r"\b[a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,}\b", block))
 
     # 3-digit SMTP-like error codes (e.g., 550)
     candidates.extend(re.findall(r"\b\d{3}\b", block))
@@ -507,10 +507,14 @@ def _zendesk_infer_primary_intent(text: str) -> str:
     if _REFUND_INTENT_RE.search(low):
         return "refund"
 
-    if re.search(r"\b(password|authenticate|authentication|oauth|sign[- ]in|login)\b", low):
+    if re.search(
+        r"\b(password|authenticate|authentication|oauth|sign[- ]in|login)\b", low
+    ):
         return "sync_auth"
 
-    if re.search(r"\b(smtp|cannot send|can't send|sending error|relay denied|550|554)\b", low):
+    if re.search(
+        r"\b(smtp|cannot send|can't send|sending error|relay denied|550|554)\b", low
+    ):
         return "sending"
 
     if re.search(r"\b(crash|freez|not responding|slow|lag)\b", low):
@@ -604,7 +608,9 @@ def _zendesk_reformulate_retrieval_query(
     return f"{previous} {' '.join(additions)}".strip()
 
 
-def _zendesk_extract_issue_segments(ticket_text: str, *, max_segments: int = 4) -> list[str]:
+def _zendesk_extract_issue_segments(
+    ticket_text: str, *, max_segments: int = 4
+) -> list[str]:
     """Split an incoming ticket into explicit issue segments (primary + secondary)."""
     text = str(ticket_text or "").strip()
     if not text:
@@ -622,7 +628,10 @@ def _zendesk_extract_issue_segments(ticket_text: str, *, max_segments: int = 4) 
         if re.match(r"^(also|additionally|another|secondly)\b", low):
             segments.append(para)
             continue
-        if re.search(r"\b(refund|billing|payment|cannot|can't|unable|error|crash|password|authenticate|smtp|oauth)\b", low):
+        if re.search(
+            r"\b(refund|billing|payment|cannot|can't|unable|error|crash|password|authenticate|smtp|oauth)\b",
+            low,
+        ):
             segments.append(para)
 
     return segments[: max(1, int(max_segments or 1))]
@@ -720,7 +729,9 @@ def _zendesk_select_feedme_slice_indices(
         clusters,
         key=lambda c: (float(c["max_score"]), -(int(c["end"]) - int(c["start"]))),
     )
-    best_indices = [i for i in range(int(best["start"]), int(best["end"]) + 1) if i >= 0]
+    best_indices = [
+        i for i in range(int(best["start"]), int(best["end"]) + 1) if i >= 0
+    ]
     if len(best_indices) <= budget:
         return best_indices
 
@@ -752,8 +763,11 @@ def _zendesk_build_feedme_slice_content(
     indices: list[int] = []
     prev_index: int | None = None
     for chunk in ordered:
+        idx_raw = chunk.get("chunk_index")
+        if idx_raw is None:
+            continue
         try:
-            idx = int(chunk.get("chunk_index"))
+            idx = int(idx_raw)
         except Exception:
             continue
         content = str(chunk.get("content") or "").strip()
@@ -811,7 +825,9 @@ def _zendesk_slice_kb_guidance(
 
     best = max(
         sections,
-        key=lambda s: len(query_keywords & _zendesk_extract_keywords(f"{s[0]}\n{s[1]}")),
+        key=lambda s: len(
+            query_keywords & _zendesk_extract_keywords(f"{s[0]}\n{s[1]}")
+        ),
     )
     selected = f"{best[0]}\n{best[1]}".strip()
     return _trim_block(selected, int(max_chars))
@@ -890,6 +906,8 @@ async def _zendesk_run_internal_retrieval_preflight(
         meta = meta if isinstance(meta, dict) else {}
 
         conv_id = meta.get("id") or meta.get("conversation_id")
+        if conv_id is None:
+            continue
         try:
             conv_int = int(conv_id)
         except Exception:
@@ -902,8 +920,11 @@ async def _zendesk_run_internal_retrieval_preflight(
             for row in matched:
                 if not isinstance(row, dict):
                     continue
+                idx_raw = row.get("chunk_index")
+                if idx_raw is None:
+                    continue
                 try:
-                    idx = int(row.get("chunk_index"))
+                    idx = int(idx_raw)
                 except Exception:
                     continue
                 sim = row.get("similarity")
@@ -964,25 +985,29 @@ async def _zendesk_run_internal_retrieval_preflight(
         if not isinstance(item, dict):
             continue
         source = str(item.get("source") or "").lower()
-        meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        meta_raw = item.get("metadata")
+        source_meta: dict[str, Any] = meta_raw if isinstance(meta_raw, dict) else {}
         if source == "kb":
-            kb_id = meta.get("id") or meta.get("url")
+            kb_id = source_meta.get("id") or source_meta.get("url")
             if kb_id:
                 kb_articles_used.append(str(kb_id))
         if source in {"macro", "macros"}:
-            macro_id = meta.get("zendesk_id")
+            macro_id = source_meta.get("zendesk_id")
             if macro_id:
                 macros_used.append(str(macro_id))
 
     preflight = _format_internal_retrieval_context(results, query=query)
     internal_context = preflight.get("context")
     if internal_context and not include_header:
-        internal_context = re.sub(
-            r"^Internal knowledge \(do NOT mention sources in the customer reply\):\s*",
-            "",
-            internal_context,
-            flags=re.IGNORECASE,
-        ).strip() or None
+        internal_context = (
+            re.sub(
+                r"^Internal knowledge \(do NOT mention sources in the customer reply\):\s*",
+                "",
+                internal_context,
+                flags=re.IGNORECASE,
+            ).strip()
+            or None
+        )
 
     best_score: float | None = None
     for item in results:
@@ -1064,7 +1089,10 @@ async def _zendesk_run_multi_issue_internal_retrieval_preflight(
             attempt_index=attempt,
             expansion_count=expansion_count,
         )
-        if not next_query or next_query.strip().lower() == current_query.strip().lower():
+        if (
+            not next_query
+            or next_query.strip().lower() == current_query.strip().lower()
+        ):
             break
         current_query = next_query
         candidate = await _zendesk_run_internal_retrieval_preflight(
@@ -1084,7 +1112,7 @@ async def _zendesk_run_multi_issue_internal_retrieval_preflight(
     kb_articles_used = list(best_primary.kb_articles_used)
     macros_used = list(best_primary.macros_used)
     best_score = best_primary.best_score
-    confidence = best_primary.confidence
+    confidence = float(best_primary.confidence or 0.0)
 
     # Secondary issues: single pass with minimal budget.
     for seg in segments[1:]:
@@ -1312,7 +1340,9 @@ async def _run_pattern_preflight(
         return {
             "category": None,
             "similar_count": len(similar),
-            "top_similarity": getattr(similar[0], "similarity", None) if similar else None,
+            "top_similarity": (
+                getattr(similar[0], "similarity", None) if similar else None
+            ),
             "playbook_compiled": False,
             "playbook_path": None,
         }
@@ -1602,7 +1632,9 @@ _ZENDESK_ATTACHMENT_URL_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"https?://[\w.-]+\.zendesk\.com/agent/tickets/\d+/attachments/[^\s)\]]+",
         re.IGNORECASE,
     ),
-    re.compile(r"https?://[\w.-]+\.zendesk\.com/api/v2/attachments/[^\s)\]]+", re.IGNORECASE),
+    re.compile(
+        r"https?://[\w.-]+\.zendesk\.com/api/v2/attachments/[^\s)\]]+", re.IGNORECASE
+    ),
 )
 
 
@@ -1655,7 +1687,9 @@ def _summarize_attachment_types(attachments: list[Any]) -> dict[str, int]:
             counts["logs"] += 1
         elif ext in {".txt", ".csv", ".json", ".xml"}:
             counts["text"] += 1
-        elif ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"} or ct.startswith("image/"):
+        elif ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"} or ct.startswith(
+            "image/"
+        ):
             counts["images"] += 1
         elif ext == ".pdf" or ct == "application/pdf":
             counts["pdfs"] += 1
@@ -1794,7 +1828,9 @@ async def _write_zendesk_thread_handoff(
 
     meta: dict[str, Any] = {}
     try:
-        existing_meta_raw = await workspace_store.read_file("/scratch/zendesk_meta.json")
+        existing_meta_raw = await workspace_store.read_file(
+            "/scratch/zendesk_meta.json"
+        )
         if isinstance(existing_meta_raw, str) and existing_meta_raw.strip():
             parsed = json.loads(existing_meta_raw)
             if isinstance(parsed, dict):
@@ -2056,7 +2092,8 @@ def _sanitize_suggested_reply_text(text: str) -> str:
 
             normalized = _normalize_zendesk_heading_candidate(line)
             if normalized in _ZENDESK_META_LINE_PREFIXES or any(
-                normalized.startswith(prefix) for prefix in _ZENDESK_META_HEADING_PREFIXES
+                normalized.startswith(prefix)
+                for prefix in _ZENDESK_META_HEADING_PREFIXES
             ):
                 skip_block = True
                 continue
@@ -2438,9 +2475,8 @@ def _format_zendesk_internal_note_html(
     paragraph_buf: list[str] = []
 
     # List rendering with nesting based on indentation.
-    list_stack: list[
-        dict[str, Any]
-    ] = []  # {"type": "ul"|"ol", "indent": int, "li_open": bool}
+    # {"type": "ul"|"ol", "indent": int, "li_open": bool}
+    list_stack: list[dict[str, Any]] = []
 
     def close_li_if_open() -> None:
         if list_stack and list_stack[-1].get("li_open"):
@@ -2699,9 +2735,7 @@ def _format_internal_retrieval_context(
     macro_min = float(getattr(settings, "zendesk_macro_min_relevance", 0.55))
     # Zendesk support prefers recall over aggressive KB filtering; keep thresholds
     # aligned with the retrieval preflight (zendesk_internal_retrieval_min_relevance).
-    kb_min = float(
-        getattr(settings, "zendesk_internal_retrieval_min_relevance", 0.35)
-    )
+    kb_min = float(getattr(settings, "zendesk_internal_retrieval_min_relevance", 0.35))
     feedme_min = float(getattr(settings, "zendesk_feedme_min_relevance", 0.45))
     max_per_source = int(
         getattr(settings, "zendesk_internal_retrieval_max_per_source", 5)
@@ -3026,7 +3060,9 @@ def _format_internal_retrieval_context_quality_first(
 
     lines: list[str] = []
     if include_header:
-        lines.append("Internal knowledge (do NOT mention sources in the customer reply):")
+        lines.append(
+            "Internal knowledge (do NOT mention sources in the customer reply):"
+        )
         lines.append("")
 
     remaining = char_budget - sum(len(line) + 1 for line in lines)
@@ -3430,7 +3466,7 @@ async def _prefetch_web_research(
             raise RuntimeError(str(res.get("error")))
 
         data = res.get("data") if isinstance(res, dict) else None
-        web_list = []
+        web_list: list[Any] = []
         if isinstance(data, dict):
             web_list = data.get("web") or data.get("results") or []
         if isinstance(web_list, list):
@@ -3528,7 +3564,7 @@ async def _firecrawl_support_bundle(
                     "include_subdomains": True,
                 }
             )
-            raw_urls = []
+            raw_urls: list[Any] = []
             if isinstance(mapped, dict):
                 raw_urls = (
                     mapped.get("links")
@@ -4154,7 +4190,7 @@ async def _generate_reply(
                 lines.append(line)
 
             # Ensure single blank line after headings and between major sections
-            out = []
+            out: list[str] = []
             prev_was_heading = False
             for line in lines:
                 is_heading = bool(
@@ -4252,7 +4288,9 @@ async def _generate_reply(
                 description = fetched_description
         except Exception as exc:  # pragma: no cover - network fallback
             logger.warning(
-                "zendesk_fetch_ticket_failed", ticket_id=ticket_id, error=str(exc)
+                "zendesk_fetch_ticket_failed ticket_id=%s error=%s",
+                ticket_id,
+                str(exc),
             )
 
     last_public = None
@@ -4292,15 +4330,19 @@ async def _generate_reply(
             "https://mailbird.featureupvote.com/suggestions/74494/pgp-encryption-support."
         )
 
-    attachments: List[Dict[str, Any]] = []
-    unified_attachments = []  # For multimodal processing (images, PDFs)
+    attachments: List[AttachmentInfo] = []
+    unified_attachments: list[Any] = []  # For multimodal processing (images, PDFs)
     attachment_url_scrubbed = 0
     try:
         attachments = fetch_ticket_attachments(ticket_id, public_only=True)
         att_summary = summarize_attachments(attachments)
         if attachments:
             attachment_type_counts = _summarize_attachment_types(attachments)
-            has_log_attachments = bool(attachment_type_counts.get("logs")) if attachment_type_counts else False
+            has_log_attachments = (
+                bool(attachment_type_counts.get("logs"))
+                if attachment_type_counts
+                else False
+            )
             attachment_notes = [
                 "Note: Attachments are already provided in context; do NOT request or fetch Zendesk attachment URLs."
             ]
@@ -4325,12 +4367,13 @@ async def _generate_reply(
         logger.debug(f"attachment_fetch_failed ticket={ticket_id}: {e}")
 
     if has_log_attachments:
-        log_attachment_hint = (
-            "- Log files are already attached in this ticket; do NOT ask the customer to send logs again.\n"
-        )
+        log_attachment_hint = "- Log files are already attached in this ticket; do NOT ask the customer to send logs again.\n"
 
     user_query_raw = "\n\n".join([p for p in parts_in if p]) or "(no description)"
-    user_query_raw, attachment_url_scrubbed = _scrub_zendesk_attachment_urls(user_query_raw)
+    scrubbed_query, attachment_url_scrubbed = _scrub_zendesk_attachment_urls(
+        user_query_raw
+    )
+    user_query_raw = scrubbed_query or ""
     user_query = _redact_pii(user_query_raw) or user_query_raw
 
     ticket_is_unclear = _ticket_seems_unclear(
@@ -4471,7 +4514,9 @@ async def _generate_reply(
                 max_per_source = int(
                     getattr(settings, "zendesk_internal_retrieval_max_per_source", 5)
                 )
-                max_per_source = _clamp_internal_retrieval_max_per_source(max_per_source)
+                max_per_source = _clamp_internal_retrieval_max_per_source(
+                    max_per_source
+                )
                 retrieved = await db_unified_search_tool.ainvoke(
                     {
                         "query": user_query,
@@ -4575,12 +4620,15 @@ async def _generate_reply(
                 if isinstance(pattern_preflight, dict):
                     raw_category = pattern_preflight.get("category")
                     inferred_category = (
-                        str(raw_category) if isinstance(raw_category, str) and raw_category.strip() else None
+                        str(raw_category)
+                        if isinstance(raw_category, str) and raw_category.strip()
+                        else None
                     )
                     raw_playbook_path = pattern_preflight.get("playbook_path")
                     playbook_path = (
                         str(raw_playbook_path)
-                        if isinstance(raw_playbook_path, str) and raw_playbook_path.strip()
+                        if isinstance(raw_playbook_path, str)
+                        and raw_playbook_path.strip()
                         else None
                     )
 
@@ -4589,7 +4637,9 @@ async def _generate_reply(
                         similar_count = int(pattern_preflight.get("similar_count") or 0)
                     except Exception:
                         similar_count = 0
-                    pattern_playbook_compiled = bool(pattern_preflight.get("playbook_compiled"))
+                    pattern_playbook_compiled = bool(
+                        pattern_preflight.get("playbook_compiled")
+                    )
                     pattern_similar_count = similar_count
                     pattern_ok = pattern_playbook_compiled or similar_count > 0
 
@@ -4598,7 +4648,9 @@ async def _generate_reply(
                 try:
                     pattern_parts: list[str] = []
                     if pattern_ok:
-                        similar_md = await workspace_store.read_file("/context/similar_scenarios.md")
+                        similar_md = await workspace_store.read_file(
+                            "/context/similar_scenarios.md"
+                        )
                         if isinstance(similar_md, str) and similar_md.strip():
                             pattern_parts.append(
                                 "Similar internal scenarios (do NOT mention sources in the customer reply):\n\n"
@@ -4611,7 +4663,9 @@ async def _generate_reply(
                                     "Verified internal playbook (do NOT mention sources in the customer reply):\n\n"
                                     + _trim_block(playbook_md, 7000)
                                 )
-                    pattern_context = "\n\n".join([p for p in pattern_parts if p]).strip()
+                    pattern_context = "\n\n".join(
+                        [p for p in pattern_parts if p]
+                    ).strip()
                     if pattern_context:
                         internal_context = "\n\n".join(
                             [p for p in [internal_context, pattern_context] if p]
@@ -4870,9 +4924,9 @@ async def _generate_reply(
             )
 
             result = await run_unified_agent(state)
-            result_payload: dict[str, Any] = result if isinstance(result, dict) else {}
-            result_scratchpad: dict[str, Any] = {}
-            result_log_notes: dict[str, Any] = {}
+            result_payload = result if isinstance(result, dict) else {}
+            result_scratchpad = {}
+            result_log_notes = {}
             if isinstance(result_payload.get("scratchpad"), dict):
                 result_scratchpad = result_payload.get("scratchpad") or {}
             if isinstance(result_payload.get("log_analysis_notes"), dict):
@@ -5024,7 +5078,7 @@ async def _generate_reply(
                     if len(draft_context) > 7000:
                         draft_context = draft_context[:7000].rstrip() + "\n[truncated]"
 
-                    guidance_parts: List[str] = []
+                    guidance_parts = []
                     if internal_context:
                         guidance_parts.append(internal_context)
                     if web_context:
@@ -5045,7 +5099,7 @@ async def _generate_reply(
                         "- After the greeting, add two sentences:\n"
                         "  - First, an empathetic bridge that acknowledges their emotion and impact, referencing a specific detail they shared.\n"
                         "  - Second, restate the main issue with their exact details (error text, provider, goal).\n"
-                        "- The empathetic bridge must be the third line. Avoid defaulting to \"It sounds like\".\n"
+                        '- The empathetic bridge must be the third line. Avoid defaulting to "It sounds like".\n'
                         "- If they provided logs, screenshots, or steps tried, thank them for the effort.\n"
                         "- Zendesk ticket policies (follow when applicable):\n"
                         "  - If requesting a log file, follow the macro titled: TECH: Request log file - Using Mailbird Number 2 (paraphrase, but keep ALL steps).\n"
@@ -5078,16 +5132,20 @@ async def _generate_reply(
                         from langchain_core.messages import SystemMessage
                         from langchain_xai import ChatXAI
 
-                        llm = ChatXAI(
+                        xai_rewrite_llm = ChatXAI(
                             model=str(use_model),
                             temperature=0.2,
-                            xai_api_key=settings.xai_api_key,
+                            api_key=(
+                                SecretStr(settings.xai_api_key)
+                                if settings.xai_api_key
+                                else None
+                            ),
                             timeout=300,
                         )
                         rewritten_text = ""
                         for attempt in range(1, 6):
                             try:
-                                rewritten = await llm.ainvoke(
+                                rewritten = await xai_rewrite_llm.ainvoke(
                                     [
                                         SystemMessage(
                                             content=(
@@ -5140,7 +5198,7 @@ async def _generate_reply(
                     if len(draft_context) > 7000:
                         draft_context = draft_context[:7000].rstrip() + "\n[truncated]"
 
-                    guidance_parts: List[str] = []
+                    guidance_parts = []
                     if internal_context:
                         guidance_parts.append(internal_context)
                     if web_context:
@@ -5161,7 +5219,7 @@ async def _generate_reply(
                         "- After the greeting, add two sentences:\n"
                         "  - First, an empathetic bridge that acknowledges their emotion and impact, referencing a specific detail they shared.\n"
                         "  - Second, restate the main issue with their exact details (error text, provider, goal).\n"
-                        "- The empathetic bridge must be the third line. Avoid defaulting to \"It sounds like\".\n"
+                        '- The empathetic bridge must be the third line. Avoid defaulting to "It sounds like".\n'
                         "- If they provided logs, screenshots, or steps tried, thank them for the effort.\n"
                         "- Zendesk ticket policies (follow when applicable):\n"
                         "  - If requesting a log file, follow the macro titled: TECH: Request log file - Using Mailbird Number 2 (paraphrase, but keep ALL steps).\n"
@@ -5193,7 +5251,7 @@ async def _generate_reply(
                     try:
                         from langchain_google_genai import ChatGoogleGenerativeAI
 
-                        llm = ChatGoogleGenerativeAI(
+                        gemini_rewrite_llm = ChatGoogleGenerativeAI(
                             model=str(agent_model),
                             temperature=0.2,
                             google_api_key=settings.gemini_api_key,
@@ -5203,7 +5261,7 @@ async def _generate_reply(
                         rewritten_text = ""
                         for attempt in range(1, 6):
                             try:
-                                rewritten = await llm.ainvoke(prompt)
+                                rewritten = await gemini_rewrite_llm.ainvoke(prompt)
                                 rewritten_text = _extract_llm_content(
                                     getattr(rewritten, "content", "")
                                 )
@@ -5244,7 +5302,7 @@ async def _generate_reply(
                 if len(draft_context) > 6000:
                     draft_context = draft_context[:6000].rstrip() + "\n[truncated]"
 
-                guidance_parts: List[str] = []
+                guidance_parts = []
                 if internal_context:
                     guidance_parts.append(internal_context)
                 if web_context:
@@ -5350,7 +5408,9 @@ async def _generate_reply(
             try:
                 tool_messages = [
                     msg
-                    for msg in (learning_messages or result_payload.get("messages") or [])
+                    for msg in (
+                        learning_messages or result_payload.get("messages") or []
+                    )
                     if isinstance(msg, BaseMessage)
                 ]
                 tool_usage = _extract_tool_usage(tool_messages)
@@ -5374,7 +5434,10 @@ async def _generate_reply(
 
             context_report = {
                 "attachments": {
-                    **(attachment_type_counts or _summarize_attachment_types(attachments)),
+                    **(
+                        attachment_type_counts
+                        or _summarize_attachment_types(attachments)
+                    ),
                     "attachment_url_scrubbed": attachment_url_scrubbed,
                 },
                 "internal_sources": {
@@ -5386,18 +5449,26 @@ async def _generate_reply(
                     "pattern_playbook_compiled": pattern_playbook_compiled,
                     "web_ok": web_ok,
                     "internal_ok": internal_ok,
-                    "macro_hits": (preflight_metrics or {}).get("macro_hits")
-                    if preflight_metrics
-                    else None,
-                    "kb_hits": (preflight_metrics or {}).get("kb_hits")
-                    if preflight_metrics
-                    else None,
-                    "feedme_hits": (preflight_metrics or {}).get("feedme_hits")
-                    if preflight_metrics
-                    else None,
+                    "macro_hits": (
+                        (preflight_metrics or {}).get("macro_hits")
+                        if preflight_metrics
+                        else None
+                    ),
+                    "kb_hits": (
+                        (preflight_metrics or {}).get("kb_hits")
+                        if preflight_metrics
+                        else None
+                    ),
+                    "feedme_hits": (
+                        (preflight_metrics or {}).get("feedme_hits")
+                        if preflight_metrics
+                        else None
+                    ),
                 },
                 "memory": {
-                    "memory_ui_enabled": memory_stats.get("memory_ui_retrieval_enabled"),
+                    "memory_ui_enabled": memory_stats.get(
+                        "memory_ui_retrieval_enabled"
+                    ),
                     "mem0_enabled": memory_stats.get("mem0_retrieval_enabled"),
                     "memory_ui_retrieved": memory_stats.get("memory_ui_retrieved"),
                     "mem0_retrieved": memory_stats.get("mem0_retrieved"),
@@ -5409,9 +5480,11 @@ async def _generate_reply(
                     "web_tools": web_tools,
                     "subagents_deployed": subagents,
                     "log_diagnoser_used": "log_diagnoser" in tools_executed,
-                    "log_analysis_notes": len(result_log_notes)
-                    if isinstance(result_log_notes, dict)
-                    else 0,
+                    "log_analysis_notes": (
+                        len(result_log_notes)
+                        if isinstance(result_log_notes, dict)
+                        else 0
+                    ),
                 },
                 "models": {
                     "provider": str(use_provider),
@@ -5455,7 +5528,9 @@ async def _process_window(
     # Re-queue tickets that were claimed but never finalized (e.g., crash/timeout).
     try:
         await _requeue_stale_processing(
-            max_age_minutes=int(getattr(settings, "zendesk_processing_timeout_minutes", 30) or 30)
+            max_age_minutes=int(
+                getattr(settings, "zendesk_processing_timeout_minutes", 30) or 30
+            )
         )
     except Exception:
         pass
@@ -5569,6 +5644,7 @@ async def _process_window(
                     reason or "unspecified",
                     dry_run,
                 )
+
         try:
             # Claim row BEFORE doing any heavy work to avoid duplicate compute across workers
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -5644,7 +5720,11 @@ async def _process_window(
                 via = ticket.get("via") if isinstance(ticket, dict) else {}
                 source = via.get("source") if isinstance(via, dict) else {}
                 from_obj = source.get("from") if isinstance(source, dict) else {}
-                recipients = from_obj.get("original_recipients")
+                recipients = (
+                    from_obj.get("original_recipients")
+                    if isinstance(from_obj, dict)
+                    else None
+                )
                 if not (isinstance(recipients, list) and recipients):
                     comments = await asyncio.to_thread(zc.get_ticket_comments, tid, 5)
             except Exception:
@@ -5812,10 +5892,14 @@ async def _process_window(
             if retry_after is None:
                 retry_after = 60.0
             retry_after = max(5.0, float(retry_after) + 1.0)
+            error_reason = (
+                f"{e.operation}:{e.request_id}" if e.request_id else e.operation
+            )
+            last_error = str(e)[:500]
             log_internal_note_result(
                 posted=False,
                 reason="rate_limited",
-                error=f"{e.operation}:{e.request_id}" if e.request_id else e.operation,
+                error=error_reason,
             )
             next_at = (
                 datetime.now(timezone.utc) + timedelta(seconds=retry_after)
@@ -5825,7 +5909,7 @@ async def _process_window(
                 .update(
                     {
                         "status": "retry",
-                        "last_error": str(e)[:500],
+                        "last_error": last_error,
                         "last_attempt_at": datetime.now(timezone.utc).isoformat(),
                         "next_attempt_at": next_at,
                     }

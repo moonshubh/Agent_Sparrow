@@ -76,7 +76,9 @@ class TimelineOperation:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def create_root(cls, root_id: str, name: str = "Unified Agent", **metadata: Any) -> "TimelineOperation":
+    def create_root(
+        cls, root_id: str, name: str = "Unified Agent", **metadata: Any
+    ) -> "TimelineOperation":
         """Create the root agent operation."""
         return cls(
             id=root_id,
@@ -357,6 +359,7 @@ class SubagentThinkingDeltaEvent:
 
 
 # Utility functions
+
 
 def _safe_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
     """Backward-compatible alias for safe_metadata."""

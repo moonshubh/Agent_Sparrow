@@ -20,7 +20,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 # =============================================================================
 # Enums
 # =============================================================================
@@ -145,23 +144,21 @@ class AddMemoryRequest(BaseModel):
         ...,
         min_length=1,
         max_length=50000,
-        description="The memory content text. Will be embedded using Gemini embeddings (3072-dim)."
+        description="The memory content text. Will be embedded using Gemini embeddings (3072-dim).",
     )
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Optional metadata to attach to the memory (e.g., source URL, tags, context)."
+        description="Optional metadata to attach to the memory (e.g., source URL, tags, context).",
     )
     source_type: Literal["auto_extracted", "manual"] = Field(
         default="manual",
-        description="How the memory was created. 'manual' for UI additions, 'auto_extracted' for agent-generated."
+        description="How the memory was created. 'manual' for UI additions, 'auto_extracted' for agent-generated.",
     )
     agent_id: str = Field(
-        default="primary",
-        description="The agent ID this memory belongs to."
+        default="primary", description="The agent ID this memory belongs to."
     )
     tenant_id: str = Field(
-        default="mailbot",
-        description="The tenant ID for multi-tenant isolation."
+        default="mailbot", description="The tenant ID for multi-tenant isolation."
     )
 
     @field_validator("content")
@@ -180,7 +177,7 @@ class AddMemoryRequest(BaseModel):
                 "metadata": {"source": "support_ticket", "ticket_id": "12345"},
                 "source_type": "manual",
                 "agent_id": "primary",
-                "tenant_id": "mailbot"
+                "tenant_id": "mailbot",
             }
         }
     )
@@ -198,11 +195,11 @@ class UpdateMemoryRequest(BaseModel):
         default=None,
         min_length=1,
         max_length=50000,
-        description="Updated memory content. If provided, the embedding will be regenerated."
+        description="Updated memory content. If provided, the embedding will be regenerated.",
     )
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Updated metadata. Replaces existing metadata entirely if provided."
+        description="Updated metadata. Replaces existing metadata entirely if provided.",
     )
 
     @field_validator("content")
@@ -220,7 +217,11 @@ class UpdateMemoryRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "content": "Updated: To resolve IMAP sync issues on macOS, users should check System Preferences > Network.",
-                "metadata": {"source": "support_ticket", "ticket_id": "12345", "updated": True}
+                "metadata": {
+                    "source": "support_ticket",
+                    "ticket_id": "12345",
+                    "updated": True,
+                },
             }
         }
     )
@@ -268,9 +269,15 @@ class MergeRelationshipsRequest(BaseModel):
         min_length=2,
         description="Relationship IDs to merge (2+). These will be merged destructively.",
     )
-    source_entity_id: UUID = Field(..., description="Merged relationship source entity ID.")
-    target_entity_id: UUID = Field(..., description="Merged relationship target entity ID.")
-    relationship_type: RelationshipType = Field(..., description="Merged relationship type.")
+    source_entity_id: UUID = Field(
+        ..., description="Merged relationship source entity ID."
+    )
+    target_entity_id: UUID = Field(
+        ..., description="Merged relationship target entity ID."
+    )
+    relationship_type: RelationshipType = Field(
+        ..., description="Merged relationship type."
+    )
     weight: float = Field(
         ...,
         ge=0,
@@ -347,10 +354,18 @@ class SplitRelationshipCommitCluster(BaseModel):
         max_length=120,
         description="Human-readable cluster label (not persisted).",
     )
-    source_entity_id: UUID = Field(..., description="Cluster relationship source entity ID.")
-    target_entity_id: UUID = Field(..., description="Cluster relationship target entity ID.")
-    relationship_type: RelationshipType = Field(..., description="Cluster relationship type.")
-    weight: float = Field(..., ge=0, le=10, description="Cluster relationship weight 0-10.")
+    source_entity_id: UUID = Field(
+        ..., description="Cluster relationship source entity ID."
+    )
+    target_entity_id: UUID = Field(
+        ..., description="Cluster relationship target entity ID."
+    )
+    relationship_type: RelationshipType = Field(
+        ..., description="Cluster relationship type."
+    )
+    weight: float = Field(
+        ..., ge=0, le=10, description="Cluster relationship weight 0-10."
+    )
     memory_ids: List[UUID] = Field(
         ...,
         min_length=1,
@@ -395,16 +410,16 @@ class MergeMemoriesRequest(BaseModel):
 
     duplicate_candidate_id: UUID = Field(
         ...,
-        description="ID of the duplicate candidate record from memory_duplicate_candidates table."
+        description="ID of the duplicate candidate record from memory_duplicate_candidates table.",
     )
     keep_memory_id: UUID = Field(
         ...,
-        description="ID of the memory to keep (the 'primary' memory that will absorb the other)."
+        description="ID of the memory to keep (the 'primary' memory that will absorb the other).",
     )
     merge_content: Optional[str] = Field(
         default=None,
         max_length=50000,
-        description="Optional merged content. If not provided, the kept memory's content is preserved."
+        description="Optional merged content. If not provided, the kept memory's content is preserved.",
     )
 
     model_config = ConfigDict(
@@ -412,7 +427,7 @@ class MergeMemoriesRequest(BaseModel):
             "example": {
                 "duplicate_candidate_id": "550e8400-e29b-41d4-a716-446655440000",
                 "keep_memory_id": "550e8400-e29b-41d4-a716-446655440001",
-                "merge_content": "Combined knowledge about IMAP sync issues and their resolutions."
+                "merge_content": "Combined knowledge about IMAP sync issues and their resolutions.",
             }
         }
     )
@@ -445,24 +460,23 @@ class SubmitFeedbackRequest(BaseModel):
     the quality of agent responses over time.
     """
 
-    feedback_type: Literal["thumbs_up", "thumbs_down", "resolution_success", "resolution_failure"] = Field(
-        ...,
-        description="Type of feedback being submitted."
-    )
+    feedback_type: Literal[
+        "thumbs_up", "thumbs_down", "resolution_success", "resolution_failure"
+    ] = Field(..., description="Type of feedback being submitted.")
     session_id: Optional[str] = Field(
         default=None,
         max_length=100,
-        description="ID of the chat session where this feedback was given."
+        description="ID of the chat session where this feedback was given.",
     )
     ticket_id: Optional[str] = Field(
         default=None,
         max_length=100,
-        description="ID of the support ticket associated with this feedback."
+        description="ID of the support ticket associated with this feedback.",
     )
     notes: Optional[str] = Field(
         default=None,
         max_length=2000,
-        description="Optional notes or comments explaining the feedback."
+        description="Optional notes or comments explaining the feedback.",
     )
 
     model_config = ConfigDict(
@@ -471,7 +485,7 @@ class SubmitFeedbackRequest(BaseModel):
                 "feedback_type": "resolution_success",
                 "session_id": "session-12345",
                 "ticket_id": "TICKET-67890",
-                "notes": "This memory helped resolve the customer's issue on first contact."
+                "notes": "This memory helped resolve the customer's issue on first contact.",
             }
         }
     )
@@ -486,17 +500,16 @@ class ExportFilters(BaseModel):
 
     entity_types: Optional[List[str]] = Field(
         default=None,
-        description="Filter to only include memories with entities of these types."
+        description="Filter to only include memories with entities of these types.",
     )
     min_confidence: Optional[float] = Field(
         default=None,
         ge=0.0,
         le=1.0,
-        description="Minimum confidence score threshold (0.0 to 1.0)."
+        description="Minimum confidence score threshold (0.0 to 1.0).",
     )
     created_after: Optional[datetime] = Field(
-        default=None,
-        description="Only include memories created after this timestamp."
+        default=None, description="Only include memories created after this timestamp."
     )
 
     model_config = ConfigDict(
@@ -504,7 +517,7 @@ class ExportFilters(BaseModel):
             "example": {
                 "entity_types": ["issue", "solution"],
                 "min_confidence": 0.7,
-                "created_after": "2025-01-01T00:00:00Z"
+                "created_after": "2025-01-01T00:00:00Z",
             }
         }
     )
@@ -518,12 +531,10 @@ class ExportMemoriesRequest(BaseModel):
     """
 
     format: Literal["json"] = Field(
-        default="json",
-        description="Export format. Currently only JSON is supported."
+        default="json", description="Export format. Currently only JSON is supported."
     )
     filters: Optional[ExportFilters] = Field(
-        default=None,
-        description="Optional filters to apply to the export."
+        default=None, description="Optional filters to apply to the export."
     )
 
     model_config = ConfigDict(
@@ -532,8 +543,8 @@ class ExportMemoriesRequest(BaseModel):
                 "format": "json",
                 "filters": {
                     "entity_types": ["issue", "solution"],
-                    "min_confidence": 0.5
-                }
+                    "min_confidence": 0.5,
+                },
             }
         }
     )
@@ -549,7 +560,7 @@ class DismissDuplicateRequest(BaseModel):
     notes: Optional[str] = Field(
         default=None,
         max_length=2000,
-        description="Optional notes explaining why this is not a duplicate."
+        description="Optional notes explaining why this is not a duplicate.",
     )
 
     model_config = ConfigDict(
@@ -574,37 +585,29 @@ class AddMemoryResponse(BaseModel):
     automatically extracted from the memory content.
     """
 
-    id: UUID = Field(
-        ...,
-        description="Unique identifier of the created memory."
-    )
-    content: str = Field(
-        ...,
-        description="The memory content that was stored."
-    )
+    id: UUID = Field(..., description="Unique identifier of the created memory.")
+    content: str = Field(..., description="The memory content that was stored.")
     confidence_score: float = Field(
         ...,
         ge=0.0,
         le=1.0,
-        description="Initial confidence score (typically 0.5 for new memories)."
+        description="Initial confidence score (typically 0.5 for new memories).",
     )
     source_type: str = Field(
-        ...,
-        description="How the memory was created ('manual' or 'auto_extracted')."
+        ..., description="How the memory was created ('manual' or 'auto_extracted')."
     )
     entities_extracted: int = Field(
         ...,
         ge=0,
-        description="Number of entities automatically extracted from the content."
+        description="Number of entities automatically extracted from the content.",
     )
     relationships_created: int = Field(
         ...,
         ge=0,
-        description="Number of relationships created between extracted entities."
+        description="Number of relationships created between extracted entities.",
     )
     created_at: datetime = Field(
-        ...,
-        description="Timestamp when the memory was created."
+        ..., description="Timestamp when the memory was created."
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -613,17 +616,10 @@ class AddMemoryResponse(BaseModel):
 class UpdateMemoryResponse(BaseModel):
     """Response schema for successfully updating a memory."""
 
-    id: UUID = Field(
-        ...,
-        description="Unique identifier of the updated memory."
-    )
-    content: str = Field(
-        ...,
-        description="The updated memory content."
-    )
+    id: UUID = Field(..., description="Unique identifier of the updated memory.")
+    content: str = Field(..., description="The updated memory content.")
     updated_at: datetime = Field(
-        ...,
-        description="Timestamp when the memory was last updated."
+        ..., description="Timestamp when the memory was last updated."
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -637,18 +633,17 @@ class DeleteMemoryResponse(BaseModel):
     """
 
     deleted: bool = Field(
-        ...,
-        description="Whether the memory was successfully deleted."
+        ..., description="Whether the memory was successfully deleted."
     )
     entities_orphaned: int = Field(
         ...,
         ge=0,
-        description="Number of entities that became orphaned (no longer connected to any memory)."
+        description="Number of entities that became orphaned (no longer connected to any memory).",
     )
     relationships_removed: int = Field(
         ...,
         ge=0,
-        description="Number of relationships that were removed with the memory."
+        description="Number of relationships that were removed with the memory.",
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -662,23 +657,21 @@ class MergeMemoriesResponse(BaseModel):
     """
 
     merged_memory_id: UUID = Field(
-        ...,
-        description="ID of the memory that was kept after the merge."
+        ..., description="ID of the memory that was kept after the merge."
     )
     deleted_memory_id: UUID = Field(
-        ...,
-        description="ID of the memory that was deleted during the merge."
+        ..., description="ID of the memory that was deleted during the merge."
     )
     confidence_score: float = Field(
         ...,
         ge=0.0,
         le=1.0,
-        description="Updated confidence score of the merged memory."
+        description="Updated confidence score of the merged memory.",
     )
     entities_transferred: int = Field(
         ...,
         ge=0,
-        description="Number of entities transferred from the deleted memory to the kept memory."
+        description="Number of entities transferred from the deleted memory to the kept memory.",
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -719,14 +712,13 @@ class SubmitFeedbackResponse(BaseModel):
     """
 
     feedback_id: UUID = Field(
-        ...,
-        description="Unique identifier of the created feedback record."
+        ..., description="Unique identifier of the created feedback record."
     )
     new_confidence_score: float = Field(
         ...,
         ge=0.0,
         le=1.0,
-        description="The memory's updated confidence score after applying the feedback."
+        description="The memory's updated confidence score after applying the feedback.",
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -740,28 +732,19 @@ class ExportMemoriesResponse(BaseModel):
     the file once it's ready.
     """
 
-    export_id: UUID = Field(
-        ...,
-        description="Unique identifier of the export job."
-    )
+    export_id: UUID = Field(..., description="Unique identifier of the export job.")
     download_url: str = Field(
         ...,
-        description="URL to download the export file (available when processing completes)."
+        description="URL to download the export file (available when processing completes).",
     )
     memory_count: int = Field(
-        ...,
-        ge=0,
-        description="Number of memories included in the export."
+        ..., ge=0, description="Number of memories included in the export."
     )
     entity_count: int = Field(
-        ...,
-        ge=0,
-        description="Number of entities included in the export."
+        ..., ge=0, description="Number of entities included in the export."
     )
     relationship_count: int = Field(
-        ...,
-        ge=0,
-        description="Number of relationships included in the export."
+        ..., ge=0, description="Number of relationships included in the export."
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -771,12 +754,11 @@ class DismissDuplicateResponse(BaseModel):
     """Response schema for successfully dismissing a duplicate candidate."""
 
     candidate_id: UUID = Field(
-        ...,
-        description="ID of the duplicate candidate that was dismissed."
+        ..., description="ID of the duplicate candidate that was dismissed."
     )
     status: str = Field(
         ...,
-        description="New status of the duplicate candidate (typically 'dismissed')."
+        description="New status of the duplicate candidate (typically 'dismissed').",
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -792,51 +774,37 @@ class MemoryStatsResponse(BaseModel):
 
     # Count statistics
     total_memories: int = Field(
-        ...,
-        ge=0,
-        description="Total number of memories in the system."
+        ..., ge=0, description="Total number of memories in the system."
     )
     total_entities: int = Field(
-        ...,
-        ge=0,
-        description="Total number of extracted entities."
+        ..., ge=0, description="Total number of extracted entities."
     )
     total_relationships: int = Field(
-        ...,
-        ge=0,
-        description="Total number of entity relationships."
+        ..., ge=0, description="Total number of entity relationships."
     )
     pending_duplicates: int = Field(
-        ...,
-        ge=0,
-        description="Number of duplicate candidates awaiting review."
+        ..., ge=0, description="Number of duplicate candidates awaiting review."
     )
 
     # Confidence distribution
     high_confidence: int = Field(
-        ...,
-        ge=0,
-        description="Number of memories with confidence >= 0.7."
+        ..., ge=0, description="Number of memories with confidence >= 0.7."
     )
     medium_confidence: int = Field(
-        ...,
-        ge=0,
-        description="Number of memories with confidence >= 0.4 and < 0.7."
+        ..., ge=0, description="Number of memories with confidence >= 0.4 and < 0.7."
     )
     low_confidence: int = Field(
-        ...,
-        ge=0,
-        description="Number of memories with confidence < 0.4."
+        ..., ge=0, description="Number of memories with confidence < 0.4."
     )
 
     # Type breakdowns
     entity_types: Dict[str, int] = Field(
         ...,
-        description="Count of entities by type (e.g., {'issue': 50, 'solution': 45})."
+        description="Count of entities by type (e.g., {'issue': 50, 'solution': 45}).",
     )
     relationship_types: Dict[str, int] = Field(
         ...,
-        description="Count of relationships by type (e.g., {'RESOLVED_BY': 30, 'AFFECTS': 20})."
+        description="Count of relationships by type (e.g., {'RESOLVED_BY': 30, 'AFFECTS': 20}).",
     )
 
     model_config = ConfigDict(

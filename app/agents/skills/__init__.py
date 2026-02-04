@@ -4,8 +4,9 @@ Discovers and loads SKILL.md files from project root (.sparrow/skills/).
 Implements progressive disclosure: metadata first, full content on demand.
 Enhanced with context-aware auto-detection for all skill categories.
 """
+
 import re
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, Pattern
@@ -29,14 +30,55 @@ SKILL_TRIGGERS: dict[str, list[str]] = {
     "xlsx": [r"\.xlsx?\b", r"\bexcel\b", r"spreadsheet", r"\.xls\b", r"workbook"],
     "pptx": [r"\.pptx?\b", r"\bpowerpoint\b", r"presentation", r"\.ppt\b", r"slide"],
     # Data analysis
-    "csv-data-summarizer": [r"\.csv\b", r"csv file", r"analyze.*data", r"data analysis", r"summarize.*csv"],
+    "csv-data-summarizer": [
+        r"\.csv\b",
+        r"csv file",
+        r"analyze.*data",
+        r"data analysis",
+        r"summarize.*csv",
+    ],
     # Creative & design
-    "canvas-design": [r"create.*poster", r"design.*poster", r"design.*graphic", r"visual.*design", r"infographic", r"design.*banner"],
-    "image-enhancer": [r"enhance.*(image|screenshot)", r"improve.*(image|screenshot)", r"upscale", r"sharpen", r"image quality", r"screenshot quality"],
-    "image-generation": [r"generate.*image", r"create.*image", r"draw.*image", r"make.*picture", r"create.*diagram", r"generate.*illustration", r"ai.*image", r"image.*of\b"],
+    "canvas-design": [
+        r"create.*poster",
+        r"design.*poster",
+        r"design.*graphic",
+        r"visual.*design",
+        r"infographic",
+        r"design.*banner",
+    ],
+    "image-enhancer": [
+        r"enhance.*(image|screenshot)",
+        r"improve.*(image|screenshot)",
+        r"upscale",
+        r"sharpen",
+        r"image quality",
+        r"screenshot quality",
+    ],
+    "image-generation": [
+        r"generate.*image",
+        r"create.*image",
+        r"draw.*image",
+        r"make.*picture",
+        r"create.*diagram",
+        r"generate.*illustration",
+        r"ai.*image",
+        r"image.*of\b",
+    ],
     # Methodology skills
-    "brainstorming": [r"brainstorm", r"ideate", r"generate.*ideas", r"explore.*options", r"think.*through"],
-    "root-cause-tracing": [r"root cause", r"trace.*error", r"debug.*chain", r"error.*chain", r"why.*fail"],
+    "brainstorming": [
+        r"brainstorm",
+        r"ideate",
+        r"generate.*ideas",
+        r"explore.*options",
+        r"think.*through",
+    ],
+    "root-cause-tracing": [
+        r"root cause",
+        r"trace.*error",
+        r"debug.*chain",
+        r"error.*chain",
+        r"why.*fail",
+    ],
     "lead-research-assistant": [
         r"research.*company",
         r"lead.*research",
@@ -47,15 +89,27 @@ SKILL_TRIGGERS: dict[str, list[str]] = {
         r"look.*up",
         r"search.*for",
     ],
-    "content-research-writer": [r"write.*article", r"research.*write", r"kb.*article", r"blog.*post", r"documentation"],
+    "content-research-writer": [
+        r"write.*article",
+        r"research.*write",
+        r"kb.*article",
+        r"blog.*post",
+        r"documentation",
+    ],
     # KB creator (existing)
-    "kb-creator": [r"create.*kb", r"knowledge.*base", r"kb.*draft", r"support.*article"],
+    "kb-creator": [
+        r"create.*kb",
+        r"knowledge.*base",
+        r"kb.*draft",
+        r"support.*article",
+    ],
 }
 
 
 @dataclass
 class SkillMetadata:
     """Metadata for a skill (progressive disclosure level 1)."""
+
     name: str
     description: str
     path: Path
@@ -64,6 +118,7 @@ class SkillMetadata:
 @dataclass
 class LoadedSkill:
     """Fully loaded skill with content and references (progressive disclosure level 2+)."""
+
     metadata: SkillMetadata
     content: str  # Full SKILL.md content
     references: dict[str, str]  # Additional reference files
@@ -88,7 +143,9 @@ class SkillsRegistry:
         self.skills_dir = project_root / ".sparrow" / "skills"
         self._metadata_cache: dict[str, SkillMetadata] = {}
         self._loaded_cache: dict[str, LoadedSkill] = {}
-        self._compiled_triggers: dict[str, list[Pattern[str]]] = self._compile_triggers()
+        self._compiled_triggers: dict[str, list[Pattern[str]]] = (
+            self._compile_triggers()
+        )
 
         logger.debug(f"SkillsRegistry initialized with skills_dir: {self.skills_dir}")
 
@@ -97,7 +154,9 @@ class SkillsRegistry:
         """Compile regex triggers once for reuse."""
         compiled: dict[str, list[Pattern[str]]] = {}
         for skill_name, patterns in SKILL_TRIGGERS.items():
-            compiled[skill_name] = [re.compile(pattern, re.IGNORECASE) for pattern in patterns]
+            compiled[skill_name] = [
+                re.compile(pattern, re.IGNORECASE) for pattern in patterns
+            ]
         return compiled
 
     def discover_skills(self) -> list[SkillMetadata]:
@@ -107,7 +166,7 @@ class SkillsRegistry:
         Returns:
             List of SkillMetadata for all discovered skills.
         """
-        skills = []
+        skills: list[SkillMetadata] = []
         if not self.skills_dir.exists():
             logger.warning(f"Skills directory not found: {self.skills_dir}")
             return skills
@@ -147,13 +206,15 @@ class SkillsRegistry:
                     data = yaml.safe_load(frontmatter)
 
                     if not data or "name" not in data or "description" not in data:
-                        logger.warning(f"Invalid frontmatter in {skill_md}: missing name or description")
+                        logger.warning(
+                            f"Invalid frontmatter in {skill_md}: missing name or description"
+                        )
                         return None
 
                     return SkillMetadata(
                         name=data["name"],
                         description=data["description"],
-                        path=skill_dir
+                        path=skill_dir,
                     )
             except yaml.YAMLError as e:
                 logger.error(f"YAML parsing error in {skill_md}: {e}")
@@ -194,15 +255,13 @@ class SkillsRegistry:
             for ref_file in ref_dir.glob("*.md"):
                 try:
                     references[ref_file.stem] = ref_file.read_text(encoding="utf-8")
-                    logger.debug(f"Loaded reference file: {ref_file.stem} for skill {name}")
+                    logger.debug(
+                        f"Loaded reference file: {ref_file.stem} for skill {name}"
+                    )
                 except Exception as e:
                     logger.error(f"Error loading reference file {ref_file}: {e}")
 
-        skill = LoadedSkill(
-            metadata=metadata,
-            content=content,
-            references=references
-        )
+        skill = LoadedSkill(metadata=metadata, content=content, references=references)
         self._loaded_cache[name] = skill
         logger.info(f"Loaded skill: {name} with {len(references)} reference files")
         return skill
@@ -222,7 +281,9 @@ class SkillsRegistry:
         for skill in skills:
             lines.append(f"- **{skill.name}**: {skill.description}")
         lines.append("")
-        lines.append("To use a skill, read .sparrow/skills/{skill-name}/SKILL.md when relevant.")
+        lines.append(
+            "To use a skill, read .sparrow/skills/{skill-name}/SKILL.md when relevant."
+        )
         return "\n".join(lines)
 
     def should_activate_writing_skill(self, context: dict) -> bool:
@@ -248,7 +309,9 @@ class SkillsRegistry:
         # Skip for internal tool calls, subagent research
         is_internal = context.get("is_internal_call", False)
 
-        return (is_user_facing or is_kb_article or is_support_response or is_zendesk) and not is_internal
+        return (
+            is_user_facing or is_kb_article or is_support_response or is_zendesk
+        ) and not is_internal
 
     def detect_skills_from_message(self, message: str) -> list[str]:
         """
@@ -376,6 +439,7 @@ _registry_lock = None
 
 try:
     import threading
+
     _registry_lock = threading.Lock()
 except ImportError:
     pass

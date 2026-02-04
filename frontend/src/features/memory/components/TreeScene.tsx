@@ -1,21 +1,35 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
-import { Html } from '@react-three/drei';
-import * as THREE from 'three';
-import type { EntityType, GraphNode, TreeEdge, TreeTransformResult, TreeViewMode } from '../types';
-import { useTree3DLayout } from '../hooks/useTree3DLayout';
-import { CycleConnection } from './CycleConnection';
-import { GroundPlane } from './GroundPlane';
-import { NodeCluster } from './NodeCluster';
-import { OrphanScatter } from './OrphanScatter';
-import { SkeletonTree } from './SkeletonTree';
-import { TreeBranch } from './TreeBranch';
-import { TreeNode } from './TreeNode';
-import { TreeTrunk } from './TreeTrunk';
-import { getLeafTexture } from '../lib/textureLoader';
-import { useLOD } from '../hooks/useLOD';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type RefObject,
+} from "react";
+import { useFrame, useThree } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
+import * as THREE from "three";
+import type {
+  EntityType,
+  GraphNode,
+  TreeEdge,
+  TreeTransformResult,
+  TreeViewMode,
+} from "../types";
+import { useTree3DLayout } from "../hooks/useTree3DLayout";
+import { CycleConnection } from "./CycleConnection";
+import { GroundPlane } from "./GroundPlane";
+import { NodeCluster } from "./NodeCluster";
+import { OrphanScatter } from "./OrphanScatter";
+import { SkeletonTree } from "./SkeletonTree";
+import { TreeBranch } from "./TreeBranch";
+import { TreeNode } from "./TreeNode";
+import { TreeTrunk } from "./TreeTrunk";
+import { getLeafTexture } from "../lib/textureLoader";
+import { useLOD } from "../hooks/useLOD";
 
 function toTimeMs(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -76,7 +90,11 @@ export function TreeScene({
   } | null>;
   htmlPortal?: RefObject<HTMLElement>;
   loading?: boolean;
-  lastExpansionEvent?: { nodeId: string; action: 'expand' | 'collapse'; at: number } | null;
+  lastExpansionEvent?: {
+    nodeId: string;
+    action: "expand" | "collapse";
+    at: number;
+  } | null;
 }) {
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const hoverClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -89,12 +107,15 @@ export function TreeScene({
     }
   }, []);
 
-  const scheduleHoverClear = useCallback((nodeId: string) => {
-    cancelHoverClear();
-    hoverClearTimerRef.current = setTimeout(() => {
-      setHoveredNodeId((prev) => (prev === nodeId ? null : prev));
-    }, 90);
-  }, [cancelHoverClear]);
+  const scheduleHoverClear = useCallback(
+    (nodeId: string) => {
+      cancelHoverClear();
+      hoverClearTimerRef.current = setTimeout(() => {
+        setHoveredNodeId((prev) => (prev === nodeId ? null : prev));
+      }, 90);
+    },
+    [cancelHoverClear],
+  );
 
   const leafTexture = useMemo(() => getLeafTexture(), []);
   const camera = useThree((state) => state.camera);
@@ -126,7 +147,7 @@ export function TreeScene({
           isRelationshipReviewed({
             acknowledgedAt: rel.acknowledgedAt ?? null,
             lastModifiedAt: rel.lastModifiedAt ?? null,
-          })
+          }),
         )
       ) {
         reviewed.add(edge.sourceId);
@@ -147,13 +168,13 @@ export function TreeScene({
 
     const out = new Map<string, boolean>();
     for (const node of layout.nodes) {
-      if (node.kind === 'entity') {
+      if (node.kind === "entity") {
         out.set(node.id, !entityTypeFilter.has(node.data.node.entityType));
         continue;
       }
 
-      const hasAnyMatchingType = Array.from(node.memberTypes.values()).some((t) =>
-        entityTypeFilter.has(t)
+      const hasAnyMatchingType = Array.from(node.memberTypes.values()).some(
+        (t) => entityTypeFilter.has(t),
       );
       out.set(node.id, !hasAnyMatchingType);
     }
@@ -185,7 +206,9 @@ export function TreeScene({
   const cyclesToShow = useMemo(() => {
     if (!selectedNodeId) return [];
     return layout.cycles.filter(
-      (cycle) => cycle.edge.sourceId === selectedNodeId || cycle.edge.targetId === selectedNodeId
+      (cycle) =>
+        cycle.edge.sourceId === selectedNodeId ||
+        cycle.edge.targetId === selectedNodeId,
     );
   }, [layout.cycles, selectedNodeId]);
 
@@ -198,7 +221,8 @@ export function TreeScene({
   const searchMarkers = useMemo(() => {
     if (!searchMatchIds || searchMatchIds.length === 0) return [];
     const max = Math.min(9, searchMatchIds.length);
-    const out: Array<{ id: string; label: string; position: THREE.Vector3 }> = [];
+    const out: Array<{ id: string; label: string; position: THREE.Vector3 }> =
+      [];
     for (let idx = 0; idx < max; idx += 1) {
       const id = searchMatchIds[idx];
       if (!id) continue;
@@ -225,7 +249,9 @@ export function TreeScene({
     const currentDistance = dir.length() || 10;
     const minDistance = controls.minDistance ?? 0;
     const maxDistance = controls.maxDistance ?? Number.POSITIVE_INFINITY;
-    dir.setLength(Math.min(maxDistance, Math.max(minDistance, currentDistance)));
+    dir.setLength(
+      Math.min(maxDistance, Math.max(minDistance, currentDistance)),
+    );
 
     const toCamera = toTarget.clone().add(dir);
 
@@ -241,7 +267,7 @@ export function TreeScene({
 
   useEffect(() => {
     if (!lastExpansionEvent) return;
-    if (lastExpansionEvent.action !== 'expand') return;
+    if (lastExpansionEvent.action !== "expand") return;
     if (lastExpansionHandledRef.current === lastExpansionEvent.at) return;
     lastExpansionHandledRef.current = lastExpansionEvent.at;
 
@@ -314,7 +340,7 @@ export function TreeScene({
         maxX: Number.NEGATIVE_INFINITY,
         minY: Number.POSITIVE_INFINITY,
         maxY: Number.NEGATIVE_INFINITY,
-      }
+      },
     );
 
     const margin = 0.92;
@@ -337,7 +363,10 @@ export function TreeScene({
     const desiredDistance = Math.max(distV, distH);
     const minDistance = controls.minDistance ?? 0;
     const maxDistance = controls.maxDistance ?? Number.POSITIVE_INFINITY;
-    const distance = Math.min(maxDistance, Math.max(minDistance, desiredDistance));
+    const distance = Math.min(
+      maxDistance,
+      Math.max(minDistance, desiredDistance),
+    );
 
     const fromTarget = controls.target.clone();
     const fromCamera = camera.position.clone();
@@ -356,7 +385,13 @@ export function TreeScene({
       fromTarget,
       toTarget,
     };
-  }, [camera, lastExpansionEvent, layout.nodes, layout.renderableById, orbitControlsRef]);
+  }, [
+    camera,
+    lastExpansionEvent,
+    layout.nodes,
+    layout.renderableById,
+    orbitControlsRef,
+  ]);
 
   useFrame((state) => {
     const flight = flightRef.current;
@@ -412,7 +447,10 @@ export function TreeScene({
           {layout.links.map((link) => {
             const isDimmed =
               Boolean(focusNodeIdSet) &&
-              !(focusNodeIdSet?.has(link.source.id) && focusNodeIdSet?.has(link.target.id));
+              !(
+                focusNodeIdSet?.has(link.source.id) &&
+                focusNodeIdSet?.has(link.target.id)
+              );
 
             return (
               <TreeBranch
@@ -422,7 +460,8 @@ export function TreeScene({
                 viewMode={viewMode}
                 isDimmed={isDimmed}
                 isGhosted={Boolean(
-                  ghostedById?.get(link.source.id) || ghostedById?.get(link.target.id)
+                  ghostedById?.get(link.source.id) ||
+                  ghostedById?.get(link.target.id),
                 )}
                 onClick={(edge) => onEdgeClick?.(edge)}
               />
@@ -433,8 +472,16 @@ export function TreeScene({
             <CycleConnection
               key={cycle.key}
               points={[
-                [cycle.source.position.x, cycle.source.position.y + 0.2, cycle.source.position.z],
-                [cycle.target.position.x, cycle.target.position.y + 0.2, cycle.target.position.z],
+                [
+                  cycle.source.position.x,
+                  cycle.source.position.y + 0.2,
+                  cycle.source.position.z,
+                ],
+                [
+                  cycle.target.position.x,
+                  cycle.target.position.y + 0.2,
+                  cycle.target.position.z,
+                ],
               ]}
             />
           ))}
@@ -445,11 +492,12 @@ export function TreeScene({
             const isRoot = node.id === tree!.rootId;
             const showLabel = showAllLabels || selected || isRoot;
 
-            const dimmed = Boolean(focusNodeIdSet) && !focusNodeIdSet?.has(node.id);
+            const dimmed =
+              Boolean(focusNodeIdSet) && !focusNodeIdSet?.has(node.id);
 
             const ghosted = ghostedById?.get(node.id) ?? false;
 
-            const lod = lodById.get(node.id) ?? 'high';
+            const lod = lodById.get(node.id) ?? "high";
 
             return (
               <group
@@ -464,7 +512,7 @@ export function TreeScene({
                   scheduleHoverClear(node.id);
                 }}
               >
-                {node.kind === 'cluster' ? (
+                {node.kind === "cluster" ? (
                   <NodeCluster
                     cluster={node}
                     hovered={hovered}
@@ -516,13 +564,17 @@ export function TreeScene({
           {searchMarkers.map((marker) => (
             <Html
               key={`search-marker-${marker.id}`}
-              position={[marker.position.x, marker.position.y + 2.2, marker.position.z]}
+              position={[
+                marker.position.x,
+                marker.position.y + 2.2,
+                marker.position.z,
+              ]}
               center
               portal={htmlPortal}
             >
               <div
                 className={`particle-tree-search-marker ${
-                  marker.id === activeSearchMatchId ? 'is-active' : ''
+                  marker.id === activeSearchMatchId ? "is-active" : ""
                 }`}
               >
                 {marker.label}

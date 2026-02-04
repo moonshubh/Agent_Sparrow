@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import argparse
 import asyncio
 import logging
@@ -15,7 +17,6 @@ from app.core.settings import settings
 from app.db.embedding.utils import get_embedding_model
 from app.db.embedding_config import assert_dim
 from app.db.supabase.client import get_supabase_client
-
 
 logger = logging.getLogger("feedme_reindex")
 
@@ -56,7 +57,9 @@ async def _iter_conversation_ids(
         return
 
     if folder_id is None:
-        raise SystemExit("Provide --conversation-id or --folder-id to scope reindexing.")
+        raise SystemExit(
+            "Provide --conversation-id or --folder-id to scope reindexing."
+        )
 
     resp = await supa._exec(
         lambda: supa.client.table("feedme_conversations")
@@ -107,7 +110,9 @@ async def reindex_feedme_text_chunks(
             continue
 
         chunk_texts: list[str] = [str(row.get("content") or "") for row in rows]
-        logger.info("conversation=%s chunks=%s dry_run=%s", conversation_id, len(rows), dry_run)
+        logger.info(
+            "conversation=%s chunks=%s dry_run=%s", conversation_id, len(rows), dry_run
+        )
 
         for row_idx, row in enumerate(rows):
             chunk_id = row.get("id")

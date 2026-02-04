@@ -10,13 +10,17 @@ import asyncio
 import json
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from loguru import logger
 
 from .attachment_processor import AttachmentProcessor, get_attachment_processor
-from .multimodal_processor import MultimodalProcessor, get_multimodal_processor, ProcessedAttachments
+from .multimodal_processor import (
+    MultimodalProcessor,
+    get_multimodal_processor,
+    ProcessedAttachments,
+)
 from app.agents.unified.model_context import get_model_context_window
 from app.agents.unified.provider_factory import build_chat_model
 from app.core.config import get_models_config, resolve_coordinator_config
@@ -185,11 +189,15 @@ class MessagePreparer:
                 try:
                     from app.agents.harness.store import SparrowWorkspaceStore
 
-                    session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
+                    session_id = getattr(state, "session_id", None) or getattr(
+                        state, "trace_id", None
+                    )
                     forwarded = getattr(state, "forwarded_props", {}) or {}
                     customer_id = None
                     if isinstance(forwarded, dict):
-                        customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
+                        customer_id = forwarded.get("customer_id") or forwarded.get(
+                            "customerId"
+                        )
 
                     if session_id:
                         store = SparrowWorkspaceStore(
@@ -197,17 +205,25 @@ class MessagePreparer:
                             customer_id=customer_id,
                         )
                         used_paths: set[str] = set()
-                        for idx, (display_name, attachment) in enumerate(deferred_log_items):
+                        for idx, (display_name, attachment) in enumerate(
+                            deferred_log_items
+                        ):
                             data_url = self._get_attachment_attr(attachment, "data_url")
                             if not data_url:
                                 continue
-                            decoded = self.attachment_processor.decode_data_url(str(data_url))
+                            decoded = self.attachment_processor.decode_data_url(
+                                str(data_url)
+                            )
                             if not decoded:
                                 continue
-                            content = self.attachment_processor.extract_log_content(decoded)
+                            content = self.attachment_processor.extract_log_content(
+                                decoded
+                            )
                             if not content:
                                 continue
-                            safe_name = self._sanitize_attachment_name(display_name, idx)
+                            safe_name = self._sanitize_attachment_name(
+                                display_name, idx
+                            )
                             path = f"/knowledge/attachments/{safe_name}"
                             if path in used_paths:
                                 path = f"/knowledge/attachments/{safe_name}_{idx + 1}"
@@ -222,7 +238,9 @@ class MessagePreparer:
                             )
                             stored_log_paths.append(f"- {display_name} -> {path}")
                 except Exception as exc:
-                    logger.debug("log_attachment_workspace_write_failed", error=str(exc))
+                    logger.debug(
+                        "log_attachment_workspace_write_failed", error=str(exc)
+                    )
 
             if deferred_log_names:
                 messages.append(
@@ -231,7 +249,14 @@ class MessagePreparer:
                             "Log files attached (contents withheld from prompt). "
                             "They will be analyzed via the log_diagnoser tool.\n"
                             + "\n".join(f"- {name}" for name in deferred_log_names)
-                            + (("\n\nStored in workspace:\n" + "\n".join(stored_log_paths)) if stored_log_paths else "")
+                            + (
+                                (
+                                    "\n\nStored in workspace:\n"
+                                    + "\n".join(stored_log_paths)
+                                )
+                                if stored_log_paths
+                                else ""
+                            )
                         ),
                         name="log_attachment_notice",
                     )
@@ -243,7 +268,9 @@ class MessagePreparer:
                     SystemMessage(
                         content=(
                             "Sensitive text attachments detected (contents withheld from prompt):\n"
-                            + "\n".join(f"- {name}" for name in deferred_sensitive_names)
+                            + "\n".join(
+                                f"- {name}" for name in deferred_sensitive_names
+                            )
                         ),
                         name="sensitive_attachment_notice",
                     )
@@ -277,7 +304,10 @@ class MessagePreparer:
                     processed=vision_processed,
                 )
                 if extracted:
-                    names = ", ".join(processed.vision_fallback_attachments) or "PDF attachments"
+                    names = (
+                        ", ".join(processed.vision_fallback_attachments)
+                        or "PDF attachments"
+                    )
                     messages.append(
                         SystemMessage(
                             content=(
@@ -287,8 +317,12 @@ class MessagePreparer:
                             name="attachment_pdf_vision_summary",
                         )
                     )
-                    stats["pdf_vision_extracted"] = len(processed.vision_fallback_blocks)
-                    stats["attachments_inlined"] = stats.get("attachments_inlined", 0) + 1
+                    stats["pdf_vision_extracted"] = len(
+                        processed.vision_fallback_blocks
+                    )
+                    stats["attachments_inlined"] = (
+                        stats.get("attachments_inlined", 0) + 1
+                    )
                 else:
                     messages.append(
                         SystemMessage(
@@ -334,14 +368,15 @@ class MessagePreparer:
                             processed.multimodal_blocks
                         )
 
-                    stats["attachments_inlined"] = (
-                        len(processed.multimodal_blocks)
-                        + (1 if processed.text_content else 0)
+                    stats["attachments_inlined"] = len(processed.multimodal_blocks) + (
+                        1 if processed.text_content else 0
                     )
                 else:
                     # Non-vision model selected: run a vision sub-model to extract
                     # a concise textual description that can be fed to the chosen model.
-                    user_query_for_vision = last_user_query or "User provided attachments."
+                    user_query_for_vision = (
+                        last_user_query or "User provided attachments."
+                    )
                     extracted = await self._vision_fallback_extract(
                         user_query=user_query_for_vision,
                         processed=processed,
@@ -477,7 +512,10 @@ class MessagePreparer:
             )
         if getattr(settings, "openrouter_api_key", None):
             vision_candidates.append(
-                ("openrouter", resolve_coordinator_config(config, "openrouter").model_id)
+                (
+                    "openrouter",
+                    resolve_coordinator_config(config, "openrouter").model_id,
+                )
             )
 
         if not vision_candidates:
@@ -496,7 +534,10 @@ class MessagePreparer:
         )
 
         vision_human = HumanMessage(
-            content=[{"type": "text", "text": vision_prompt}, *processed.multimodal_blocks]
+            content=[
+                {"type": "text", "text": vision_prompt},
+                *processed.multimodal_blocks,
+            ]
         )
 
         for provider, model in vision_candidates:
@@ -504,7 +545,9 @@ class MessagePreparer:
             if spec is not None and not spec.supports_vision:
                 continue
             try:
-                vision_model = build_chat_model(provider=provider, model=model, role="coordinator")
+                vision_model = build_chat_model(
+                    provider=provider, model=model, role="coordinator"
+                )
                 response = await vision_model.ainvoke(
                     [
                         SystemMessage(
@@ -547,6 +590,8 @@ class MessagePreparer:
         cached = self._get_cache(rewrite_key)
         if cached:
             return cached
+        if self.helper is None:
+            return None
 
         # Rewrite with timeout
         rewritten = await self._with_timeout(
@@ -595,6 +640,8 @@ class MessagePreparer:
         summary = self._get_cache(cache_key)
 
         if summary is None:
+            if self.helper is None:
+                return messages
             summary = await self._with_timeout(
                 self.helper.summarize(history_text, budget_tokens=800),
                 "gemma_history_summarize",
@@ -633,6 +680,8 @@ class MessagePreparer:
         summary = self._get_cache(cache_key)
 
         if summary is None:
+            if self.helper is None:
+                return messages
             summary = await self._with_timeout(
                 self.helper.summarize(combined, budget_tokens=1200),
                 "gemma_context_compact",
@@ -723,7 +772,7 @@ class MessagePreparer:
             multimodal_blocks=len(processed.multimodal_blocks),
         )
 
-        return HumanMessage(content=content)
+        return HumanMessage(content=cast(List[str | dict[Any, Any]], content))
 
     @staticmethod
     def _get_attachment_attr(attachment: Any, attr: str) -> Optional[Any]:
@@ -898,9 +947,7 @@ class MessagePreparer:
                 "attachment_summary_compact",
             )
             if condensed:
-                combined = (
-                    f"Attachment: {name} (summarized)\n{condensed.strip()}"
-                )
+                combined = f"Attachment: {name} (summarized)\n{condensed.strip()}"
 
         stats = {"chunks": len(sections), "important": len(important_lines)}
         return combined, stats
@@ -915,9 +962,7 @@ class MessagePreparer:
         for line in lines:
             if line.startswith("Attachment: "):
                 if current_name is not None:
-                    blocks.append(
-                        (current_name, "\n".join(current_lines).strip())
-                    )
+                    blocks.append((current_name, "\n".join(current_lines).strip()))
                 current_name = line[len("Attachment: ") :].strip() or "attachment"
                 current_lines = []
                 continue
@@ -940,10 +985,7 @@ class MessagePreparer:
         total = len(lines)
 
         if total <= section_size * max_sections:
-            return [
-                lines[i : i + section_size]
-                for i in range(0, total, section_size)
-            ]
+            return [lines[i : i + section_size] for i in range(0, total, section_size)]
 
         head = lines[:section_size]
         tail = lines[-section_size:]
@@ -972,10 +1014,7 @@ class MessagePreparer:
         for line in lines:
             if not line.strip():
                 continue
-            if not (
-                _IMPORTANT_LINE_RE.search(line)
-                or _HTTP_STATUS_RE.search(line)
-            ):
+            if not (_IMPORTANT_LINE_RE.search(line) or _HTTP_STATUS_RE.search(line)):
                 continue
             trimmed = self._truncate_text(line.strip(), ATTACHMENT_LINE_MAX_CHARS)
             if trimmed in seen:
@@ -1022,7 +1061,9 @@ class MessagePreparer:
                     else:
                         total_tokens += self._estimate_text_tokens(str(part))
             else:
-                total_tokens += self._estimate_text_tokens(str(content)) if content else 0
+                total_tokens += (
+                    self._estimate_text_tokens(str(content)) if content else 0
+                )
 
         return total_tokens
 

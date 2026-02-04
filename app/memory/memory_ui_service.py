@@ -12,6 +12,8 @@ import asyncio
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+from postgrest.base_request_builder import CountMethod
 from uuid import UUID
 
 from app.core.logging_config import get_logger
@@ -24,6 +26,8 @@ from app.memory.title import ensure_memory_title
 from app.security.pii_redactor import redact_pii, redact_pii_from_dict
 
 logger = get_logger(__name__)
+
+COUNT_EXACT: CountMethod = CountMethod.exact
 
 
 class MemoryUIService:
@@ -263,7 +267,9 @@ class MemoryUIService:
         if content != existing_content:
             embedding = await self.generate_embedding(content)
             update_payload["embedding"] = embedding
-            logger.info("Content changed for memory %s, regenerated embedding", memory_id_str)
+            logger.info(
+                "Content changed for memory %s, regenerated embedding", memory_id_str
+            )
 
         try:
             response = await supabase._exec(
@@ -519,14 +525,20 @@ class MemoryUIService:
             elif isinstance(result, dict):
                 count = result.get("count", 0)
             elif isinstance(result, list) and result:
-                count = result[0].get("count", 0) if isinstance(result[0], dict) else len(result)
+                count = (
+                    result[0].get("count", 0)
+                    if isinstance(result[0], dict)
+                    else len(result)
+                )
             else:
                 count = 0
 
             logger.info("Detected %d duplicates for memory %s", count, memory_id)
             return count
         except Exception as exc:
-            logger.error("Failed to detect duplicates for memory %s: %s", memory_id, exc)
+            logger.error(
+                "Failed to detect duplicates for memory %s: %s", memory_id, exc
+            )
             raise
 
     async def get_memory_by_id(self, memory_id: UUID) -> Optional[Dict[str, Any]]:
@@ -642,14 +654,18 @@ class MemoryUIService:
             return query
 
         try:
-            data_query = apply_filters(
-                supabase.client.table("memories").select(self.MEMORY_SELECT_COLUMNS)
-            ).order("created_at", desc=sort_order_norm == "desc").range(
-                offset, offset + limit - 1
+            data_query = (
+                apply_filters(
+                    supabase.client.table("memories").select(self.MEMORY_SELECT_COLUMNS)
+                )
+                .order("created_at", desc=sort_order_norm == "desc")
+                .range(offset, offset + limit - 1)
             )
 
             count_query = apply_filters(
-                supabase.client.table("memories").select("id", count="exact", head=True)
+                supabase.client.table("memories").select(
+                    "id", count=COUNT_EXACT, head=True
+                )
             )
 
             data_response = await supabase._exec(lambda: data_query.execute())

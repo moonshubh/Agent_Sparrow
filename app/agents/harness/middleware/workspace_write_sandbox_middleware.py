@@ -17,10 +17,16 @@ from loguru import logger
 try:  # pragma: no cover - optional dependency
     from langchain.agents.middleware import AgentMiddleware
     from langchain.agents.middleware.types import ToolCallRequest
+
     MIDDLEWARE_AVAILABLE = True
 except Exception:  # pragma: no cover
-    AgentMiddleware = object  # type: ignore[assignment]
-    ToolCallRequest = object  # type: ignore[assignment]
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class ToolCallRequest:  # type: ignore[no-redef]
+        pass
+
     MIDDLEWARE_AVAILABLE = False
 
 
@@ -50,7 +56,7 @@ def _get_run_dir(state: Any) -> str | None:
     return None
 
 
-class WorkspaceWriteSandboxMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object):
+class WorkspaceWriteSandboxMiddleware(AgentMiddleware):
     """Restrict subagent workspace writes to their run directory."""
 
     @property
@@ -70,11 +76,13 @@ class WorkspaceWriteSandboxMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE el
         args = tool_call.get("args") or {}
         if not isinstance(args, dict):
             args = {}
-        path = args.get("path") if isinstance(args.get("path"), str) else ""
+        path: str = str(args.get("path") or "")
         run_dir = _get_run_dir(getattr(request, "state", None))
 
-        if not run_dir:
-            logger.warning("workspace_write_sandbox_missing_run_dir", tool_name=tool_name)
+        if not isinstance(run_dir, str) or not run_dir:
+            logger.warning(
+                "workspace_write_sandbox_missing_run_dir", tool_name=tool_name
+            )
             return ToolMessage(
                 content="Workspace write blocked: run directory missing for subagent.",
                 tool_call_id=tool_call.get("id"),
@@ -82,7 +90,9 @@ class WorkspaceWriteSandboxMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE el
 
         normalized_path = _normalize_path(path)
         normalized_run_dir = _normalize_path(run_dir)
-        if normalized_path == normalized_run_dir or normalized_path.startswith(normalized_run_dir + "/"):
+        if normalized_path == normalized_run_dir or normalized_path.startswith(
+            normalized_run_dir + "/"
+        ):
             return await handler(request)
 
         logger.warning(
@@ -112,11 +122,13 @@ class WorkspaceWriteSandboxMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE el
         args = tool_call.get("args") or {}
         if not isinstance(args, dict):
             args = {}
-        path = args.get("path") if isinstance(args.get("path"), str) else ""
+        path: str = str(args.get("path") or "")
         run_dir = _get_run_dir(getattr(request, "state", None))
 
-        if not run_dir:
-            logger.warning("workspace_write_sandbox_missing_run_dir", tool_name=tool_name)
+        if not isinstance(run_dir, str) or not run_dir:
+            logger.warning(
+                "workspace_write_sandbox_missing_run_dir", tool_name=tool_name
+            )
             return ToolMessage(
                 content="Workspace write blocked: run directory missing for subagent.",
                 tool_call_id=tool_call.get("id"),
@@ -124,7 +136,9 @@ class WorkspaceWriteSandboxMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE el
 
         normalized_path = _normalize_path(path)
         normalized_run_dir = _normalize_path(run_dir)
-        if normalized_path == normalized_run_dir or normalized_path.startswith(normalized_run_dir + "/"):
+        if normalized_path == normalized_run_dir or normalized_path.startswith(
+            normalized_run_dir + "/"
+        ):
             return handler(request)
 
         logger.warning(

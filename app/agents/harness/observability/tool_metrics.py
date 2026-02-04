@@ -83,7 +83,9 @@ def iter_results() -> Iterable[ToolRunRecord]:
     return tuple(_records)
 
 
-def get_recent_results_for_session(session_id: str, limit: int = 20) -> list[dict[str, Any]]:
+def get_recent_results_for_session(
+    session_id: str, limit: int = 20
+) -> list[dict[str, Any]]:
     """Return recent tool runs for a session."""
     if not session_id:
         return []

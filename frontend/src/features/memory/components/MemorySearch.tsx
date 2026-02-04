@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { Search, X } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { useDebounce } from '@/shared/hooks/use-debounce';
-import { TIMING } from '../lib/api';
+import React, { useState, useEffect, useCallback } from "react";
+import { Search, X } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { useDebounce } from "@/shared/hooks/use-debounce";
+import { TIMING } from "../lib/api";
 
 interface MemorySearchProps {
   value: string;
@@ -12,7 +12,11 @@ interface MemorySearchProps {
   placeholder?: string;
 }
 
-export function MemorySearch({ value, onChange, placeholder = 'Search...' }: MemorySearchProps) {
+export function MemorySearch({
+  value,
+  onChange,
+  placeholder = "Search...",
+}: MemorySearchProps) {
   const [inputValue, setInputValue] = useState(value);
   const debouncedValue = useDebounce(inputValue, TIMING.SEARCH_DEBOUNCE_MS);
 
@@ -33,8 +37,8 @@ export function MemorySearch({ value, onChange, placeholder = 'Search...' }: Mem
   }, [value]); // Intentionally exclude inputValue to prevent infinite loops
 
   const handleClear = useCallback(() => {
-    setInputValue('');
-    onChange('');
+    setInputValue("");
+    onChange("");
   }, [onChange]);
 
   return (

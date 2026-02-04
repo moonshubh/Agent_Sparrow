@@ -9,7 +9,7 @@
 // Thinking Trace Types
 // -----------------------------------------------------------------------------
 
-export type TraceStepType = 'thought' | 'action' | 'result' | 'tool';
+export type TraceStepType = "thought" | "action" | "result" | "tool";
 
 /**
  * A single step in the agent's thinking trace.
@@ -31,7 +31,7 @@ export interface TraceStep {
   /** Optional duration in seconds */
   duration?: number;
   /** Optional status of the step */
-  status?: 'success' | 'error';
+  status?: "success" | "error";
 }
 
 /**
@@ -52,8 +52,12 @@ export interface AgentThinkingTraceEvent {
 // Timeline Operation Types
 // -----------------------------------------------------------------------------
 
-export type TimelineOperationType = 'agent' | 'tool' | 'thought' | 'todo';
-export type TimelineOperationStatus = 'pending' | 'running' | 'success' | 'error';
+export type TimelineOperationType = "agent" | "tool" | "thought" | "todo";
+export type TimelineOperationStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "error";
 
 /**
  * A single operation in the agent timeline.
@@ -137,7 +141,7 @@ export interface ToolEvidenceUpdateEvent {
 // Todo Types
 // -----------------------------------------------------------------------------
 
-export type TodoStatus = 'pending' | 'in_progress' | 'done';
+export type TodoStatus = "pending" | "in_progress" | "done";
 
 /**
  * A single todo item created by the agent.
@@ -179,7 +183,7 @@ export interface GenuiStateUpdateEvent {
  */
 export interface ImageArtifactEvent {
   id: string;
-  type: 'image';
+  type: "image";
   title: string;
   content: string;
   messageId: string;
@@ -201,7 +205,7 @@ export interface ImageArtifactEvent {
  */
 export interface ArticleArtifactEvent {
   id: string;
-  type: 'article';
+  type: "article";
   title: string;
   content: string;
   messageId: string;
@@ -222,7 +226,7 @@ export interface SubagentSpawnEvent {
 export interface SubagentEndEvent {
   subagentType: string;
   toolCallId: string;
-  status: 'success' | 'error';
+  status: "success" | "error";
   reportPath: string;
   excerpt: string;
   timestamp: string;
@@ -244,31 +248,31 @@ export interface SubagentThinkingDeltaEvent {
  * Use this for type-safe event handling.
  */
 export type AgentCustomEvent =
-  | { name: 'agent_thinking_trace'; value: AgentThinkingTraceEvent }
-  | { name: 'agent_timeline_update'; value: AgentTimelineUpdateEvent }
-  | { name: 'tool_evidence_update'; value: ToolEvidenceUpdateEvent }
-  | { name: 'agent_todos_update'; value: AgentTodosUpdateEvent }
-  | { name: 'genui_state_update'; value: GenuiStateUpdateEvent }
-  | { name: 'image_artifact'; value: ImageArtifactEvent }
-  | { name: 'article_artifact'; value: ArticleArtifactEvent }
-  | { name: 'subagent_spawn'; value: SubagentSpawnEvent }
-  | { name: 'subagent_end'; value: SubagentEndEvent }
-  | { name: 'subagent_thinking_delta'; value: SubagentThinkingDeltaEvent };
+  | { name: "agent_thinking_trace"; value: AgentThinkingTraceEvent }
+  | { name: "agent_timeline_update"; value: AgentTimelineUpdateEvent }
+  | { name: "tool_evidence_update"; value: ToolEvidenceUpdateEvent }
+  | { name: "agent_todos_update"; value: AgentTodosUpdateEvent }
+  | { name: "genui_state_update"; value: GenuiStateUpdateEvent }
+  | { name: "image_artifact"; value: ImageArtifactEvent }
+  | { name: "article_artifact"; value: ArticleArtifactEvent }
+  | { name: "subagent_spawn"; value: SubagentSpawnEvent }
+  | { name: "subagent_end"; value: SubagentEndEvent }
+  | { name: "subagent_thinking_delta"; value: SubagentThinkingDeltaEvent };
 
 /**
  * Known AG-UI custom event names as const tuple for compile-time type derivation.
  */
 export const KNOWN_EVENT_NAMES = [
-  'agent_thinking_trace',
-  'agent_timeline_update',
-  'tool_evidence_update',
-  'agent_todos_update',
-  'genui_state_update',
-  'image_artifact',
-  'article_artifact',
-  'subagent_spawn',
-  'subagent_end',
-  'subagent_thinking_delta',
+  "agent_thinking_trace",
+  "agent_timeline_update",
+  "tool_evidence_update",
+  "agent_todos_update",
+  "genui_state_update",
+  "image_artifact",
+  "article_artifact",
+  "subagent_spawn",
+  "subagent_end",
+  "subagent_thinking_delta",
 ] as const;
 
 /**
@@ -288,16 +292,16 @@ export type KnownEventName = (typeof KNOWN_EVENT_NAMES)[number];
  * from validators.ts after this guard passes.
  */
 export function isAgentCustomEvent(event: unknown): event is AgentCustomEvent {
-  if (!event || typeof event !== 'object') return false;
+  if (!event || typeof event !== "object") return false;
   const e = event as Record<string, unknown>;
 
   // Validate event.name is a known event name
-  if (typeof e.name !== 'string') return false;
+  if (typeof e.name !== "string") return false;
   if (!(KNOWN_EVENT_NAMES as readonly string[]).includes(e.name)) return false;
 
   // Shallow validation: event.value must be present and be an object
   // Full validation of value shape should be done via Zod validators
-  if (!('value' in e) || e.value === null || typeof e.value !== 'object') {
+  if (!("value" in e) || e.value === null || typeof e.value !== "object") {
     return false;
   }
 
@@ -308,8 +312,8 @@ export function isAgentCustomEvent(event: unknown): event is AgentCustomEvent {
  * Extract the event name from a custom event.
  */
 export function getEventName(
-  event: AgentCustomEvent
-): AgentCustomEvent['name'] {
+  event: AgentCustomEvent,
+): AgentCustomEvent["name"] {
   return event.name;
 }
 
@@ -320,17 +324,17 @@ export function getEventName(
 /**
  * Extract the value type for a specific event name.
  */
-export type EventValueType<T extends AgentCustomEvent['name']> = Extract<
+export type EventValueType<T extends AgentCustomEvent["name"]> = Extract<
   AgentCustomEvent,
   { name: T }
->['value'];
+>["value"];
 
 /**
  * Helper to create a typed event payload.
  */
-export function createEvent<T extends AgentCustomEvent['name']>(
+export function createEvent<T extends AgentCustomEvent["name"]>(
   name: T,
-  value: EventValueType<T>
+  value: EventValueType<T>,
 ): Extract<AgentCustomEvent, { name: T }> {
   return { name, value } as Extract<AgentCustomEvent, { name: T }>;
 }

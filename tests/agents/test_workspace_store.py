@@ -3,7 +3,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.agents.harness.store.workspace_store import SparrowWorkspaceStore, _IMPORT_FAILED
+from app.agents.harness.store.workspace_store import (
+    SparrowWorkspaceStore,
+    _IMPORT_FAILED,
+)
 
 
 @pytest.mark.asyncio
@@ -144,4 +147,6 @@ async def test_prune_user_sessions_paginates_over_large_indices() -> None:
     deleted_set = set(deleted_sessions)
     assert len(deleted_sessions) == total - keep
     assert expected_keep.isdisjoint(deleted_set)
-    assert set(deleted_index_files) == {f"/user/sessions/{sid}.json" for sid in deleted_set}
+    assert set(deleted_index_files) == {
+        f"/user/sessions/{sid}.json" for sid in deleted_set
+    }

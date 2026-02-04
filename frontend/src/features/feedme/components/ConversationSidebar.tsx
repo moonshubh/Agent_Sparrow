@@ -1,32 +1,41 @@
-"use client"
+"use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from 'react'
-import { useDebouncedCallback } from '@/shared/lib/utils/debounce'
-import { Card } from '@/shared/ui/card'
-import { Separator } from '@/shared/ui/separator'
-import { Button } from '@/shared/ui/button'
-import { Textarea } from '@/shared/ui/textarea'
-import { Label } from '@/shared/ui/label'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/shared/ui/select'
-import { ScrollArea } from '@/shared/ui/scroll-area'
-import { Loader2, RefreshCw, Monitor, Apple } from 'lucide-react'
-import { useFoldersStore } from '@/state/stores/folders-store'
-import { cn } from '@/shared/lib/utils'
-import { type PlatformType, PLATFORM_OPTIONS } from '@/features/feedme/services/feedme-api'
+import React, { useEffect, useState, useCallback, useMemo } from "react";
+import { useDebouncedCallback } from "@/shared/lib/utils/debounce";
+import { Card } from "@/shared/ui/card";
+import { Separator } from "@/shared/ui/separator";
+import { Button } from "@/shared/ui/button";
+import { Textarea } from "@/shared/ui/textarea";
+import { Label } from "@/shared/ui/label";
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from "@/shared/ui/select";
+import { ScrollArea } from "@/shared/ui/scroll-area";
+import { Loader2, RefreshCw, Monitor, Apple } from "lucide-react";
+import { useFoldersStore } from "@/state/stores/folders-store";
+import { cn } from "@/shared/lib/utils";
+import {
+  type PlatformType,
+  PLATFORM_OPTIONS,
+} from "@/features/feedme/services/feedme-api";
 
 interface ConversationSidebarProps {
-  folderId?: number | null
-  aiNote?: string
-  platform?: PlatformType
-  onFolderChange: (folderId: number | null) => Promise<void>
-  onSaveNote: (note: string) => Promise<void>
-  onPlatformChange?: (platform: PlatformType) => Promise<void>
-  onRegenerateNote?: () => Promise<void>
-  onMarkReady?: () => Promise<void>
-  isSavingFolder?: boolean
-  isSavingNote?: boolean
-  isSavingPlatform?: boolean
-  isMarkingReady?: boolean
+  folderId?: number | null;
+  aiNote?: string;
+  platform?: PlatformType;
+  onFolderChange: (folderId: number | null) => Promise<void>;
+  onSaveNote: (note: string) => Promise<void>;
+  onPlatformChange?: (platform: PlatformType) => Promise<void>;
+  onRegenerateNote?: () => Promise<void>;
+  onMarkReady?: () => Promise<void>;
+  isSavingFolder?: boolean;
+  isSavingNote?: boolean;
+  isSavingPlatform?: boolean;
+  isMarkingReady?: boolean;
 }
 
 export function ConversationSidebar({
@@ -43,139 +52,142 @@ export function ConversationSidebar({
   isSavingPlatform = false,
   isMarkingReady = false,
 }: ConversationSidebarProps) {
-  const folders = useFoldersStore(state => state.folderTree)
-  const loadFolders = useFoldersStore(state => state.actions.loadFolders)
-  const [noteDraft, setNoteDraft] = useState(aiNote || '')
-  const [noteTouched, setNoteTouched] = useState(false)
-  const [folderValue, setFolderValue] = useState<string>('root')
-  const [platformValue, setPlatformValue] = useState<string>(platform || 'none')
-  const [isRegenerating, setIsRegenerating] = useState(false)
-  const [isNoteFocused, setIsNoteFocused] = useState(false)
+  const folders = useFoldersStore((state) => state.folderTree);
+  const loadFolders = useFoldersStore((state) => state.actions.loadFolders);
+  const [noteDraft, setNoteDraft] = useState(aiNote || "");
+  const [noteTouched, setNoteTouched] = useState(false);
+  const [folderValue, setFolderValue] = useState<string>("root");
+  const [platformValue, setPlatformValue] = useState<string>(
+    platform || "none",
+  );
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [isNoteFocused, setIsNoteFocused] = useState(false);
 
-  useEffect(() => { loadFolders().catch(() => {}) }, [loadFolders])
+  useEffect(() => {
+    loadFolders().catch(() => {});
+  }, [loadFolders]);
 
   useEffect(() => {
     if (folderId === null || folderId === undefined) {
-      setFolderValue('root')
+      setFolderValue("root");
     } else {
-      setFolderValue(String(folderId))
+      setFolderValue(String(folderId));
     }
-  }, [folderId])
+  }, [folderId]);
 
   useEffect(() => {
-    setPlatformValue(platform || 'none')
-  }, [platform])
+    setPlatformValue(platform || "none");
+  }, [platform]);
 
   useEffect(() => {
     if (!noteTouched) {
-      setNoteDraft(aiNote || '')
+      setNoteDraft(aiNote || "");
     }
-  }, [aiNote, noteTouched])
+  }, [aiNote, noteTouched]);
 
-  const folderOptions = useMemo(() =>
-    folders
-      .filter(folder => folder.id !== 0)
-      .map(folder => ({
-        id: folder.id,
-        name: folder.name || `Folder ${folder.id}`,
-        color: folder.color || '#6b7280'
-      })),
-    [folders]
-  )
+  const folderOptions = useMemo(
+    () =>
+      folders
+        .filter((folder) => folder.id !== 0)
+        .map((folder) => ({
+          id: folder.id,
+          name: folder.name || `Folder ${folder.id}`,
+          color: folder.color || "#6b7280",
+        })),
+    [folders],
+  );
 
   const handleSelectFolder = async (value: string) => {
-    const previous = folderValue
-    setFolderValue(value)
-    const target = value === 'root' ? null : parseInt(value, 10)
+    const previous = folderValue;
+    setFolderValue(value);
+    const target = value === "root" ? null : parseInt(value, 10);
     try {
-      await onFolderChange(target)
+      await onFolderChange(target);
     } catch (error) {
-      setFolderValue(previous)
-      throw error
+      setFolderValue(previous);
+      throw error;
     }
-  }
+  };
 
   // Runtime validation for platform values
   const isValidPlatform = (val: string): val is PlatformType => {
-    return val === 'windows' || val === 'macos' || val === 'both'
-  }
+    return val === "windows" || val === "macos" || val === "both";
+  };
 
   const handleSelectPlatform = async (value: string) => {
-    if (!onPlatformChange) return
+    if (!onPlatformChange) return;
 
     // Handle "none" by not updating - user must select a valid platform
-    if (value === 'none') {
-      return
+    if (value === "none") {
+      return;
     }
 
     // Runtime validation before API call
     if (!isValidPlatform(value)) {
-      console.error('Invalid platform value:', value)
-      return
+      console.error("Invalid platform value:", value);
+      return;
     }
 
-    const previous = platformValue
-    setPlatformValue(value)
+    const previous = platformValue;
+    setPlatformValue(value);
     try {
-      await onPlatformChange(value)
+      await onPlatformChange(value);
     } catch (error) {
-      setPlatformValue(previous)
-      console.error('Failed to update platform:', error)
+      setPlatformValue(previous);
+      console.error("Failed to update platform:", error);
     }
-  }
+  };
 
   // Debounced auto-save for better performance
   const debouncedSaveNote = useDebouncedCallback(
     async (noteText: string) => {
-      if (!noteText.trim()) return
+      if (!noteText.trim()) return;
       try {
-        await onSaveNote(noteText.trim())
-        setNoteTouched(false)
+        await onSaveNote(noteText.trim());
+        setNoteTouched(false);
       } catch (error) {
-        console.error('Failed to auto-save note:', error)
+        console.error("Failed to auto-save note:", error);
         // Keep noteTouched as true so user knows save failed
       }
     },
-    2000 // 2 second debounce
-  )
+    2000, // 2 second debounce
+  );
 
   const handleSaveNote = useCallback(async () => {
     try {
-      await onSaveNote(noteDraft.trim())
-      setNoteTouched(false)
+      await onSaveNote(noteDraft.trim());
+      setNoteTouched(false);
     } catch (error) {
-      console.error('Failed to save note:', error)
+      console.error("Failed to save note:", error);
       // Keep noteTouched as true so user knows save failed
     }
-  }, [noteDraft, onSaveNote])
+  }, [noteDraft, onSaveNote]);
 
   const handleRegenerateNote = useCallback(async () => {
-    if (!onRegenerateNote) return
-    setIsRegenerating(true)
+    if (!onRegenerateNote) return;
+    setIsRegenerating(true);
     try {
-      await onRegenerateNote()
+      await onRegenerateNote();
     } catch (error) {
-      console.error('Failed to regenerate note:', error)
+      console.error("Failed to regenerate note:", error);
     } finally {
-      setIsRegenerating(false)
+      setIsRegenerating(false);
     }
-  }, [onRegenerateNote])
+  }, [onRegenerateNote]);
 
   // Trigger debounced auto-save when note changes
   useEffect(() => {
     if (noteTouched && noteDraft.trim()) {
-      debouncedSaveNote(noteDraft)
+      debouncedSaveNote(noteDraft);
     }
-  }, [noteDraft, noteTouched, debouncedSaveNote])
+  }, [noteDraft, noteTouched, debouncedSaveNote]);
 
   return (
     <Card className="flex h-full flex-col border-border/60 bg-[hsl(var(--brand-surface)/0.95)] shadow-sm">
       <ScrollArea className="h-full">
         <div className="space-y-6 p-5">
           <section className="space-y-2">
-            <Label className="text-sm font-medium">
-              Folder Assignment
-            </Label>
+            <Label className="text-sm font-medium">Folder Assignment</Label>
             <Select value={folderValue} onValueChange={handleSelectFolder}>
               <SelectTrigger>
                 <SelectValue placeholder="Choose folder" />
@@ -187,12 +199,12 @@ export function ConversationSidebar({
                     <span>Unassigned</span>
                   </div>
                 </SelectItem>
-                {folderOptions.map(folder => (
+                {folderOptions.map((folder) => (
                   <SelectItem key={folder.id} value={String(folder.id)}>
                     <div className="flex items-center gap-2">
                       <div
                         className="h-3 w-3 rounded-sm"
-                        style={{ backgroundColor: folder.color || '#6b7280' }}
+                        style={{ backgroundColor: folder.color || "#6b7280" }}
                       />
                       <span>{folder.name}</span>
                     </div>
@@ -213,10 +225,11 @@ export function ConversationSidebar({
           {onPlatformChange && (
             <>
               <section className="space-y-2">
-                <Label className="text-sm font-medium">
-                  Platform Tag
-                </Label>
-                <Select value={platformValue} onValueChange={handleSelectPlatform}>
+                <Label className="text-sm font-medium">Platform Tag</Label>
+                <Select
+                  value={platformValue}
+                  onValueChange={handleSelectPlatform}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Select platform" />
                   </SelectTrigger>
@@ -224,14 +237,20 @@ export function ConversationSidebar({
                     <SelectItem value="none">
                       <div className="flex items-center gap-2">
                         <div className="h-3 w-3 rounded-sm bg-gray-400" />
-                        <span className="text-muted-foreground">No platform set</span>
+                        <span className="text-muted-foreground">
+                          No platform set
+                        </span>
                       </div>
                     </SelectItem>
-                    {PLATFORM_OPTIONS.map(opt => (
+                    {PLATFORM_OPTIONS.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
                         <div className="flex items-center gap-2">
-                          {opt.value === 'windows' && <Monitor className="h-3 w-3 text-blue-500" />}
-                          {opt.value === 'macos' && <Apple className="h-3 w-3 text-gray-600" />}
+                          {opt.value === "windows" && (
+                            <Monitor className="h-3 w-3 text-blue-500" />
+                          )}
+                          {opt.value === "macos" && (
+                            <Apple className="h-3 w-3 text-gray-600" />
+                          )}
                           {/* No icon for 'both' - just text label */}
                           <span>{opt.label}</span>
                         </div>
@@ -241,7 +260,8 @@ export function ConversationSidebar({
                 </Select>
                 {isSavingPlatform && (
                   <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" /> Updating platform…
+                    <Loader2 className="h-3 w-3 animate-spin" /> Updating
+                    platform…
                   </p>
                 )}
               </section>
@@ -258,7 +278,9 @@ export function ConversationSidebar({
                   variant="ghost"
                   className={cn(
                     "h-6 w-6 transition-opacity",
-                    isNoteFocused || noteTouched ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                    isNoteFocused || noteTouched
+                      ? "opacity-100"
+                      : "opacity-0 group-hover:opacity-100",
                   )}
                   onClick={handleRegenerateNote}
                   disabled={isRegenerating}
@@ -274,16 +296,16 @@ export function ConversationSidebar({
             </div>
             <Textarea
               value={noteDraft}
-              onChange={event => {
-                setNoteDraft(event.target.value)
-                setNoteTouched(true)
+              onChange={(event) => {
+                setNoteDraft(event.target.value);
+                setNoteTouched(true);
               }}
               onFocus={() => setIsNoteFocused(true)}
               onBlur={() => {
-                setIsNoteFocused(false)
+                setIsNoteFocused(false);
                 // Save immediately on blur if there are changes
                 if (noteTouched && noteDraft.trim()) {
-                  handleSaveNote()
+                  handleSaveNote();
                 }
               }}
               placeholder="Summaries generated by the AI model appear here."
@@ -292,7 +314,12 @@ export function ConversationSidebar({
               aria-describedby={noteTouched ? "auto-save-indicator" : undefined}
             />
             {noteTouched && (
-              <p id="auto-save-indicator" className="text-xs text-muted-foreground">Auto-saving...</p>
+              <p
+                id="auto-save-indicator"
+                className="text-xs text-muted-foreground"
+              >
+                Auto-saving...
+              </p>
             )}
           </section>
 
@@ -302,15 +329,21 @@ export function ConversationSidebar({
               <section className="space-y-2">
                 <Label className="text-sm font-medium">Knowledge Base</Label>
                 <p className="text-xs text-muted-foreground">
-                  Mark this conversation as ready for the knowledge base after reviewing.
+                  Mark this conversation as ready for the knowledge base after
+                  reviewing.
                 </p>
                 <Button
                   size="sm"
                   className="w-full"
                   onClick={onMarkReady}
-                  disabled={isMarkingReady || isSavingFolder || folderValue === 'root'}
+                  disabled={
+                    isMarkingReady || isSavingFolder || folderValue === "root"
+                  }
                 >
-                  {isMarkingReady && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Mark Ready for Knowledge Base
+                  {isMarkingReady && (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  Mark Ready for Knowledge Base
                 </Button>
               </section>
             </>
@@ -318,7 +351,7 @@ export function ConversationSidebar({
         </div>
       </ScrollArea>
     </Card>
-  )
+  );
 }
 
-export default ConversationSidebar
+export default ConversationSidebar;

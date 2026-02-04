@@ -275,7 +275,9 @@ class SparrowMemoryMiddleware:
         if not lines:
             return None
 
-        header = "Server memory retrieved for this session/user. Use only if relevant:\n"
+        header = (
+            "Server memory retrieved for this session/user. Use only if relevant:\n"
+        )
         return SystemMessage(content=header + "\n".join(lines), name=MEMORY_SYSTEM_NAME)
 
     def _extract_facts(self, response: BaseMessage, max_facts: int = 3) -> List[str]:

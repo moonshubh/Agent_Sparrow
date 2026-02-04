@@ -1,39 +1,43 @@
-'use client';
+"use client";
 
-import React from 'react';
-import { motion } from 'framer-motion';
+import React from "react";
+import { motion } from "framer-motion";
 
 interface ConfidenceBadgeProps {
   score: number;
   showLabel?: boolean;
-  size?: 'sm' | 'md' | 'lg';
+  size?: "sm" | "md" | "lg";
 }
 
-export function ConfidenceBadge({ score, showLabel = false, size = 'md' }: ConfidenceBadgeProps) {
+export function ConfidenceBadge({
+  score,
+  showLabel = false,
+  size = "md",
+}: ConfidenceBadgeProps) {
   const percentage = Math.round(score * 100);
 
-  let level: 'high' | 'medium' | 'low';
+  let level: "high" | "medium" | "low";
   let color: string;
   let bgColor: string;
 
   if (percentage >= 70) {
-    level = 'high';
-    color = '#22C55E';
-    bgColor = 'rgba(34, 197, 94, 0.15)';
+    level = "high";
+    color = "#22C55E";
+    bgColor = "rgba(34, 197, 94, 0.15)";
   } else if (percentage >= 40) {
-    level = 'medium';
-    color = '#F59E0B';
-    bgColor = 'rgba(245, 158, 11, 0.15)';
+    level = "medium";
+    color = "#F59E0B";
+    bgColor = "rgba(245, 158, 11, 0.15)";
   } else {
-    level = 'low';
-    color = '#EF4444';
-    bgColor = 'rgba(239, 68, 68, 0.15)';
+    level = "low";
+    color = "#EF4444";
+    bgColor = "rgba(239, 68, 68, 0.15)";
   }
 
   const sizeClasses = {
-    sm: 'confidence-badge-sm',
-    md: 'confidence-badge-md',
-    lg: 'confidence-badge-lg',
+    sm: "confidence-badge-sm",
+    md: "confidence-badge-md",
+    lg: "confidence-badge-lg",
   };
 
   return (
@@ -50,9 +54,7 @@ export function ConfidenceBadge({ score, showLabel = false, size = 'md' }: Confi
       <span className="confidence-badge-value" style={{ color }}>
         {percentage}%
       </span>
-      {showLabel && (
-        <span className="confidence-badge-label">{level}</span>
-      )}
+      {showLabel && <span className="confidence-badge-label">{level}</span>}
     </motion.div>
   );
 }

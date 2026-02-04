@@ -1,27 +1,27 @@
-'use client'
+"use client";
 
-import { useEffect, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
-import { GoogleLoginForm } from '@/features/auth/components/GoogleLoginForm'
-import { LampSectionHeader } from '@/features/auth/components/LampSectionHeader'
-import { Loader2 } from 'lucide-react'
-import Image from 'next/image'
+import { useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import { GoogleLoginForm } from "@/features/auth/components/GoogleLoginForm";
+import { LampSectionHeader } from "@/features/auth/components/LampSectionHeader";
+import { Loader2 } from "lucide-react";
+import Image from "next/image";
 
 function LoginInner() {
-  const searchParams = useSearchParams()
-  const returnUrl = searchParams.get('returnUrl')
+  const searchParams = useSearchParams();
+  const returnUrl = searchParams.get("returnUrl");
 
   useEffect(() => {
     // Store return URL in session storage for use after OAuth callback
     if (returnUrl) {
       try {
-        sessionStorage.setItem('authReturnUrl', returnUrl)
+        sessionStorage.setItem("authReturnUrl", returnUrl);
       } catch {
         // sessionStorage may be disabled or quota exceeded - continue without storing
-        console.warn('Unable to store return URL in sessionStorage')
+        console.warn("Unable to store return URL in sessionStorage");
       }
     }
-  }, [returnUrl])
+  }, [returnUrl]);
 
   return (
     <div className="grid min-h-screen w-full lg:grid-cols-2">
@@ -53,17 +53,19 @@ function LoginInner() {
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={
-      <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-accent" />
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-accent" />
+        </div>
+      }
+    >
       <LoginInner />
     </Suspense>
-  )
+  );
 }

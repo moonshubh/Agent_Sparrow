@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import React, { useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Check,
   FileText,
@@ -10,22 +10,22 @@ import {
   Sparkles,
   SlidersHorizontal,
   X,
-} from 'lucide-react';
+} from "lucide-react";
 import {
   useAcknowledgeRelationship,
   useEntityRelatedMemories,
   useMergeRelationships,
   useUpdateRelationship,
-} from '../hooks';
-import { RELATIONSHIP_LABELS } from '../types';
+} from "../hooks";
+import { RELATIONSHIP_LABELS } from "../types";
 import type {
   RelationshipType,
   TreeEdge,
   TreeNodeData,
   UpdateRelationshipRequest,
-} from '../types';
-import { ClusterPreview } from './ClusterPreview';
-import { RelationshipAnalysisPanel } from './RelationshipAnalysisPanel';
+} from "../types";
+import { ClusterPreview } from "./ClusterPreview";
+import { RelationshipAnalysisPanel } from "./RelationshipAnalysisPanel";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -46,7 +46,7 @@ function formatShortId(id: string): string {
   return `${id.slice(0, 8)}…${id.slice(-4)}`;
 }
 
-type RelationshipEditorTab = 'edit' | 'ai' | 'evidence';
+type RelationshipEditorTab = "edit" | "ai" | "evidence";
 
 export function RelationshipEditor({
   edge,
@@ -66,7 +66,10 @@ export function RelationshipEditor({
   initialRelationshipId?: string | null;
   initialTab?: RelationshipEditorTab;
   onClose: () => void;
-  onPreviewChange: (relationshipId: string, request: UpdateRelationshipRequest) => void;
+  onPreviewChange: (
+    relationshipId: string,
+    request: UpdateRelationshipRequest,
+  ) => void;
   onPreviewClear: () => void;
   onNavigateToEntityId?: (entityId: string) => void;
   onInspectMemoryId?: (memoryId: string, relationshipId: string) => void;
@@ -76,28 +79,36 @@ export function RelationshipEditor({
   const mergeRelationships = useMergeRelationships();
 
   const [minimized, setMinimized] = useState(false);
-  const [activeTab, setActiveTab] = useState<RelationshipEditorTab>(initialTab ?? 'edit');
+  const [activeTab, setActiveTab] = useState<RelationshipEditorTab>(
+    initialTab ?? "edit",
+  );
 
   const defaultRelationshipId = edge.relationships[0]?.id ?? null;
   const initialSelectedRelationshipId =
-    initialRelationshipId && edge.relationships.some((r) => r.id === initialRelationshipId)
+    initialRelationshipId &&
+    edge.relationships.some((r) => r.id === initialRelationshipId)
       ? initialRelationshipId
       : defaultRelationshipId;
-  const [selectedRelationshipId, setSelectedRelationshipId] = useState<string | null>(
-    initialSelectedRelationshipId
-  );
-  const [analysisKeepAliveRelationshipId, setAnalysisKeepAliveRelationshipId] = useState<
+  const [selectedRelationshipId, setSelectedRelationshipId] = useState<
     string | null
-  >(initialTab === 'ai' ? initialSelectedRelationshipId : null);
+  >(initialSelectedRelationshipId);
+  const [analysisKeepAliveRelationshipId, setAnalysisKeepAliveRelationshipId] =
+    useState<string | null>(
+      initialTab === "ai" ? initialSelectedRelationshipId : null,
+    );
   const [mergeSelection, setMergeSelection] = useState<Set<string>>(
-    () => new Set(defaultRelationshipId ? [defaultRelationshipId] : [])
+    () => new Set(defaultRelationshipId ? [defaultRelationshipId] : []),
   );
   const [splitOpen, setSplitOpen] = useState(false);
-  const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<Set<string>>(() => new Set());
+  const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const selectedRelationship = useMemo(() => {
     if (!selectedRelationshipId) return null;
-    return edge.relationships.find((r) => r.id === selectedRelationshipId) ?? null;
+    return (
+      edge.relationships.find((r) => r.id === selectedRelationshipId) ?? null
+    );
   }, [edge.relationships, selectedRelationshipId]);
 
   const [draft, setDraft] = useState<UpdateRelationshipRequest | null>(null);
@@ -121,7 +132,10 @@ export function RelationshipEditor({
     if (!modifiedMs) return true;
 
     return acknowledgedMs >= modifiedMs;
-  }, [selectedRelationship?.acknowledgedAt, selectedRelationship?.lastModifiedAt]);
+  }, [
+    selectedRelationship?.acknowledgedAt,
+    selectedRelationship?.lastModifiedAt,
+  ]);
 
   useEffect(() => {
     setDraft(baseDraft);
@@ -156,28 +170,42 @@ export function RelationshipEditor({
     }
 
     onPreviewChange(selectedRelationshipId, draft);
-  }, [baseDraft, draft, onPreviewChange, onPreviewClear, selectedRelationshipId]);
+  }, [
+    baseDraft,
+    draft,
+    onPreviewChange,
+    onPreviewClear,
+    selectedRelationshipId,
+  ]);
 
   const sourceLabel = draft
-    ? nodeById.get(draft.source_entity_id)?.node.displayLabel ?? draft.source_entity_id
-    : '';
+    ? (nodeById.get(draft.source_entity_id)?.node.displayLabel ??
+      draft.source_entity_id)
+    : "";
   const targetLabel = draft
-    ? nodeById.get(draft.target_entity_id)?.node.displayLabel ?? draft.target_entity_id
-    : '';
+    ? (nodeById.get(draft.target_entity_id)?.node.displayLabel ??
+      draft.target_entity_id)
+    : "";
 
   const relationshipTypeOptions = useMemo(() => {
     return Object.keys(RELATIONSHIP_LABELS) as RelationshipType[];
   }, []);
 
-  const sourceEvidenceQuery = useEntityRelatedMemories(draft?.source_entity_id ?? '', {
-    enabled: open && !minimized && activeTab === 'evidence' && Boolean(draft),
-    limit: 40,
-  });
+  const sourceEvidenceQuery = useEntityRelatedMemories(
+    draft?.source_entity_id ?? "",
+    {
+      enabled: open && !minimized && activeTab === "evidence" && Boolean(draft),
+      limit: 40,
+    },
+  );
 
-  const targetEvidenceQuery = useEntityRelatedMemories(draft?.target_entity_id ?? '', {
-    enabled: open && !minimized && activeTab === 'evidence' && Boolean(draft),
-    limit: 40,
-  });
+  const targetEvidenceQuery = useEntityRelatedMemories(
+    draft?.target_entity_id ?? "",
+    {
+      enabled: open && !minimized && activeTab === "evidence" && Boolean(draft),
+      limit: 40,
+    },
+  );
 
   const sharedEvidence = useMemo(() => {
     const source = sourceEvidenceQuery.data ?? [];
@@ -206,7 +234,7 @@ export function RelationshipEditor({
     onPreviewClear();
     setSplitOpen(false);
     setMinimized(false);
-    setActiveTab('edit');
+    setActiveTab("edit");
     setExpandedEvidenceIds(new Set());
     onClose();
   };
@@ -221,7 +249,7 @@ export function RelationshipEditor({
             initial={{ opacity: 0 }}
             animate={{ opacity: minimized ? 0 : 1 }}
             exit={{ opacity: 0 }}
-            style={{ pointerEvents: minimized ? 'none' : 'auto' }}
+            style={{ pointerEvents: minimized ? "none" : "auto" }}
             aria-hidden={minimized}
             onClick={handleClose}
           >
@@ -230,7 +258,7 @@ export function RelationshipEditor({
               initial={{ opacity: 0, scale: 0.96, y: 16 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 16 }}
-              transition={{ type: 'spring', stiffness: 420, damping: 36 }}
+              transition={{ type: "spring", stiffness: 420, damping: 36 }}
               onClick={(e) => e.stopPropagation()}
             >
               <div className="relationship-editor__header">
@@ -263,19 +291,21 @@ export function RelationshipEditor({
                   <aside className="relationship-editor__nav">
                     <button
                       type="button"
-                      className={`relationship-editor__nav-item ${activeTab === 'edit' ? 'is-active' : ''}`}
-                      onClick={() => setActiveTab('edit')}
+                      className={`relationship-editor__nav-item ${activeTab === "edit" ? "is-active" : ""}`}
+                      onClick={() => setActiveTab("edit")}
                     >
                       <SlidersHorizontal size={16} />
                       Edit
                     </button>
                     <button
                       type="button"
-                      className={`relationship-editor__nav-item ${activeTab === 'ai' ? 'is-active' : ''}`}
+                      className={`relationship-editor__nav-item ${activeTab === "ai" ? "is-active" : ""}`}
                       onClick={() => {
                         if (!selectedRelationshipId) return;
-                        setAnalysisKeepAliveRelationshipId(selectedRelationshipId);
-                        setActiveTab('ai');
+                        setAnalysisKeepAliveRelationshipId(
+                          selectedRelationshipId,
+                        );
+                        setActiveTab("ai");
                       }}
                       disabled={!selectedRelationshipId}
                     >
@@ -284,8 +314,8 @@ export function RelationshipEditor({
                     </button>
                     <button
                       type="button"
-                      className={`relationship-editor__nav-item ${activeTab === 'evidence' ? 'is-active' : ''}`}
-                      onClick={() => setActiveTab('evidence')}
+                      className={`relationship-editor__nav-item ${activeTab === "evidence" ? "is-active" : ""}`}
+                      onClick={() => setActiveTab("evidence")}
                       disabled={!draft}
                     >
                       <FileText size={16} />
@@ -309,22 +339,27 @@ export function RelationshipEditor({
                   <section className="relationship-editor__content">
                     {edge.relationships.length > 1 && (
                       <div className="relationship-editor__row">
-                        <label className="relationship-editor__label" htmlFor="relationship-id">
+                        <label
+                          className="relationship-editor__label"
+                          htmlFor="relationship-id"
+                        >
                           Edge
                         </label>
                         <select
                           id="relationship-id"
                           className="relationship-editor__select"
-                          value={selectedRelationshipId ?? ''}
+                          value={selectedRelationshipId ?? ""}
                           onChange={(e) => {
                             const nextId = e.target.value;
                             setSelectedRelationshipId(nextId);
-                            if (activeTab === 'ai') setAnalysisKeepAliveRelationshipId(nextId);
+                            if (activeTab === "ai")
+                              setAnalysisKeepAliveRelationshipId(nextId);
                           }}
                         >
                           {edge.relationships.map((r) => (
                             <option key={r.id} value={r.id}>
-                              {formatRelationshipLabel(r.relationshipType)} · {r.occurrenceCount} memories · w{' '}
+                              {formatRelationshipLabel(r.relationshipType)} ·{" "}
+                              {r.occurrenceCount} memories · w{" "}
                               {r.weight.toFixed(1)}
                             </option>
                           ))}
@@ -334,8 +369,13 @@ export function RelationshipEditor({
 
                     <div className="relationship-editor__endpoints">
                       <div className="relationship-editor__endpoint">
-                        <span className="relationship-editor__endpoint-label">Source</span>
-                        <span className="relationship-editor__endpoint-value" title={sourceLabel}>
+                        <span className="relationship-editor__endpoint-label">
+                          Source
+                        </span>
+                        <span
+                          className="relationship-editor__endpoint-value"
+                          title={sourceLabel}
+                        >
                           {sourceLabel}
                         </span>
                       </div>
@@ -349,7 +389,7 @@ export function RelationshipEditor({
                                   source_entity_id: prev.target_entity_id,
                                   target_entity_id: prev.source_entity_id,
                                 }
-                              : prev
+                              : prev,
                           )
                         }
                         title="Swap direction"
@@ -358,17 +398,25 @@ export function RelationshipEditor({
                         <RefreshCw size={16} />
                       </button>
                       <div className="relationship-editor__endpoint">
-                        <span className="relationship-editor__endpoint-label">Target</span>
-                        <span className="relationship-editor__endpoint-value" title={targetLabel}>
+                        <span className="relationship-editor__endpoint-label">
+                          Target
+                        </span>
+                        <span
+                          className="relationship-editor__endpoint-value"
+                          title={targetLabel}
+                        >
                           {targetLabel}
                         </span>
                       </div>
                     </div>
 
-                    {activeTab === 'edit' ? (
+                    {activeTab === "edit" ? (
                       <>
                         <div className="relationship-editor__row">
-                          <label className="relationship-editor__label" htmlFor="relationship-type">
+                          <label
+                            className="relationship-editor__label"
+                            htmlFor="relationship-type"
+                          >
                             Type
                           </label>
                           <select
@@ -380,9 +428,10 @@ export function RelationshipEditor({
                                 prev
                                   ? {
                                       ...prev,
-                                      relationship_type: e.target.value as RelationshipType,
+                                      relationship_type: e.target
+                                        .value as RelationshipType,
                                     }
-                                  : prev
+                                  : prev,
                               )
                             }
                           >
@@ -395,7 +444,10 @@ export function RelationshipEditor({
                         </div>
 
                         <div className="relationship-editor__row">
-                          <label className="relationship-editor__label" htmlFor="relationship-weight">
+                          <label
+                            className="relationship-editor__label"
+                            htmlFor="relationship-weight"
+                          >
                             Weight
                           </label>
                           <div className="relationship-editor__slider">
@@ -407,11 +459,19 @@ export function RelationshipEditor({
                               step={0.1}
                               value={draft.weight}
                               onChange={(e) => {
-                                const next = clamp(Number(e.target.value), 0, 10);
-                                setDraft((prev) => (prev ? { ...prev, weight: next } : prev));
+                                const next = clamp(
+                                  Number(e.target.value),
+                                  0,
+                                  10,
+                                );
+                                setDraft((prev) =>
+                                  prev ? { ...prev, weight: next } : prev,
+                                );
                               }}
                             />
-                            <span className="relationship-editor__slider-value">{draft.weight.toFixed(1)}</span>
+                            <span className="relationship-editor__slider-value">
+                              {draft.weight.toFixed(1)}
+                            </span>
                           </div>
                         </div>
 
@@ -419,7 +479,10 @@ export function RelationshipEditor({
                           <button
                             className="relationship-editor__btn"
                             onClick={handleClose}
-                            disabled={updateRelationship.isPending || acknowledgeRelationship.isPending}
+                            disabled={
+                              updateRelationship.isPending ||
+                              acknowledgeRelationship.isPending
+                            }
                             type="button"
                           >
                             Close
@@ -428,15 +491,25 @@ export function RelationshipEditor({
                             className="relationship-editor__btn relationship-editor__btn--secondary"
                             onClick={async () => {
                               if (!selectedRelationshipId || !draft) return;
-                              await acknowledgeRelationship.mutateAsync(selectedRelationshipId);
+                              await acknowledgeRelationship.mutateAsync(
+                                selectedRelationshipId,
+                              );
                               handleClose();
                             }}
-                            disabled={!selectedRelationshipId || acknowledgeRelationship.isPending || isReviewed}
-                            title={isReviewed ? 'Already reviewed' : 'Mark relationship as reviewed'}
+                            disabled={
+                              !selectedRelationshipId ||
+                              acknowledgeRelationship.isPending ||
+                              isReviewed
+                            }
+                            title={
+                              isReviewed
+                                ? "Already reviewed"
+                                : "Mark relationship as reviewed"
+                            }
                             type="button"
                           >
                             <Check size={16} />
-                            {isReviewed ? 'Reviewed' : 'Mark Reviewed'}
+                            {isReviewed ? "Reviewed" : "Mark Reviewed"}
                           </button>
                           <button
                             className="relationship-editor__btn relationship-editor__btn--primary"
@@ -448,7 +521,9 @@ export function RelationshipEditor({
                               });
                               handleClose();
                             }}
-                            disabled={!canSubmit || updateRelationship.isPending}
+                            disabled={
+                              !canSubmit || updateRelationship.isPending
+                            }
                             type="button"
                           >
                             Apply
@@ -458,12 +533,19 @@ export function RelationshipEditor({
                         {edge.relationships.length > 1 && (
                           <div className="relationship-editor__merge">
                             <div className="relationship-editor__merge-header">
-                              <div className="relationship-editor__merge-title">Merge relationships</div>
-                              <div className="relationship-editor__merge-meta">{mergeIds.length} selected</div>
+                              <div className="relationship-editor__merge-title">
+                                Merge relationships
+                              </div>
+                              <div className="relationship-editor__merge-meta">
+                                {mergeIds.length} selected
+                              </div>
                             </div>
                             <div className="relationship-editor__merge-list">
                               {edge.relationships.map((r) => (
-                                <label key={r.id} className="relationship-editor__merge-item">
+                                <label
+                                  key={r.id}
+                                  className="relationship-editor__merge-item"
+                                >
                                   <input
                                     type="checkbox"
                                     checked={mergeSelection.has(r.id)}
@@ -477,10 +559,13 @@ export function RelationshipEditor({
                                     }
                                   />
                                   <span className="relationship-editor__merge-label">
-                                    {formatRelationshipLabel(r.relationshipType)}
+                                    {formatRelationshipLabel(
+                                      r.relationshipType,
+                                    )}
                                   </span>
                                   <span className="relationship-editor__merge-id">
-                                    {r.occurrenceCount} mem · w {r.weight.toFixed(1)}
+                                    {r.occurrenceCount} mem · w{" "}
+                                    {r.weight.toFixed(1)}
                                   </span>
                                 </label>
                               ))}
@@ -499,10 +584,15 @@ export function RelationshipEditor({
                                   });
                                   handleClose();
                                 } catch (err) {
-                                  console.error('Failed to merge relationships', err);
+                                  console.error(
+                                    "Failed to merge relationships",
+                                    err,
+                                  );
                                 }
                               }}
-                              disabled={!canMerge || mergeRelationships.isPending}
+                              disabled={
+                                !canMerge || mergeRelationships.isPending
+                              }
                               title="Destructively merge selected relationships into the current draft"
                               type="button"
                             >
@@ -513,13 +603,17 @@ export function RelationshipEditor({
                       </>
                     ) : null}
 
-                    {activeTab === 'evidence' ? (
+                    {activeTab === "evidence" ? (
                       <div className="relationship-editor__evidence">
-                        {(sourceEvidenceQuery.isLoading || targetEvidenceQuery.isLoading) && (
-                          <div className="relationship-editor__evidence-empty">Loading evidence…</div>
+                        {(sourceEvidenceQuery.isLoading ||
+                          targetEvidenceQuery.isLoading) && (
+                          <div className="relationship-editor__evidence-empty">
+                            Loading evidence…
+                          </div>
                         )}
 
-                        {(sourceEvidenceQuery.error || targetEvidenceQuery.error) && (
+                        {(sourceEvidenceQuery.error ||
+                          targetEvidenceQuery.error) && (
                           <div className="relationship-editor__evidence-empty">
                             Failed to load evidence memories.
                           </div>
@@ -530,11 +624,14 @@ export function RelationshipEditor({
                           !sourceEvidenceQuery.error &&
                           !targetEvidenceQuery.error &&
                           (sharedEvidence.length ? (
-                            <div className="relationship-editor__evidence-list" role="list">
+                            <div
+                              className="relationship-editor__evidence-list"
+                              role="list"
+                            >
                               {sharedEvidence.map((memory) => (
                                 <div
                                   key={memory.id}
-                                  className={`relationship-editor__evidence-card ${expandedEvidenceIds.has(memory.id) ? 'is-expanded' : ''}`}
+                                  className={`relationship-editor__evidence-card ${expandedEvidenceIds.has(memory.id) ? "is-expanded" : ""}`}
                                 >
                                   <div className="relationship-editor__evidence-card-header">
                                     <div className="relationship-editor__evidence-card-title">
@@ -543,17 +640,22 @@ export function RelationshipEditor({
                                     <button
                                       className="relationship-editor__evidence-card-toggle"
                                       type="button"
-                                      aria-expanded={expandedEvidenceIds.has(memory.id)}
+                                      aria-expanded={expandedEvidenceIds.has(
+                                        memory.id,
+                                      )}
                                       onClick={() => {
                                         setExpandedEvidenceIds((prev) => {
                                           const next = new Set(prev);
-                                          if (next.has(memory.id)) next.delete(memory.id);
+                                          if (next.has(memory.id))
+                                            next.delete(memory.id);
                                           else next.add(memory.id);
                                           return next;
                                         });
                                       }}
                                     >
-                                      {expandedEvidenceIds.has(memory.id) ? 'Collapse' : 'Expand'}
+                                      {expandedEvidenceIds.has(memory.id)
+                                        ? "Collapse"
+                                        : "Expand"}
                                     </button>
                                   </div>
                                   <div className="relationship-editor__evidence-card-body">
@@ -564,7 +666,9 @@ export function RelationshipEditor({
                             </div>
                           ) : (
                             <div className="relationship-editor__evidence-empty">
-                              No shared evidence found for this pair yet. Try Split (Preview) or ensure relationship provenance is available.
+                              No shared evidence found for this pair yet. Try
+                              Split (Preview) or ensure relationship provenance
+                              is available.
                             </div>
                           ))}
                       </div>
@@ -574,11 +678,12 @@ export function RelationshipEditor({
                       <RelationshipAnalysisPanel
                         key={`analysis-${selectedRelationshipId}`}
                         variant="modal"
-                        open={open && activeTab === 'ai' && !minimized}
+                        open={open && activeTab === "ai" && !minimized}
                         queryEnabled={
                           Boolean(selectedRelationshipId) &&
-                          (activeTab === 'ai' ||
-                            analysisKeepAliveRelationshipId === selectedRelationshipId)
+                          (activeTab === "ai" ||
+                            analysisKeepAliveRelationshipId ===
+                              selectedRelationshipId)
                         }
                         relationshipId={selectedRelationshipId}
                         draft={draft}
@@ -591,9 +696,11 @@ export function RelationshipEditor({
                           );
                         }}
                         onPreviewWeightChange={(weight) => {
-                          setDraft((prev) => (prev ? { ...prev, weight } : prev));
+                          setDraft((prev) =>
+                            prev ? { ...prev, weight } : prev,
+                          );
                         }}
-                        onClose={() => setActiveTab('edit')}
+                        onClose={() => setActiveTab("edit")}
                         onApplied={handleClose}
                         onMinimize={() => {
                           setMinimized(true);
@@ -602,8 +709,14 @@ export function RelationshipEditor({
                           onNavigateToEntityId?.(entityId);
                           setMinimized(true);
                         }}
-                        onInspectMemoryId={(memoryId, inspectedRelationshipId) => {
-                          onInspectMemoryId?.(memoryId, inspectedRelationshipId);
+                        onInspectMemoryId={(
+                          memoryId,
+                          inspectedRelationshipId,
+                        ) => {
+                          onInspectMemoryId?.(
+                            memoryId,
+                            inspectedRelationshipId,
+                          );
                           setMinimized(true);
                         }}
                       />
@@ -611,7 +724,9 @@ export function RelationshipEditor({
                   </section>
                 </div>
               ) : (
-                <div className="relationship-editor__empty">No relationship selected</div>
+                <div className="relationship-editor__empty">
+                  No relationship selected
+                </div>
               )}
 
               {selectedRelationshipId && (
@@ -632,7 +747,7 @@ export function RelationshipEditor({
               initial={{ opacity: 0, scale: 0.92, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.92, y: 10 }}
-              transition={{ type: 'spring', stiffness: 520, damping: 34 }}
+              transition={{ type: "spring", stiffness: 520, damping: 34 }}
               onClick={() => setMinimized(false)}
               type="button"
               title="Restore relationship editor"

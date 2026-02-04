@@ -1,14 +1,14 @@
-import * as THREE from 'three';
+import * as THREE from "three";
 
 export const TREE_COLORS = {
-  trunk: '#5D4037',
-  branchBase: '#795548',
-  branchTip: '#A1887F',
-  foliageFresh: '#4CAF50',
-  foliageStale: '#8D6E63',
-  emissiveGold: '#ffcd40',
-  emissiveBlue: '#3b82f6',
-  emissiveBark: '#a0785a',
+  trunk: "#5D4037",
+  branchBase: "#795548",
+  branchTip: "#A1887F",
+  foliageFresh: "#4CAF50",
+  foliageStale: "#8D6E63",
+  emissiveGold: "#ffcd40",
+  emissiveBlue: "#3b82f6",
+  emissiveBark: "#a0785a",
 } as const;
 
 export function clamp(value: number, min: number, max: number): number {
@@ -37,7 +37,7 @@ export function getBranchColor(depth: number, maxDepth = 6): THREE.Color {
   const t = Math.min(depth / Math.max(1, maxDepth), 1);
   return new THREE.Color(TREE_COLORS.branchBase).lerp(
     new THREE.Color(TREE_COLORS.branchTip),
-    t
+    t,
   );
 }
 
@@ -45,7 +45,7 @@ export function createBranchCurve(
   start: THREE.Vector3,
   end: THREE.Vector3,
   curvature = 0.22,
-  seed?: number
+  seed?: number,
 ): THREE.CatmullRomCurve3 {
   const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
 
@@ -53,7 +53,7 @@ export function createBranchCurve(
   const perpendicular = new THREE.Vector3(
     -direction.z,
     0,
-    direction.x
+    direction.x,
   ).normalize();
 
   mid.y += curvature * direction.length() * 0.3;
@@ -65,19 +65,18 @@ export function createBranchCurve(
   return new THREE.CatmullRomCurve3([start, mid, end]);
 }
 
-export function getFoliageColor(freshness: 'fresh' | 'stale'): THREE.Color {
+export function getFoliageColor(freshness: "fresh" | "stale"): THREE.Color {
   return new THREE.Color(
-    freshness === 'fresh' ? TREE_COLORS.foliageFresh : TREE_COLORS.foliageStale
+    freshness === "fresh" ? TREE_COLORS.foliageFresh : TREE_COLORS.foliageStale,
   );
 }
 
 export function getParticleCount(
   occurrenceCount: number,
-  connectionCount: number
+  connectionCount: number,
 ): number {
   const base = 30;
   const fromOccurrences = Math.min(occurrenceCount * 5, 50);
   const fromConnections = Math.min(connectionCount * 8, 40);
   return Math.min(base + fromOccurrences + fromConnections, 150);
 }
-

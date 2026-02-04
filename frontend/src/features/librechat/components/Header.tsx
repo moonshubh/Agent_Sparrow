@@ -1,13 +1,30 @@
-'use client';
+"use client";
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import Link from 'next/link';
-import { useAgent } from '@/features/librechat/AgentContext';
-import { PanelLeftClose, PanelLeft, ChevronDown, Settings, Check, Layers, Brain, FileText } from 'lucide-react';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { SettingsDialogV2 } from '@/features/settings/components/SettingsDialogV2';
-import { useArtifactActions, useArtifactSelector } from '@/features/librechat/artifacts';
-import { modelsAPI, PROVIDER_LABELS, type ModelTier, type Provider as ProviderId } from '@/services/api/endpoints/models';
+import React, { useState, useCallback, useEffect, useRef } from "react";
+import Link from "next/link";
+import { useAgent } from "@/features/librechat/AgentContext";
+import {
+  PanelLeftClose,
+  PanelLeft,
+  ChevronDown,
+  Settings,
+  Check,
+  Layers,
+  Brain,
+  FileText,
+} from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { SettingsDialogV2 } from "@/features/settings/components/SettingsDialogV2";
+import {
+  useArtifactActions,
+  useArtifactSelector,
+} from "@/features/librechat/artifacts";
+import {
+  modelsAPI,
+  PROVIDER_LABELS,
+  type ModelTier,
+  type Provider as ProviderId,
+} from "@/services/api/endpoints/models";
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -35,27 +52,23 @@ interface ProviderInfo {
 
 const FALLBACK_PROVIDERS: ProviderInfo[] = [
   {
-    id: 'google',
-    name: 'Google',
-    icon: '/icons/google.svg',
-    models: [
-      { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash' },
-    ],
+    id: "google",
+    name: "Google",
+    icon: "/icons/google.svg",
+    models: [{ id: "gemini-3-flash-preview", name: "Gemini 3.0 Flash" }],
   },
   {
-    id: 'xai',
-    name: 'xAI',
-    icon: '/icons/xai.svg',
-    models: [
-      { id: 'grok-4-1-fast-reasoning', name: 'Grok 4.1 Fast' },
-    ],
+    id: "xai",
+    name: "xAI",
+    icon: "/icons/xai.svg",
+    models: [{ id: "grok-4-1-fast-reasoning", name: "Grok 4.1 Fast" }],
   },
 ];
 
 // Helper to find model info from nested structure
 function findModelInfo(
   modelId: string,
-  providers: readonly ProviderInfo[]
+  providers: readonly ProviderInfo[],
 ): { model: ModelInfo; provider: ProviderInfo } | null {
   for (const provider of providers) {
     const model = provider.models.find((m) => m.id === modelId);
@@ -67,9 +80,9 @@ function findModelInfo(
 }
 
 const PROVIDER_ICONS: Record<ProviderId, string> = {
-  google: '/icons/google.svg',
-  xai: '/icons/xai.svg',
-  openrouter: '/icons/openrouter.svg',
+  google: "/icons/google.svg",
+  xai: "/icons/xai.svg",
+  openrouter: "/icons/openrouter.svg",
 };
 
 const TIER_ORDER: Record<ModelTier, number> = { pro: 0, standard: 1, lite: 2 };
@@ -86,23 +99,31 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const providerButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const modelButtonRefs = useRef<Record<string, Array<HTMLButtonElement | null>>>({});
-  const [providers, setProviders] = useState<ProviderInfo[]>(FALLBACK_PROVIDERS);
+  const modelButtonRefs = useRef<
+    Record<string, Array<HTMLButtonElement | null>>
+  >({});
+  const [providers, setProviders] =
+    useState<ProviderInfo[]>(FALLBACK_PROVIDERS);
 
   const agentState = agent?.state as AgentState | undefined;
-  const currentModel = resolvedModel || agentState?.model || 'gemini-3-flash-preview';
+  const currentModel =
+    resolvedModel || agentState?.model || "gemini-3-flash-preview";
   const currentModelData = findModelInfo(currentModel, providers);
-  const currentModelName = currentModelData?.model.name || modelsAPI.getDisplayName(currentModel);
+  const currentModelName =
+    currentModelData?.model.name || modelsAPI.getDisplayName(currentModel);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
         const config = await modelsAPI.getConfig();
-        const providerOrder: ProviderId[] = ['google', 'xai'];
-        const allowedModelsByProvider: Record<ProviderId, ReadonlySet<string>> = {
-          google: new Set(['gemini-3-flash-preview']),
-          xai: new Set(['grok-4-1-fast-reasoning']),
+        const providerOrder: ProviderId[] = ["google", "xai"];
+        const allowedModelsByProvider: Record<
+          ProviderId,
+          ReadonlySet<string>
+        > = {
+          google: new Set(["gemini-3-flash-preview"]),
+          xai: new Set(["grok-4-1-fast-reasoning"]),
           openrouter: new Set(),
         };
 
@@ -118,7 +139,10 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
                 if (tierA !== tierB) return tierA - tierB;
                 return a[1].display_name.localeCompare(b[1].display_name);
               })
-              .map(([modelId, info]) => ({ id: modelId, name: info.display_name }));
+              .map(([modelId, info]) => ({
+                id: modelId,
+                name: info.display_name,
+              }));
 
             return {
               id,
@@ -152,20 +176,28 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
     }
   }, []);
 
-  const focusProviderByIndex = useCallback((index: number) => {
-    const count = providers.length;
-    if (!count) return;
-    const nextIndex = (index + count) % count;
-    providerButtonRefs.current[nextIndex]?.focus();
-  }, [providers.length]);
+  const focusProviderByIndex = useCallback(
+    (index: number) => {
+      const count = providers.length;
+      if (!count) return;
+      const nextIndex = (index + count) % count;
+      providerButtonRefs.current[nextIndex]?.focus();
+    },
+    [providers.length],
+  );
 
-  const focusProviderById = useCallback((providerId: string | null) => {
-    if (!providerId) return;
-    const index = providers.findIndex((provider) => provider.id === providerId);
-    if (index >= 0) {
-      providerButtonRefs.current[index]?.focus();
-    }
-  }, [providers]);
+  const focusProviderById = useCallback(
+    (providerId: string | null) => {
+      if (!providerId) return;
+      const index = providers.findIndex(
+        (provider) => provider.id === providerId,
+      );
+      if (index >= 0) {
+        providerButtonRefs.current[index]?.focus();
+      }
+    },
+    [providers],
+  );
 
   const focusModelByIndex = useCallback((providerId: string, index: number) => {
     const models = modelButtonRefs.current[providerId] ?? [];
@@ -196,9 +228,9 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
     };
 
     // Use capture phase to catch all clicks
-    document.addEventListener('mousedown', handleClickOutside, true);
+    document.addEventListener("mousedown", handleClickOutside, true);
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside, true);
+      document.removeEventListener("mousedown", handleClickOutside, true);
     };
   }, [closeDropdown, showModelDropdown]);
 
@@ -207,19 +239,23 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
     if (!showModelDropdown) return;
 
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === "Escape") {
         closeDropdown(true);
       }
     };
 
-    document.addEventListener('keydown', handleEscape);
+    document.addEventListener("keydown", handleEscape);
     return () => {
-      document.removeEventListener('keydown', handleEscape);
+      document.removeEventListener("keydown", handleEscape);
     };
   }, [closeDropdown, showModelDropdown]);
 
   const handleModelSelect = useCallback(
-    (modelId: string, providerId: string, options?: { returnFocus?: boolean }) => {
+    (
+      modelId: string,
+      providerId: string,
+      options?: { returnFocus?: boolean },
+    ) => {
       if (agent) {
         agent.setState({
           ...agent.state,
@@ -229,9 +265,8 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
       }
       closeDropdown(options?.returnFocus);
     },
-    [agent, closeDropdown]
+    [agent, closeDropdown],
   );
-
 
   const handleArtifactToggle = useCallback(() => {
     if (orderedIds.length === 0) return;
@@ -254,36 +289,40 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
   ]);
 
   const handleProviderKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLButtonElement>, providerIndex: number, providerId: string) => {
+    (
+      event: React.KeyboardEvent<HTMLButtonElement>,
+      providerIndex: number,
+      providerId: string,
+    ) => {
       switch (event.key) {
-        case 'ArrowDown':
+        case "ArrowDown":
           event.preventDefault();
           focusProviderByIndex(providerIndex + 1);
           break;
-        case 'ArrowUp':
+        case "ArrowUp":
           event.preventDefault();
           focusProviderByIndex(providerIndex - 1);
           break;
-        case 'Home':
+        case "Home":
           event.preventDefault();
           focusProviderByIndex(0);
           break;
-        case 'End':
+        case "End":
           event.preventDefault();
           focusProviderByIndex(providers.length - 1);
           break;
-        case 'ArrowRight':
-        case 'Enter':
-        case ' ':
+        case "ArrowRight":
+        case "Enter":
+        case " ":
           event.preventDefault();
           setActiveProviderId(providerId);
           focusFirstModel(providerId);
           break;
-        case 'ArrowLeft':
+        case "ArrowLeft":
           event.preventDefault();
           setActiveProviderId(null);
           break;
-        case 'Escape':
+        case "Escape":
           event.preventDefault();
           closeDropdown(true);
           break;
@@ -291,7 +330,7 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
           break;
       }
     },
-    [closeDropdown, focusFirstModel, focusProviderByIndex, providers.length]
+    [closeDropdown, focusFirstModel, focusProviderByIndex, providers.length],
   );
 
   const handleModelKeyDown = useCallback(
@@ -299,39 +338,39 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
       event: React.KeyboardEvent<HTMLButtonElement>,
       providerId: string,
       modelIndex: number,
-      modelId: string
+      modelId: string,
     ) => {
       const modelCount = modelButtonRefs.current[providerId]?.length ?? 0;
       switch (event.key) {
-        case 'ArrowDown':
+        case "ArrowDown":
           event.preventDefault();
           focusModelByIndex(providerId, modelIndex + 1);
           break;
-        case 'ArrowUp':
+        case "ArrowUp":
           event.preventDefault();
           focusModelByIndex(providerId, modelIndex - 1);
           break;
-        case 'Home':
+        case "Home":
           event.preventDefault();
           focusModelByIndex(providerId, 0);
           break;
-        case 'End':
+        case "End":
           event.preventDefault();
           if (modelCount > 0) {
             focusModelByIndex(providerId, modelCount - 1);
           }
           break;
-        case 'ArrowLeft':
+        case "ArrowLeft":
           event.preventDefault();
           focusProviderById(providerId);
           setActiveProviderId(providerId);
           break;
-        case 'Escape':
+        case "Escape":
           event.preventDefault();
           closeDropdown(true);
           break;
-        case 'Enter':
-        case ' ':
+        case "Enter":
+        case " ":
           event.preventDefault();
           handleModelSelect(modelId, providerId, { returnFocus: true });
           break;
@@ -339,7 +378,7 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
           break;
       }
     },
-    [closeDropdown, focusModelByIndex, focusProviderById, handleModelSelect]
+    [closeDropdown, focusModelByIndex, focusProviderById, handleModelSelect],
   );
 
   return (
@@ -349,14 +388,14 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
         <button
           className="lc-toggle-sidebar-btn"
           onClick={onToggleSidebar}
-          aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+          aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
           aria-expanded={sidebarOpen}
         >
           {sidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeft size={20} />}
         </button>
 
         {/* Model selector */}
-        <div ref={dropdownRef} style={{ position: 'relative' }}>
+        <div ref={dropdownRef} style={{ position: "relative" }}>
           <button
             className="lc-model-selector"
             ref={triggerRef}
@@ -383,7 +422,13 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
             aria-label={`Current model: ${currentModelName}. Click to change.`}
           >
             <span>{currentModelName}</span>
-            <ChevronDown size={16} style={{ transform: showModelDropdown ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
+            <ChevronDown
+              size={16}
+              style={{
+                transform: showModelDropdown ? "rotate(180deg)" : "none",
+                transition: "transform 0.15s ease",
+              }}
+            />
           </button>
 
           {showModelDropdown && (
@@ -402,10 +447,16 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
                     ref={(node) => {
                       providerButtonRefs.current[providerIndex] = node;
                     }}
-                    className={`lc-provider-item ${activeProviderId === provider.id ? 'active' : ''} ${currentModelData?.provider.id === provider.id ? 'has-selected' : ''}`}
-                    onClick={() => setActiveProviderId(activeProviderId === provider.id ? null : provider.id)}
+                    className={`lc-provider-item ${activeProviderId === provider.id ? "active" : ""} ${currentModelData?.provider.id === provider.id ? "has-selected" : ""}`}
+                    onClick={() =>
+                      setActiveProviderId(
+                        activeProviderId === provider.id ? null : provider.id,
+                      )
+                    }
                     onFocus={() => setActiveProviderId(provider.id)}
-                    onKeyDown={(event) => handleProviderKeyDown(event, providerIndex, provider.id)}
+                    onKeyDown={(event) =>
+                      handleProviderKeyDown(event, providerIndex, provider.id)
+                    }
                     role="menuitem"
                     aria-haspopup="menu"
                     aria-expanded={activeProviderId === provider.id}
@@ -423,8 +474,8 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
                     <ChevronDown
                       size={14}
                       style={{
-                        transform: 'rotate(-90deg)',
-                        color: 'var(--lc-text-tertiary)',
+                        transform: "rotate(-90deg)",
+                        color: "var(--lc-text-tertiary)",
                       }}
                     />
                   </button>
@@ -444,19 +495,30 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
                             if (!modelButtonRefs.current[provider.id]) {
                               modelButtonRefs.current[provider.id] = [];
                             }
-                            modelButtonRefs.current[provider.id][modelIndex] = node;
+                            modelButtonRefs.current[provider.id][modelIndex] =
+                              node;
                           }}
-                          className={`lc-model-option ${model.id === currentModel ? 'selected' : ''}`}
-                          onClick={() => handleModelSelect(model.id, provider.id)}
+                          className={`lc-model-option ${model.id === currentModel ? "selected" : ""}`}
+                          onClick={() =>
+                            handleModelSelect(model.id, provider.id)
+                          }
                           onKeyDown={(event) =>
-                            handleModelKeyDown(event, provider.id, modelIndex, model.id)
+                            handleModelKeyDown(
+                              event,
+                              provider.id,
+                              modelIndex,
+                              model.id,
+                            )
                           }
                           role="menuitemradio"
                           aria-checked={model.id === currentModel}
                         >
                           <span>{model.name}</span>
                           {model.id === currentModel && (
-                            <Check size={14} style={{ color: 'var(--lc-accent)' }} />
+                            <Check
+                              size={14}
+                              style={{ color: "var(--lc-accent)" }}
+                            />
                           )}
                         </button>
                       ))}
@@ -469,12 +531,16 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
         </div>
       </div>
 
-      <div className="lc-header-right" style={{ display: 'flex', gap: '8px' }}>
+      <div className="lc-header-right" style={{ display: "flex", gap: "8px" }}>
         {orderedIds.length > 0 && (
           <button
             className="lc-toggle-sidebar-btn lc-artifact-toggle"
             onClick={handleArtifactToggle}
-            aria-label={isArtifactsVisible ? 'Close artifacts panel' : 'Open artifacts panel'}
+            aria-label={
+              isArtifactsVisible
+                ? "Close artifacts panel"
+                : "Open artifacts panel"
+            }
             aria-pressed={isArtifactsVisible}
             title="Artifacts"
           >
@@ -510,7 +576,9 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
                 <Link href="/feedme" className="lc-tools-dropdown-item">
                   <FileText size={16} />
                   <span>FeedMe</span>
-                  <span className="lc-tools-dropdown-desc">Document Processing</span>
+                  <span className="lc-tools-dropdown-desc">
+                    Document Processing
+                  </span>
                 </Link>
               </DropdownMenu.Item>
 
@@ -520,7 +588,9 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
                 <Link href="/memory" className="lc-tools-dropdown-item">
                   <Brain size={16} />
                   <span>Memory</span>
-                  <span className="lc-tools-dropdown-desc">Knowledge Graph</span>
+                  <span className="lc-tools-dropdown-desc">
+                    Knowledge Graph
+                  </span>
                 </Link>
               </DropdownMenu.Item>
             </DropdownMenu.Content>

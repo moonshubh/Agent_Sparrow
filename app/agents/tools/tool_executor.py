@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from langchain_core.messages import ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
 from app.core.logging_config import get_logger
@@ -64,7 +65,7 @@ class ToolExecutionConfig:
     timeout: float = 45.0
     max_retries: int = 2
     retry_backoff: float = 1.0
-    retryable_errors: tuple[type, ...] = (
+    retryable_errors: tuple[type[BaseException], ...] = (
         TimeoutError,
         asyncio.TimeoutError,
         ConnectionError,
@@ -327,7 +328,7 @@ class ToolExecutor:
         tool: BaseTool,
         tool_call_id: str,
         args: Mapping[str, Any],
-        config: dict | None = None,
+        config: RunnableConfig | None = None,
     ) -> ToolExecutionResult:
         """Execute a tool with retry, timeout, and error conversion.
 
@@ -344,7 +345,7 @@ class ToolExecutor:
         tool_config = self.get_config(tool.name)
         start_time = time.monotonic()
         retries_used = 0
-        last_error: Exception | None = None
+        last_error: BaseException | None = None
         is_retryable = False
         tool_args = dict(args)
         args_summary = _summarize_args(tool_args)
@@ -394,7 +395,7 @@ class ToolExecutor:
                         self._total_retries += 1
 
                     if attempt < tool_config.max_retries:
-                        delay = tool_config.retry_backoff * (2 ** attempt)
+                        delay = tool_config.retry_backoff * (2**attempt)
                         logger.warning(
                             "tool_execution_retry",
                             tool=tool.name,
@@ -465,7 +466,7 @@ class ToolExecutor:
     async def execute_batch(
         self,
         executions: list[tuple[BaseTool, str, Mapping[str, Any]]],
-        config: dict | None = None,
+        config: RunnableConfig | None = None,
     ) -> list[ToolExecutionResult]:
         """Execute multiple tools concurrently.
 
@@ -493,9 +494,7 @@ class ToolExecutor:
             "total_failures": total_failures,
             "total_retries": total_retries,
             "failure_rate": (
-                total_failures / total_executions
-                if total_executions > 0
-                else 0.0
+                total_failures / total_executions if total_executions > 0 else 0.0
             ),
         }
 

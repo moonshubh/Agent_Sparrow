@@ -45,7 +45,11 @@ from app.core.rate_limiting.agent_wrapper import rate_limited
 from app.core.settings import settings
 from app.db.embedding import utils as embedding_utils
 from app.db.supabase.client import get_supabase_client
-from app.security.pii_redactor import redact_pii, redact_pii_from_dict, redact_sensitive_from_dict
+from app.security.pii_redactor import (
+    redact_pii,
+    redact_pii_from_dict,
+    redact_sensitive_from_dict,
+)
 from app.services.knowledge_base.hybrid_retrieval import HybridRetrieval
 import os
 from app.tools.research_tools import FirecrawlTool, TavilySearchTool
@@ -55,7 +59,6 @@ import redis
 
 from app.agents.unified.image_store import store_image_bytes, rewrite_base64_images
 from app.agents.unified.minimax_tools import get_minimax_tools, is_minimax_available
-
 
 TOOL_RATE_LIMIT_BUCKET = "internal.helper"
 _TAVILY_QUOTA_EXHAUSTED = False
@@ -149,6 +152,12 @@ def _is_subagent_call(state: Any, runtime: Optional[ToolRuntime]) -> bool:
     return bool(_get_subagent_context(runtime_state))
 
 
+def _write_stream(runtime: Optional[ToolRuntime], message: str) -> None:
+    writer = getattr(runtime, "stream_writer", None) if runtime else None
+    if writer and hasattr(writer, "write"):
+        writer.write(message)
+
+
 def _resolve_memory_scope_from_state(state: Any) -> tuple[Optional[str], Optional[str]]:
     forwarded = _state_value(state, "forwarded_props", {}) or {}
     if isinstance(forwarded, dict):
@@ -164,7 +173,9 @@ def _resolve_memory_scope_from_state(state: Any) -> tuple[Optional[str], Optiona
     return None, None
 
 
-def _matches_memory_scope(metadata: dict[str, Any], *, scope_key: str, scope_value: str) -> bool:
+def _matches_memory_scope(
+    metadata: dict[str, Any], *, scope_key: str, scope_value: str
+) -> bool:
     if not metadata:
         return False
     for key in (scope_key, scope_key.lower(), scope_key.upper()):
@@ -245,7 +256,7 @@ _TOOL_CACHE_MAX = 256
 logger = get_logger(__name__)
 
 # Optional Redis cache for multi-process/tool caching
-_REDIS_CACHE = None
+_REDIS_CACHE: Any | None = None
 if settings.redis_url and os.getenv("DISABLE_TOOL_CACHE") not in {"1", "true", "True"}:
     try:  # pragma: no cover - best effort
         _REDIS_CACHE = redis.Redis.from_url(settings.redis_url, decode_responses=True)
@@ -318,7 +329,7 @@ def _firecrawl_circuit_open() -> bool:
 
 
 def _resolve_firecrawl_api_key() -> str:
-    return settings.firecrawl_api_key or os.getenv("FIRECRAWL_API_KEY", "")
+    return str(settings.firecrawl_api_key or os.getenv("FIRECRAWL_API_KEY") or "")
 
 
 def _firecrawl_agent_usage_key(api_key: str) -> str:
@@ -326,7 +337,9 @@ def _firecrawl_agent_usage_key(api_key: str) -> str:
     return f"firecrawl_agent_usage:{api_key_hash}"
 
 
-def _firecrawl_agent_usage_check(api_key: str, *, record: bool) -> tuple[bool, int, int]:
+def _firecrawl_agent_usage_check(
+    api_key: str, *, record: bool
+) -> tuple[bool, int, int]:
     limit = _FIRECRAWL_AGENT_MAX_USES_PER_WINDOW
     if not api_key or limit <= 0:
         return bool(api_key), 0, 0
@@ -345,7 +358,8 @@ def _firecrawl_agent_usage_check(api_key: str, *, record: bool) -> tuple[bool, i
 
             if count_int >= limit:
                 earliest = _REDIS_CACHE.zrange(key, 0, 0, withscores=True)
-                earliest_ts = int(earliest[0][1]) if earliest else now
+                earliest_list = list(earliest) if isinstance(earliest, list) else []
+                earliest_ts = int(earliest_list[0][1]) if earliest_list else now
                 retry_after = max(
                     earliest_ts + _FIRECRAWL_AGENT_USAGE_WINDOW_SECONDS - now,
                     0,
@@ -549,7 +563,9 @@ def _maybe_cached_tool_result(cache_key: str) -> Optional[str]:
     if _REDIS_CACHE is not None:
         try:
             val = _REDIS_CACHE.get(key)
-            if val:
+            if isinstance(val, bytes):
+                val = val.decode("utf-8", errors="ignore")
+            if isinstance(val, str) and val:
                 return val
         except Exception:
             pass
@@ -857,7 +873,9 @@ def _cache_hit_miss(hit: bool, key: str) -> None:
     except Exception:
         prefix = "unknown"
     key_hash = hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:16]
-    logger.info("tool_cache_hit" if hit else "tool_cache_miss", tool=prefix, key_hash=key_hash)
+    logger.info(
+        "tool_cache_hit" if hit else "tool_cache_miss", tool=prefix, key_hash=key_hash
+    )
 
 
 async def _invoke_firecrawl_mcp_tool(
@@ -922,8 +940,7 @@ async def kb_search_tool(
     """Search the Mailbird knowledge base via hybrid vector/text retrieval."""
 
     session_id = getattr(state, "session_id", "default")
-    if runtime and getattr(runtime, "stream_writer", None):
-        runtime.stream_writer.write("Searching knowledge base…")
+    _write_stream(runtime, "Searching knowledge base…")
 
     sources = search_sources or ["knowledge_base"]
     if "knowledge_base" not in sources:
@@ -1216,9 +1233,8 @@ async def log_diagnoser_tool(
     if file_name and not input.file_name:
         input.file_name = file_name
 
-    if runtime and getattr(runtime, "stream_writer", None):
-        label = (input.file_name or "").strip()
-        runtime.stream_writer.write(f"Analyzing {label}…" if label else "Analyzing logs…")
+    label = (input.file_name or "").strip()
+    _write_stream(runtime, f"Analyzing {label}…" if label else "Analyzing logs…")
     # Normalize offset/limit from either args_schema or fallback kwargs
     if log_content is not None and input.log_content == (log_content or ""):
         input.offset = input.offset or 0
@@ -1243,6 +1259,15 @@ async def log_diagnoser_tool(
         payload: Dict[str, Any] = result.model_dump()
         if input.file_name:
             payload["file_name"] = input.file_name
+        payload.setdefault("raw_log", sliced)
+
+        analysis_payload = payload.get("analysis")
+        if not isinstance(analysis_payload, dict):
+            analysis_payload = {}
+        if not analysis_payload.get("summary"):
+            analysis_payload["summary"] = payload.get("overall_summary") or ""
+        analysis_payload.setdefault("log_length", len(sliced.splitlines()))
+        payload["analysis"] = analysis_payload
 
         # Keep tool output compact to avoid downstream eviction (large log sections can exceed thresholds).
         raw_sections = payload.get("relevant_log_sections")
@@ -1254,7 +1279,9 @@ async def log_diagnoser_tool(
                 trimmed_sections.append(
                     {
                         "line_numbers": str(section.get("line_numbers") or "").strip(),
-                        "content": _trim_content(str(section.get("content") or ""), max_chars=1200),
+                        "content": _trim_content(
+                            str(section.get("content") or ""), max_chars=1200
+                        ),
                         "relevance_score": section.get("relevance_score", 0.0),
                     }
                 )
@@ -1271,7 +1298,9 @@ async def log_diagnoser_tool(
 
         supabase_available = False
         try:
-            supabase_available = not bool(getattr(_supabase_client_cached(), "mock_mode", False))
+            supabase_available = not bool(
+                getattr(_supabase_client_cached(), "mock_mode", False)
+            )
         except Exception:
             supabase_available = False
 
@@ -1309,22 +1338,31 @@ async def log_diagnoser_tool(
         if sliced:
             for line in sliced.splitlines():
                 lower = line.lower()
-                if any(tok in lower for tok in ("error", "exception", "traceback", "failed", "fatal")):
+                if any(
+                    tok in lower
+                    for tok in ("error", "exception", "traceback", "failed", "fatal")
+                ):
                     candidate = _clean(line)
                     if candidate:
                         grep_patterns.append(candidate[:160])
                         break
 
         seen_patterns: set[str] = set()
-        grep_patterns = [
-            pattern
-            for pattern in grep_patterns
-            if pattern and not (pattern.lower() in seen_patterns or seen_patterns.add(pattern.lower()))
-        ][:2]
+        deduped: list[str] = []
+        for pattern in grep_patterns:
+            if not pattern:
+                continue
+            key = pattern.lower()
+            if key in seen_patterns:
+                continue
+            seen_patterns.add(key)
+            deduped.append(pattern)
+            if len(deduped) >= 2:
+                break
+        grep_patterns = deduped
 
         if supabase_available and internal_query:
-            if runtime and getattr(runtime, "stream_writer", None):
-                runtime.stream_writer.write("Searching internal KB / FeedMe…")
+            _write_stream(runtime, "Searching internal KB / FeedMe…")
 
             async def _safe(label: str, awaitable: Any) -> Any:
                 try:
@@ -1347,7 +1385,7 @@ async def log_diagnoser_tool(
             kb_task = asyncio.create_task(
                 _safe(
                     "kb_search",
-                    kb_search_tool.coroutine(
+                    kb_search_tool.coroutine(  # type: ignore[attr-defined]
                         query=internal_query,
                         context=None,
                         max_results=5,
@@ -1361,7 +1399,7 @@ async def log_diagnoser_tool(
             db_task = asyncio.create_task(
                 _safe(
                     "db_unified_search",
-                    db_unified_search_tool.coroutine(
+                    db_unified_search_tool.coroutine(  # type: ignore[attr-defined]
                         query=internal_query,
                         sources=["kb", "macros", "feedme"],
                         max_results_per_source=3,
@@ -1372,7 +1410,7 @@ async def log_diagnoser_tool(
             feedme_task = asyncio.create_task(
                 _safe(
                     "feedme_search",
-                    feedme_search_tool.coroutine(
+                    feedme_search_tool.coroutine(  # type: ignore[attr-defined]
                         query=internal_query,
                         max_results=3,
                         folder_id=None,
@@ -1385,7 +1423,7 @@ async def log_diagnoser_tool(
                 asyncio.create_task(
                     _safe(
                         f"db_grep_search:{pattern[:40]}",
-                        db_grep_search_tool.coroutine(
+                        db_grep_search_tool.coroutine(  # type: ignore[attr-defined]
                             pattern=pattern,
                             sources=["kb", "macros", "feedme"],
                             case_sensitive=False,
@@ -1418,7 +1456,9 @@ async def log_diagnoser_tool(
                                 "title": _clean(str(row.get("title") or ""))[:120],
                                 "url": str(row.get("url") or "").strip(),
                                 "score": row.get("score"),
-                                "snippet": _trim_content(str(row.get("snippet") or ""), max_chars=260),
+                                "snippet": _trim_content(
+                                    str(row.get("snippet") or ""), max_chars=260
+                                ),
                             }
                         )
 
@@ -1427,12 +1467,17 @@ async def log_diagnoser_tool(
                 for row in (db_raw.get("results") or [])[:4]:
                     if not isinstance(row, dict):
                         continue
-                    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+                    raw_meta = row.get("metadata")
+                    metadata: dict[str, Any] = (
+                        raw_meta if isinstance(raw_meta, dict) else {}
+                    )
                     db_compact.append(
                         {
                             "source": row.get("source"),
                             "title": _clean(str(row.get("title") or ""))[:140],
-                            "snippet": _trim_content(str(row.get("snippet") or ""), max_chars=260),
+                            "snippet": _trim_content(
+                                str(row.get("snippet") or ""), max_chars=260
+                            ),
                             "url": metadata.get("url") or metadata.get("link"),
                             "score": row.get("score") or row.get("relevance_score"),
                         }
@@ -1448,7 +1493,9 @@ async def log_diagnoser_tool(
                             "conversation_id": row.get("conversation_id"),
                             "title": _clean(str(row.get("title") or ""))[:140],
                             "confidence": row.get("confidence"),
-                            "snippet": _trim_content(str(row.get("snippet") or ""), max_chars=260),
+                            "snippet": _trim_content(
+                                str(row.get("snippet") or ""), max_chars=260
+                            ),
                         }
                     )
 
@@ -1461,10 +1508,14 @@ async def log_diagnoser_tool(
                         continue
                     grep_compact.append(
                         {
-                            "match_pattern": _trim_content(str(row.get("match_pattern") or ""), max_chars=160),
+                            "match_pattern": _trim_content(
+                                str(row.get("match_pattern") or ""), max_chars=160
+                            ),
                             "source": row.get("source"),
                             "title": _clean(str(row.get("title") or ""))[:140],
-                            "snippet": _trim_content(str(row.get("snippet") or ""), max_chars=260),
+                            "snippet": _trim_content(
+                                str(row.get("snippet") or ""), max_chars=260
+                            ),
                         }
                     )
 
@@ -1515,16 +1566,21 @@ async def log_diagnoser_tool(
 
         # Only after internal sources + analysis: optionally fall back to web search
         # when confidence is low and a search API key is configured.
-        if confidence < 0.6 and internal_query and getattr(settings, "tavily_api_key", None):
-            if runtime and getattr(runtime, "stream_writer", None):
-                runtime.stream_writer.write("Searching the web…")
+        if (
+            confidence < 0.6
+            and internal_query
+            and getattr(settings, "tavily_api_key", None)
+        ):
+            _write_stream(runtime, "Searching the web…")
             safe_query = redact_pii(internal_query)
-            safe_query = str(redact_sensitive_from_dict({"q": safe_query}).get("q") or safe_query)
+            safe_query = str(
+                redact_sensitive_from_dict({"q": safe_query}).get("q") or safe_query
+            )
             if "mailbird" not in safe_query.lower():
                 safe_query = f"Mailbird {safe_query}".strip()
             try:
                 web_raw = await asyncio.wait_for(
-                    web_search_tool.coroutine(
+                    web_search_tool.coroutine(  # type: ignore[attr-defined]
                         query=safe_query,
                         max_results=5,
                         include_images=False,
@@ -1536,7 +1592,9 @@ async def log_diagnoser_tool(
                     ),
                     timeout=25,
                 )
-                if isinstance(web_raw, dict) and isinstance(web_raw.get("results"), list):
+                if isinstance(web_raw, dict) and isinstance(
+                    web_raw.get("results"), list
+                ):
                     for row in web_raw.get("results", [])[:3]:
                         if not isinstance(row, dict):
                             continue
@@ -1556,7 +1614,9 @@ async def log_diagnoser_tool(
                 logger.debug("web_search_failed", error=str(exc))
 
         solution_blocks: list[dict[str, Any]] = []
-        raw_solutions = payload.get("proposed_solutions") or payload.get("solutions") or []
+        raw_solutions = (
+            payload.get("proposed_solutions") or payload.get("solutions") or []
+        )
         if isinstance(raw_solutions, list):
             for solution in raw_solutions:
                 if not isinstance(solution, dict):
@@ -1578,6 +1638,15 @@ async def log_diagnoser_tool(
                 }
             )
 
+        open_questions_raw = payload.get("open_questions") or []
+        if not isinstance(open_questions_raw, list):
+            open_questions_raw = []
+        open_questions = [
+            question.strip()
+            for question in open_questions_raw
+            if isinstance(question, str) and question.strip()
+        ]
+
         customer_ready_parts: list[str] = []
         customer_ready_parts.append(
             "I understand how disruptive this can be, especially when you rely on email for daily work. Here is what the logs show and what to do next."
@@ -1593,7 +1662,9 @@ async def log_diagnoser_tool(
                 if not isinstance(issue, dict):
                     continue
                 title = str(issue.get("title") or "").strip()
-                details = str(issue.get("details") or issue.get("description") or "").strip()
+                details = str(
+                    issue.get("details") or issue.get("description") or ""
+                ).strip()
                 if title and details:
                     issue_lines.append(f"- **{title}:** {details}")
                 elif title:
@@ -1619,10 +1690,14 @@ async def log_diagnoser_tool(
                 customer_ready_parts.append("\n".join(block_lines))
         else:
             customer_ready_parts.append("## Next Steps")
-            customer_ready_parts.append("Open Technical details for per-file diagnostics.")
+            customer_ready_parts.append(
+                "Open Technical details for per-file diagnostics."
+            )
 
         if open_questions:
-            customer_ready_parts.append("## Open Questions\n- " + "\n- ".join(open_questions[:6]))
+            customer_ready_parts.append(
+                "## Open Questions\n- " + "\n- ".join(open_questions[:6])
+            )
 
         customer_ready = "\n\n".join(customer_ready_parts).strip()
 
@@ -1657,11 +1732,19 @@ async def log_diagnoser_tool(
             internal_lines.append(f"Internal retrieval: {internal_error}")
         if internal_sources:
             internal_lines.append("Internal sources used:")
-            internal_lines.append(f"- Query: {internal_sources.get('query') or ''}".strip())
+            internal_lines.append(
+                f"- Query: {internal_sources.get('query') or ''}".strip()
+            )
             internal_lines.append(f"- KB hits: {len(internal_sources.get('kb') or [])}")
-            internal_lines.append(f"- FeedMe hits: {len(internal_sources.get('feedme') or [])}")
-            internal_lines.append(f"- DB semantic hits: {len(internal_sources.get('db_semantic') or [])}")
-            internal_lines.append(f"- DB grep hits: {len(internal_sources.get('db_grep') or [])}")
+            internal_lines.append(
+                f"- FeedMe hits: {len(internal_sources.get('feedme') or [])}"
+            )
+            internal_lines.append(
+                f"- DB semantic hits: {len(internal_sources.get('db_semantic') or [])}"
+            )
+            internal_lines.append(
+                f"- DB grep hits: {len(internal_sources.get('db_grep') or [])}"
+            )
         if external_sources:
             internal_lines.append(f"Web search used: {len(external_sources)} results")
 
@@ -1756,7 +1839,7 @@ async def web_search_tool(
         try:
             return json.loads(cached)
         except Exception:
-            return cached
+            cached = None
     _cache_hit_miss(False, cache_key)
     if _TAVILY_QUOTA_EXHAUSTED:
         return {
@@ -1768,7 +1851,9 @@ async def web_search_tool(
 
     for attempt in range(max_retries):
         try:
-            query_hash = hashlib.sha256(str(input.query).encode("utf-8")).hexdigest()[:16]
+            query_hash = hashlib.sha256(str(input.query).encode("utf-8")).hexdigest()[
+                :16
+            ]
             logger.info(
                 "web_search_tool_invoked",
                 query_hash=query_hash,
@@ -1832,6 +1917,13 @@ async def web_search_tool(
                 }
             await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
 
+    return {
+        "error": "web_search_failed",
+        "message": "Web search failed after retries.",
+        "quota_exceeded": False,
+        "fallback_suggestion": "Use minimax_web_search or firecrawl_search for web discovery.",
+    }
+
 
 @tool("tavily_extract", args_schema=TavilyExtractInput)
 @rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
@@ -1884,8 +1976,7 @@ async def grounding_search_tool(
         input = GroundingSearchInput(query=query or "", max_results=max_results)
 
     try:
-        if runtime and getattr(runtime, "stream_writer", None):
-            runtime.stream_writer.write("Running grounding search…")
+        _write_stream(runtime, "Running grounding search…")
         service = _grounding_service()
         if not service.enabled:
             raise GroundingUnavailableError("grounding_disabled")
@@ -1968,9 +2059,11 @@ async def firecrawl_fetch_tool(
             max_age=max_age,
             proxy=proxy,
             parsers=parsers,
-            remove_base64_images=bool(remove_base64_images)
-            if remove_base64_images is not None
-            else False,
+            remove_base64_images=(
+                bool(remove_base64_images)
+                if remove_base64_images is not None
+                else False
+            ),
         )
 
     if _firecrawl_circuit_open():
@@ -2094,7 +2187,9 @@ async def firecrawl_fetch_tool(
             )
             if isinstance(result, dict) and result.get("error"):
                 raise RuntimeError(result["error"])
-            rewritten, replaced = await rewrite_base64_images(result, path_prefix="firecrawl")
+            rewritten, replaced = await rewrite_base64_images(
+                result, path_prefix="firecrawl"
+            )
             if replaced:
                 logger.info(
                     "firecrawl_fetch_rewrote_base64_images",
@@ -2359,9 +2454,7 @@ async def firecrawl_extract_tool(
         if isinstance(mcp_result, dict) and (
             mcp_result.get("error") or mcp_result.get("success") is False
         ):
-            logger.warning(
-                "firecrawl_mcp_extract_error", error=mcp_result.get("error")
-            )
+            logger.warning("firecrawl_mcp_extract_error", error=mcp_result.get("error"))
         else:
             return mcp_result
 
@@ -2431,14 +2524,6 @@ async def firecrawl_search_tool(
             cleaned_scrape_options.pop("formats", None)
         if not cleaned_scrape_options:
             cleaned_scrape_options = None
-
-    include_images = False
-    if input.sources:
-        for source in input.sources:
-            if isinstance(source, str) and source.lower() == "images":
-                include_images = True
-            elif isinstance(source, dict) and str(source.get("type") or "").lower() == "images":
-                include_images = True
 
     if _firecrawl_circuit_open():
         reason = _firecrawl_circuit_reason() or "firecrawl_unavailable"
@@ -2512,9 +2597,13 @@ async def firecrawl_search_tool(
             raise RuntimeError(err_text)
         return result
     except Exception as e:
-        query_hash = hashlib.sha256(str(getattr(input, "query", "")).encode("utf-8")).hexdigest()[:16]
+        query_hash = hashlib.sha256(
+            str(getattr(input, "query", "")).encode("utf-8")
+        ).hexdigest()[:16]
         err_text = str(e).strip()
-        logger.error("firecrawl_search_tool_error", query_hash=query_hash, error=err_text)
+        logger.error(
+            "firecrawl_search_tool_error", query_hash=query_hash, error=err_text
+        )
         if err_text and _is_firecrawl_unavailable_error(err_text):
             _open_firecrawl_circuit(err_text)
             return {"error": err_text}
@@ -2678,9 +2767,7 @@ async def firecrawl_agent_status_tool(
             return {"error": "firecrawl_agent_status_not_supported"}
 
         # Check agent status
-        result = await asyncio.to_thread(
-            firecrawl.app.get_agent_status, input.agent_id
-        )
+        result = await asyncio.to_thread(firecrawl.app.get_agent_status, input.agent_id)
 
         logger.info(
             f"firecrawl_agent_status_tool_success agent_id='{input.agent_id}' status={result.get('status', 'unknown') if isinstance(result, dict) else 'unknown'}"
@@ -2738,7 +2825,9 @@ def get_registered_tools() -> List[BaseTool]:
         firecrawl_search_tool,  # Multi-source search (web, images, news)
     ]
     if is_firecrawl_agent_enabled():
-        tools.append(firecrawl_agent_tool)  # Autonomous data gathering agent (rate-limited)
+        tools.append(
+            firecrawl_agent_tool
+        )  # Autonomous data gathering agent (rate-limited)
     tools.append(firecrawl_agent_status_tool)
     tools.extend(
         [
@@ -3339,7 +3428,9 @@ class MemorySearchInput(BaseModel):
         le=1.0,
         description="Minimum similarity score for memory_ui search.",
     )
-    include_mem0: bool = Field(default=True, description="Include mem0-backed memory store.")
+    include_mem0: bool = Field(
+        default=True, description="Include mem0-backed memory store."
+    )
     include_memory_ui: bool = Field(
         default=True, description="Include Memory UI (memories table) search."
     )
@@ -3347,7 +3438,9 @@ class MemorySearchInput(BaseModel):
 
 class MemoryListInput(BaseModel):
     limit: int = Field(default=20, ge=1, le=100, description="Max number of results.")
-    offset: int = Field(default=0, ge=0, description="Offset for paging Memory UI results.")
+    offset: int = Field(
+        default=0, ge=0, description="Offset for paging Memory UI results."
+    )
     source: Literal["mem0", "memory_ui", "all"] = Field(
         default="all", description="Which memory backend to list from."
     )
@@ -3444,8 +3537,10 @@ async def memory_search_tool(
             service = get_memory_ui_service()
             ui_results = await service.search_memories(
                 query=query,
-                agent_id=getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow",
-                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot",
+                agent_id=getattr(settings, "memory_ui_agent_id", "sparrow")
+                or "sparrow",
+                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot")
+                or "mailbot",
                 limit=limit,
                 similarity_threshold=float(input.similarity_threshold),
             )
@@ -3510,8 +3605,10 @@ async def memory_list_tool(
 
             service = get_memory_ui_service()
             ui_results = await service.list_memories(
-                agent_id=getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow",
-                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot",
+                agent_id=getattr(settings, "memory_ui_agent_id", "sparrow")
+                or "sparrow",
+                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot")
+                or "mailbot",
                 limit=limit,
                 offset=int(input.offset),
                 sort_order="desc",
@@ -3834,7 +3931,9 @@ async def db_unified_search_tool(
                         score = float(match.get("similarity", 0.0))
                         if idx_int not in match_scores or score > match_scores[idx_int]:
                             match_scores[idx_int] = score
-                            match_text_by_index[idx_int] = str(match.get("content") or "")
+                            match_text_by_index[idx_int] = str(
+                                match.get("content") or ""
+                            )
 
                     # Keep a compact excerpt in the tool response; hydrate slices later.
                     matched_indices = sorted(
@@ -3850,7 +3949,9 @@ async def db_unified_search_tool(
                             chunk_text = (match_text_by_index.get(idx) or "").strip()
                             if not chunk_text:
                                 continue
-                            chunk_text = _trim_content(redact_pii(chunk_text), max_chars=900)
+                            chunk_text = _trim_content(
+                                redact_pii(chunk_text), max_chars=900
+                            )
                             included_indices.append(idx)
                             excerpt_parts.append(f"[chunk {idx}] {chunk_text}")
                     else:
@@ -3862,11 +3963,15 @@ async def db_unified_search_tool(
                             chunk_text = str(match.get("content") or "").strip()
                             if not chunk_text:
                                 continue
-                            chunk_text = _trim_content(redact_pii(chunk_text), max_chars=900)
+                            chunk_text = _trim_content(
+                                redact_pii(chunk_text), max_chars=900
+                            )
                             chunk_idx = match.get("chunk_index")
                             if chunk_idx is not None:
                                 included_indices.append(chunk_idx)
-                                excerpt_parts.append(f"[chunk {chunk_idx}] {chunk_text}")
+                                excerpt_parts.append(
+                                    f"[chunk {chunk_idx}] {chunk_text}"
+                                )
                             else:
                                 excerpt_parts.append(chunk_text)
 
@@ -3980,7 +4085,7 @@ async def db_grep_search_tool(
         try:
             return json.loads(cached)
         except Exception:
-            return cached
+            cached = None
     _cache_hit_miss(False, cache_key)
 
     # Search KB with text pattern (mailbird_knowledge has: id, url, content, markdown)
@@ -4094,9 +4199,11 @@ async def db_grep_search_tool(
                         "title": f"Conversation {conv_id}",
                         "snippet": snippet,
                         "content": content,
-                        "content_type": "full"
-                        if len(content) <= FEEDME_SUMMARIZE_THRESHOLD
-                        else "summarized",
+                        "content_type": (
+                            "full"
+                            if len(content) <= FEEDME_SUMMARIZE_THRESHOLD
+                            else "summarized"
+                        ),
                         "match_pattern": pattern,
                         "score": None,
                         "metadata": {
@@ -4339,8 +4446,9 @@ async def generate_image_tool(
             input_image_base64=input_image_base64,
         )
 
-    if runtime and getattr(runtime, "stream_writer", None):
-        runtime.stream_writer.write("Generating image...")
+    writer = getattr(runtime, "stream_writer", None) if runtime else None
+    if writer and hasattr(writer, "write"):
+        writer.write("Generating image...")
 
     logger.info(
         f"generate_image_tool_invoked prompt='{input.prompt[:100]}...' "
@@ -4365,7 +4473,7 @@ async def generate_image_tool(
         client = genai.Client(api_key=api_key)
 
         # Build contents
-        contents = [input.prompt]
+        contents: list[Any] = [input.prompt]
 
         # Add input image if provided (for editing)
         if input.input_image_base64:
@@ -4392,17 +4500,15 @@ async def generate_image_tool(
         mime_type = "image/png"
 
         candidates = response.candidates or []
-        if (
-            not candidates
-            or not getattr(candidates[0], "content", None)
-            or not candidates[0].content.parts
-        ):
+        content = candidates[0].content if candidates else None
+        parts = content.parts if content else None
+        if not candidates or not content or not parts:
             return {
                 "success": False,
                 "error": "No content generated by the model",
             }
 
-        for part in candidates[0].content.parts:
+        for part in parts:
             if hasattr(part, "text") and part.text:
                 text_output = part.text
             elif hasattr(part, "inline_data") and part.inline_data:
@@ -4585,7 +4691,7 @@ async def _rewrite_suspect_article_images(
             nearby_caption=caption,
         )
 
-        result = await generate_image_tool.coroutine(
+        result = await generate_image_tool.coroutine(  # type: ignore[attr-defined]
             prompt=prompt,
             aspect_ratio="16:9",
             resolution="2K",
@@ -4595,7 +4701,7 @@ async def _rewrite_suspect_article_images(
         if isinstance(result, dict) and not result.get("success"):
             error = str(result.get("error") or "").lower()
             if "text only" in error or "returned text" in error or "no image" in error:
-                result = await generate_image_tool.coroutine(
+                result = await generate_image_tool.coroutine(  # type: ignore[attr-defined]
                     prompt=prompt,
                     aspect_ratio="16:9",
                     resolution="2K",
@@ -4669,8 +4775,7 @@ async def write_article_tool(
         f"write_article_tool_invoked title='{title}' content_length={len(content)}"
     )
 
-    if runtime and getattr(runtime, "stream_writer", None):
-        runtime.stream_writer.write(f"Creating article: {title}...")
+    _write_stream(runtime, f"Creating article: {title}...")
 
     try:
         if isinstance(content, str) and _MARKDOWN_IMAGE_RE.search(content):
@@ -4758,9 +4863,9 @@ def read_skill_tool(
             "description": skill.metadata.description,
             "content": skill.content,
             "has_references": len(skill.references) > 0,
-            "reference_names": list(skill.references.keys())
-            if skill.references
-            else [],
+            "reference_names": (
+                list(skill.references.keys()) if skill.references else []
+            ),
         }
 
     except Exception as e:

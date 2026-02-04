@@ -1,14 +1,14 @@
 /* FeedMe Navigation Polish - must be before @tailwind to comply with CSS spec */
-@import '../features/feedme/styles/feedme-navigation.css';
+@import "../features/feedme/styles/feedme-navigation.css";
 
 /* LibreChat-style ChatGPT theme */
-@import '../features/librechat/styles/chat.css';
+@import "../features/librechat/styles/chat.css";
 
 /* KaTeX CSS for LaTeX math rendering */
-@import 'katex/dist/katex.min.css';
+@import "katex/dist/katex.min.css";
 
 /* Highlight.js CSS for syntax highlighting (rehype-highlight) */
-@import 'highlight.js/styles/github-dark.css';
+@import "highlight.js/styles/github-dark.css";
 
 @tailwind base;
 @tailwind components;
@@ -16,7 +16,6 @@
 
 /* Chat Layout Overrides for Centered Content */
 @layer components {
-
   /* Textarea auto-grow support */
   .lc-textarea {
     /* Auto-grow handled in JS for consistent paste behavior */
@@ -68,10 +67,12 @@
   /* Warm gradient background - replaces cold AI gradient */
   .ai-gradient-bg,
   .academia-gradient-bg {
-    background: linear-gradient(135deg,
-        hsl(var(--background)) 0%,
-        hsl(30 6% 10%) 50%,
-        hsl(25 8% 8%) 100%);
+    background: linear-gradient(
+      135deg,
+      hsl(var(--background)) 0%,
+      hsl(30 6% 10%) 50%,
+      hsl(25 8% 8%) 100%
+    );
   }
 
   /* Paper texture overlay - subtle scholarly feel */
@@ -80,7 +81,7 @@
   }
 
   .paper-texture::before {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
     background-image: var(--texture-grain);
@@ -149,11 +150,13 @@
 
   /* Message bubble shapes - asymmetric organic */
   .bubble-user {
-    border-radius: var(--radius-xl) var(--radius-sm) var(--radius-xl) var(--radius-xl);
+    border-radius: var(--radius-xl) var(--radius-sm) var(--radius-xl)
+      var(--radius-xl);
   }
 
   .bubble-agent {
-    border-radius: var(--radius-sm) var(--radius-xl) var(--radius-xl) var(--radius-xl);
+    border-radius: var(--radius-sm) var(--radius-xl) var(--radius-xl)
+      var(--radius-xl);
   }
 
   /* Scholarly card - elevated paper feel */
@@ -255,11 +258,11 @@
 
   @keyframes typing {
     from {
-      width: 0
+      width: 0;
     }
 
     to {
-      width: 100%
+      width: 100%;
     }
   }
 
@@ -300,17 +303,19 @@
   }
 
   .gradient-glow-button::before {
-    content: '';
+    content: "";
     position: absolute;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: radial-gradient(150px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
-        hsl(217.2 83.2% 53.3% / 0.6) 0%,
-        hsl(225.9 70.7% 40.2% / 0.4) 40%,
-        hsl(226.2 57% 21% / 0.2) 70%,
-        transparent 100%);
+    background: radial-gradient(
+      150px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+      hsl(217.2 83.2% 53.3% / 0.6) 0%,
+      hsl(225.9 70.7% 40.2% / 0.4) 40%,
+      hsl(226.2 57% 21% / 0.2) 70%,
+      transparent 100%
+    );
     opacity: 0;
     transition: opacity 0.3s ease;
     pointer-events: none;
@@ -322,7 +327,7 @@
     opacity: 1;
   }
 
-  .gradient-glow-button>* {
+  .gradient-glow-button > * {
     position: relative;
     z-index: 1;
   }
@@ -498,9 +503,11 @@
   }
 
   /* Speaker labels: first bold token in a paragraph appears like inline code */
-  .ProseMirror p>strong:first-child,
-  .ProseMirror p>b:first-child {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  .ProseMirror p > strong:first-child,
+  .ProseMirror p > b:first-child {
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+      "Courier New", monospace;
     background-color: hsl(var(--muted));
     color: hsl(var(--foreground));
     border-radius: 4px;
@@ -541,9 +548,12 @@
        ============================================================ */
 
     /* === TYPOGRAPHY === */
-    --font-serif: var(--font-lora), 'Source Serif Pro', Georgia, 'Times New Roman', serif;
-    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    --font-serif:
+      var(--font-lora), "Source Serif Pro", Georgia, "Times New Roman", serif;
+    --font-sans:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+      Arial, sans-serif;
+    --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
 
     /* Type Scale - Slightly larger for serif readability */
     --text-xs: 0.8125rem;
@@ -647,11 +657,11 @@
        ============================================================ */
 
     /* === BACKGROUND SURFACES - Charcoal gray (not too dark) === */
-    --background: 0 0% 13%;          /* #212121 - Charcoal gray */
+    --background: 0 0% 13%; /* #212121 - Charcoal gray */
     --foreground: 40 15% 92%;
-    --card: 0 0% 15%;                /* #262626 */
+    --card: 0 0% 15%; /* #262626 */
     --card-foreground: 40 15% 92%;
-    --popover: 0 0% 16%;             /* #292929 */
+    --popover: 0 0% 16%; /* #292929 */
     --popover-foreground: 40 15% 92%;
 
     /* === TERRACOTTA PRIMARY - Fireplace Warmth === */
@@ -673,8 +683,8 @@
     /* === SEMANTIC COLORS === */
     --destructive: 0 50% 45%;
     --destructive-foreground: 40 20% 97%;
-    --border: 0 0% 22%;               /* Lighter border for contrast */
-    --input: 0 0% 16%;                /* Dark input background */
+    --border: 0 0% 22%; /* Lighter border for contrast */
+    --input: 0 0% 16%; /* Dark input background */
     --ring: 200.4 98% 38%;
 
     /* === TERRACOTTA SCALE === */
@@ -726,7 +736,7 @@
     --container-max: 1400px;
 
     /* === SIDEBAR - Slightly darker than main bg === */
-    --sidebar-background: 0 0% 11%;   /* #1c1c1c - subtle contrast */
+    --sidebar-background: 0 0% 11%; /* #1c1c1c - subtle contrast */
     --sidebar-foreground: 40 12% 88%;
     --sidebar-primary: 200.4 98% 38%;
     --sidebar-primary-foreground: 40 20% 97%;
@@ -842,7 +852,9 @@
     font-size: var(--text-base);
     line-height: var(--leading-normal);
     letter-spacing: 0.01em;
-    font-feature-settings: 'liga' 1, 'kern' 1;
+    font-feature-settings:
+      "liga" 1,
+      "kern" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -990,7 +1002,6 @@
 
   /* Enhanced pulse animation for login elements */
   @keyframes enhanced-pulse {
-
     0%,
     100% {
       opacity: 1;
@@ -1010,7 +1021,6 @@
 
   /* Floating animation for background orbs */
   @keyframes float {
-
     0%,
     100% {
       transform: translateY(0px) rotate(0deg);
@@ -1048,7 +1058,8 @@
 
   /* Pulsing dot animation for "Thinking..." indicator */
   @keyframes thinking-pulse {
-    0%, 100% {
+    0%,
+    100% {
       opacity: 0.3;
     }
     50% {
@@ -1062,7 +1073,7 @@
 
   /* Streaming cursor for thinking content (LibreChat pattern) */
   .thinking-streaming::after {
-    content: '';
+    content: "";
     display: inline-block;
     width: 9px;
     height: 9px;

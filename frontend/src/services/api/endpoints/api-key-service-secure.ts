@@ -4,30 +4,30 @@
  * All API keys remain on the backend and are used server-side only.
  */
 
-import { getApiUrl } from '@/shared/lib/utils/environment'
-import { APIKeyType } from '@/services/api/api-keys'
+import { getApiUrl } from "@/shared/lib/utils/environment";
+import { APIKeyType } from "@/services/api/api-keys";
 
 // Re-export APIKeyType for other components to use
-export { APIKeyType }
+export { APIKeyType };
 
 export interface UserAPIKeyStatus {
-  api_key_type: APIKeyType
-  is_configured: boolean
-  is_active: boolean
-  last_used?: string
-  created_at?: string
+  api_key_type: APIKeyType;
+  is_configured: boolean;
+  is_active: boolean;
+  last_used?: string;
+  created_at?: string;
 }
 
 export interface APIKeyTestResult {
-  success: boolean
-  message: string
-  provider?: string
+  success: boolean;
+  message: string;
+  provider?: string;
 }
 
 export interface UserAPIKeyMasked {
-  api_key_type: APIKeyType
-  masked_key: string
-  is_active: boolean
+  api_key_type: APIKeyType;
+  masked_key: string;
+  is_active: boolean;
 }
 
 /**
@@ -35,62 +35,67 @@ export interface UserAPIKeyMasked {
  */
 export async function checkUserAPIKeyStatus(
   authToken: string | null,
-  keyType: APIKeyType
+  keyType: APIKeyType,
 ): Promise<UserAPIKeyStatus | null> {
-  if (!authToken) return null
+  if (!authToken) return null;
 
   try {
-    const apiUrl = getApiUrl()
-    const response = await fetch(`${apiUrl}/api/v1/api-keys/status/${keyType}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
-      }
-    })
+    const apiUrl = getApiUrl();
+    const response = await fetch(
+      `${apiUrl}/api/v1/api-keys/status/${keyType}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
 
     if (!response.ok) {
       if (response.status === 404) {
         return {
           api_key_type: keyType,
           is_configured: false,
-          is_active: false
-        }
+          is_active: false,
+        };
       }
-      return null
+      return null;
     }
 
-    const data = await response.json()
-    return data.status
+    const data = await response.json();
+    return data.status;
   } catch (error) {
-    console.error('Failed to check API key status:', error)
-    return null
+    console.error("Failed to check API key status:", error);
+    return null;
   }
 }
 
 /**
  * List all API key statuses for the user (WITHOUT actual keys)
  */
-export async function getUserAPIKeyStatuses(authToken: string): Promise<UserAPIKeyStatus[]> {
+export async function getUserAPIKeyStatuses(
+  authToken: string,
+): Promise<UserAPIKeyStatus[]> {
   try {
-    const apiUrl = getApiUrl()
+    const apiUrl = getApiUrl();
     const response = await fetch(`${apiUrl}/api/v1/api-keys/status`, {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
-      }
-    })
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+    });
 
     if (!response.ok) {
-      return []
+      return [];
     }
 
-    const data = await response.json()
-    return data.statuses || []
+    const data = await response.json();
+    return data.statuses || [];
   } catch (error) {
-    console.error('Error fetching API key statuses:', error)
-    return []
+    console.error("Error fetching API key statuses:", error);
+    return [];
   }
 }
 
@@ -101,42 +106,42 @@ export async function configureAPIKey(
   authToken: string,
   keyType: APIKeyType,
   apiKey: string,
-  keyName?: string
+  keyName?: string,
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const apiUrl = getApiUrl()
+    const apiUrl = getApiUrl();
     const response = await fetch(`${apiUrl}/api/v1/api-keys`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         api_key_type: keyType,
         api_key: apiKey,
-        key_name: keyName
-      })
-    })
+        key_name: keyName,
+      }),
+    });
 
-    const data = await response.json()
+    const data = await response.json();
 
     if (!response.ok) {
-      return { 
-        success: false, 
-        message: data.detail || 'Failed to configure API key' 
-      }
+      return {
+        success: false,
+        message: data.detail || "Failed to configure API key",
+      };
     }
 
-    return { 
-      success: true, 
-      message: 'API key configured successfully' 
-    }
+    return {
+      success: true,
+      message: "API key configured successfully",
+    };
   } catch (error) {
-    console.error('Network error while configuring API key:', error)
+    console.error("Network error while configuring API key:", error);
     return {
       success: false,
-      message: 'Network error while configuring API key'
-    }
+      message: "Network error while configuring API key",
+    };
   }
 }
 
@@ -145,36 +150,36 @@ export async function configureAPIKey(
  */
 export async function deleteAPIKey(
   authToken: string,
-  keyType: APIKeyType
+  keyType: APIKeyType,
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const apiUrl = getApiUrl()
+    const apiUrl = getApiUrl();
     const response = await fetch(`${apiUrl}/api/v1/api-keys/${keyType}`, {
-      method: 'DELETE',
+      method: "DELETE",
       headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
-      }
-    })
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+    });
 
     if (!response.ok) {
-      const data = await response.json()
-      return { 
-        success: false, 
-        message: data.detail || 'Failed to delete API key' 
-      }
+      const data = await response.json();
+      return {
+        success: false,
+        message: data.detail || "Failed to delete API key",
+      };
     }
 
-    return { 
-      success: true, 
-      message: 'API key deleted successfully' 
-    }
+    return {
+      success: true,
+      message: "API key deleted successfully",
+    };
   } catch (error) {
-    console.error('Network error while deleting API key:', error)
+    console.error("Network error while deleting API key:", error);
     return {
       success: false,
-      message: 'Network error while deleting API key'
-    }
+      message: "Network error while deleting API key",
+    };
   }
 }
 
@@ -183,38 +188,38 @@ export async function deleteAPIKey(
  */
 export async function testAPIKeyConnectivity(
   authToken: string,
-  keyType: APIKeyType
+  keyType: APIKeyType,
 ): Promise<APIKeyTestResult> {
   try {
-    const apiUrl = getApiUrl()
+    const apiUrl = getApiUrl();
     const response = await fetch(`${apiUrl}/api/v1/api-keys/test/${keyType}`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
-      }
-    })
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+    });
 
     if (!response.ok) {
-      const data = await response.json()
-      return { 
-        success: false, 
-        message: data.detail || 'Test failed' 
-      }
+      const data = await response.json();
+      return {
+        success: false,
+        message: data.detail || "Test failed",
+      };
     }
 
-    const data = await response.json()
-    return { 
-      success: data.success, 
+    const data = await response.json();
+    return {
+      success: data.success,
       message: data.message,
-      provider: data.provider 
-    }
+      provider: data.provider,
+    };
   } catch (error) {
-    console.error('Network error during connectivity test:', error)
+    console.error("Network error during connectivity test:", error);
     return {
       success: false,
-      message: 'Network error during connectivity test'
-    }
+      message: "Network error during connectivity test",
+    };
   }
 }
 
@@ -225,77 +230,82 @@ export async function testAPIKeyConnectivity(
 export async function testAPIKeyConnectivityWithKey(
   authToken: string,
   keyType: APIKeyType,
-  apiKey: string
+  apiKey: string,
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const apiUrl = getApiUrl()
+    const apiUrl = getApiUrl();
     const response = await fetch(`${apiUrl}/api/v1/api-keys/test`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         api_key_type: keyType,
-        api_key: apiKey
-      })
-    })
+        api_key: apiKey,
+      }),
+    });
 
     if (!response.ok) {
-      return { success: false, message: 'Failed to test API key' }
+      return { success: false, message: "Failed to test API key" };
     }
 
-    const data = await response.json()
-    return { success: data.success, message: data.message }
+    const data = await response.json();
+    return { success: data.success, message: data.message };
   } catch (error) {
-    console.error('Network error while testing API key:', error)
-    return { success: false, message: 'Network error while testing API key' }
+    console.error("Network error while testing API key:", error);
+    return { success: false, message: "Network error while testing API key" };
   }
 }
 
 /**
  * Get masked user API keys (safe for frontend display)
  */
-export async function getUserAPIKeys(authToken: string): Promise<UserAPIKeyMasked[]> {
+export async function getUserAPIKeys(
+  authToken: string,
+): Promise<UserAPIKeyMasked[]> {
   try {
-    const apiUrl = getApiUrl()
+    const apiUrl = getApiUrl();
     const response = await fetch(`${apiUrl}/api/v1/api-keys/`, {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
-      }
-    })
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+    });
 
     if (!response.ok) {
-      return []
+      return [];
     }
 
-    const data = await response.json()
-    return data.api_keys || []
+    const data = await response.json();
+    return data.api_keys || [];
   } catch (error) {
-    console.error('Error fetching API keys:', error)
-    return []
+    console.error("Error fetching API keys:", error);
+    return [];
   }
 }
 
 /**
  * Client-side format validation for API keys (no secrets stored)
  */
-export function validateAPIKeyFormat(keyType: APIKeyType, apiKey: string): boolean {
-  if (!apiKey || apiKey.length < 10) return false
+export function validateAPIKeyFormat(
+  keyType: APIKeyType,
+  apiKey: string,
+): boolean {
+  if (!apiKey || apiKey.length < 10) return false;
 
   switch (keyType) {
     case APIKeyType.GEMINI:
-      return apiKey.length >= 30 && apiKey.length <= 50
+      return apiKey.length >= 30 && apiKey.length <= 50;
     case APIKeyType.OPENAI:
-      return /^sk-/.test(apiKey)
+      return /^sk-/.test(apiKey);
     case APIKeyType.TAVILY:
-      return /^[a-zA-Z0-9-_]{20,50}$/.test(apiKey)
+      return /^[a-zA-Z0-9-_]{20,50}$/.test(apiKey);
     case APIKeyType.FIRECRAWL:
-      return apiKey.length >= 20 && apiKey.length <= 100
+      return apiKey.length >= 20 && apiKey.length <= 100;
     default:
-      return apiKey.length >= 10
+      return apiKey.length >= 10;
   }
 }
 
@@ -305,12 +315,12 @@ export function validateAPIKeyFormat(keyType: APIKeyType, apiKey: string): boole
  */
 export async function shouldUseUserAPIKey(
   authToken: string | null,
-  keyType: APIKeyType
+  keyType: APIKeyType,
 ): Promise<boolean> {
-  if (!authToken) return false
+  if (!authToken) return false;
 
-  const status = await checkUserAPIKeyStatus(authToken, keyType)
-  return status?.is_configured && status?.is_active || false
+  const status = await checkUserAPIKeyStatus(authToken, keyType);
+  return (status?.is_configured && status?.is_active) || false;
 }
 
 /**

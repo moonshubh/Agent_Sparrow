@@ -12,11 +12,14 @@ import tempfile
 import shutil
 import logging
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, TYPE_CHECKING
 
 import requests
 
 from .client import ZendeskRateLimitError, zendesk_throttle
+
+if TYPE_CHECKING:
+    from app.agents.orchestration.orchestration.state import Attachment
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +40,23 @@ class AttachmentInfo:
 
 def _auth() -> tuple[str, str]:
     if not ZENDESK_EMAIL or not ZENDESK_API_TOKEN:
-        raise RuntimeError("Missing Zendesk credentials (ZENDESK_EMAIL/ZENDESK_API_TOKEN)")
+        raise RuntimeError(
+            "Missing Zendesk credentials (ZENDESK_EMAIL/ZENDESK_API_TOKEN)"
+        )
     return (f"{ZENDESK_EMAIL}/token", ZENDESK_API_TOKEN)
 
 
 def fetch_ticket_attachments(
     ticket_id: int | str,
-    allowed_extensions: Iterable[str] = (".log", ".txt", ".png", ".jpg", ".jpeg", ".pdf", ".gif"),
+    allowed_extensions: Iterable[str] = (
+        ".log",
+        ".txt",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".pdf",
+        ".gif",
+    ),
     max_bytes: int = 10 * 1024 * 1024,  # 10 MB guardrail per file (support large logs)
     public_only: bool = False,
 ) -> List[AttachmentInfo]:
@@ -57,12 +70,16 @@ def fetch_ticket_attachments(
     zendesk_throttle()
     resp = requests.get(url, auth=_auth(), timeout=20)
     if resp.status_code == 429:
-        raise ZendeskRateLimitError.from_response(resp, operation="fetch_ticket_attachments")
+        raise ZendeskRateLimitError.from_response(
+            resp, operation="fetch_ticket_attachments"
+        )
     resp.raise_for_status()
     data = resp.json()
     comments = data.get("comments") or []
     if public_only:
-        comments = [c for c in comments if isinstance(c, dict) and c.get("public") is True]
+        comments = [
+            c for c in comments if isinstance(c, dict) and c.get("public") is True
+        ]
 
     results: List[AttachmentInfo] = []
     tmpdir: str | None = None
@@ -97,7 +114,14 @@ def fetch_ticket_attachments(
                     except ZendeskRateLimitError:
                         raise
                     except Exception as exc:
-                        logger.warning("failed_to_download_attachment", extra={"ticket_id": ticket_id, "name": name, "error": str(exc)})
+                        logger.warning(
+                            "failed_to_download_attachment",
+                            extra={
+                                "ticket_id": ticket_id,
+                                "name": name,
+                                "error": str(exc),
+                            },
+                        )
                         local_path = None
                 att_id = att.get("id") or 0
                 results.append(
@@ -171,7 +195,7 @@ MIME_TYPE_MAP = {
 def convert_to_unified_attachments(
     att_list: List[AttachmentInfo],
     max_bytes: int = 10 * 1024 * 1024,  # 10 MB limit to prevent memory issues
-) -> List["Attachment"]:
+) -> List[Attachment]:
     """Convert Zendesk attachments to unified agent Attachment model for multimodal processing.
 
     This enables images and PDFs to be processed by vision APIs (Gemini, Grok, OpenRouter),
@@ -194,12 +218,19 @@ def convert_to_unified_attachments(
     # Text: Full log files inlined in context (Gemini/Grok have 1M+ token context)
     ALLOWED_TYPES = {
         # Images (vision)
-        "image/png", "image/jpeg", "image/gif", "image/webp",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
         # Documents (PDF vision)
         "application/pdf",
         # Text files (full content inline)
-        "text/plain", "text/csv", "text/html", "text/markdown",
-        "application/json", "application/xml",
+        "text/plain",
+        "text/csv",
+        "text/html",
+        "text/markdown",
+        "application/json",
+        "application/xml",
         # Fallback for .log files detected by extension
         "application/octet-stream",
     }
@@ -210,28 +241,38 @@ def convert_to_unified_attachments(
 
         # Check file size before reading to prevent memory issues
         if att.size and att.size > max_bytes:
-            logger.warning(f"Skipping oversized attachment {att.file_name}: {att.size} bytes > {max_bytes} limit")
+            logger.warning(
+                f"Skipping oversized attachment {att.file_name}: {att.size} bytes > {max_bytes} limit"
+            )
             continue
 
         # Get proper MIME type
         ext = os.path.splitext(att.file_name.lower())[1]
-        mime_type = att.content_type or MIME_TYPE_MAP.get(ext, "application/octet-stream")
+        mime_type = att.content_type or MIME_TYPE_MAP.get(
+            ext, "application/octet-stream"
+        )
 
         # Handle .log files that might come as octet-stream
         if mime_type == "application/octet-stream" and ext in (".log", ".txt"):
             mime_type = "text/plain"
 
         if mime_type not in ALLOWED_TYPES:
-            logger.debug(f"Skipping attachment {att.file_name} with unsupported MIME type: {mime_type}")
+            logger.debug(
+                f"Skipping attachment {att.file_name} with unsupported MIME type: {mime_type}"
+            )
             continue
 
         try:
             with open(att.local_path, "rb") as f:
-                content = f.read(max_bytes + 1)  # Read one extra byte to detect oversized files
+                content = f.read(
+                    max_bytes + 1
+                )  # Read one extra byte to detect oversized files
 
             # Check actual file size (in case att.size was not set)
             if len(content) > max_bytes:
-                logger.warning(f"Skipping oversized attachment {att.file_name}: file exceeds {max_bytes} byte limit")
+                logger.warning(
+                    f"Skipping oversized attachment {att.file_name}: file exceeds {max_bytes} byte limit"
+                )
                 continue
 
             file_size = len(content)
@@ -240,12 +281,14 @@ def convert_to_unified_attachments(
             b64_content = base64.b64encode(content).decode("utf-8")
             data_url = f"data:{mime_type};base64,{b64_content}"
 
-            results.append(Attachment(
-                name=att.file_name,
-                mime_type=mime_type,
-                data_url=data_url,
-                size=att.size or file_size,
-            ))
+            results.append(
+                Attachment(
+                    name=att.file_name,
+                    mime_type=mime_type,
+                    data_url=data_url,
+                    size=att.size or file_size,
+                )
+            )
             size_mb = file_size / (1024 * 1024)
             logger.info(
                 "Converted attachment for multimodal attachment filename=%s mime=%s size_mb=%.2f",

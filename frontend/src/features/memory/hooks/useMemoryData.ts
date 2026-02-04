@@ -5,8 +5,13 @@
  * Provides caching, polling, and optimistic updates.
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { memoryAPI, TIMING } from '../lib/api';
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  type UseMutationOptions,
+} from "@tanstack/react-query";
+import { memoryAPI, TIMING } from "../lib/api";
 import type {
   Memory,
   MemoryMeResponse,
@@ -34,32 +39,32 @@ import type {
   SplitRelationshipCommitResponse,
   RelationshipAnalysisRequest,
   RelationshipAnalysisResponse,
-} from '../types';
+} from "../types";
 
 // =============================================================================
 // Query Keys
 // =============================================================================
 
 export const memoryKeys = {
-  all: ['memory'] as const,
-  me: () => [...memoryKeys.all, 'me'] as const,
-  lists: () => [...memoryKeys.all, 'list'] as const,
+  all: ["memory"] as const,
+  me: () => [...memoryKeys.all, "me"] as const,
+  lists: () => [...memoryKeys.all, "list"] as const,
   list: (filters: ListMemoriesRequest) =>
     [...memoryKeys.lists(), filters] as const,
-  details: () => [...memoryKeys.all, 'detail'] as const,
+  details: () => [...memoryKeys.all, "detail"] as const,
   detail: (id: string) => [...memoryKeys.details(), id] as const,
-  stats: () => [...memoryKeys.all, 'stats'] as const,
+  stats: () => [...memoryKeys.all, "stats"] as const,
   entityMemories: (entityId: string, limit: number) =>
-    [...memoryKeys.all, 'entity-memories', entityId, limit] as const,
+    [...memoryKeys.all, "entity-memories", entityId, limit] as const,
   // Base graph key for invalidation (matches all graph queries regardless of entityTypes)
-  graphBase: () => [...memoryKeys.all, 'graph'] as const,
+  graphBase: () => [...memoryKeys.all, "graph"] as const,
   graph: (entityTypes?: EntityType[]) =>
     [...memoryKeys.graphBase(), entityTypes] as const,
   // Base duplicates key for invalidation (matches both 'pending' and 'all')
-  duplicatesBase: () => [...memoryKeys.all, 'duplicates'] as const,
-  duplicates: (status: 'pending' | 'all') =>
+  duplicatesBase: () => [...memoryKeys.all, "duplicates"] as const,
+  duplicates: (status: "pending" | "all") =>
     [...memoryKeys.duplicatesBase(), status] as const,
-  searches: () => [...memoryKeys.all, 'search'] as const,
+  searches: () => [...memoryKeys.all, "search"] as const,
   search: (query: string) => [...memoryKeys.searches(), query] as const,
 };
 
@@ -123,15 +128,13 @@ export function useMemories(
   params?: ListMemoriesRequest,
   options?: {
     enabled?: boolean;
-    onSuccess?: (data: ListMemoriesResponse) => void;
-  }
+  },
 ) {
   return useQuery<ListMemoriesResponse>({
     queryKey: memoryKeys.list(params || {}),
     queryFn: () => memoryAPI.listMemories(params),
     staleTime: 30 * 1000,
     enabled: options?.enabled ?? true,
-    onSuccess: options?.onSuccess,
   });
 }
 
@@ -155,7 +158,7 @@ export function useMemorySearch(
     limit?: number;
     minConfidence?: number;
     enabled?: boolean;
-  }
+  },
 ) {
   const { limit = 20, minConfidence = 0, enabled = true } = options || {};
 
@@ -172,7 +175,7 @@ export function useMemorySearch(
  */
 export function useEntityRelatedMemories(
   entityId: string,
-  options?: { enabled?: boolean; limit?: number }
+  options?: { enabled?: boolean; limit?: number },
 ) {
   const limit = options?.limit ?? 20;
   return useQuery({
@@ -187,8 +190,8 @@ export function useEntityRelatedMemories(
  * Hook to fetch duplicate candidates
  */
 export function useDuplicateCandidates(
-  status: 'pending' | 'all' = 'pending',
-  options?: { enabled?: boolean }
+  status: "pending" | "all" = "pending",
+  options?: { enabled?: boolean },
 ) {
   return useQuery({
     queryKey: memoryKeys.duplicates(status),
@@ -270,10 +273,14 @@ export function useMergeMemoriesArbitrary() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (request: MergeMemoriesArbitraryRequest): Promise<MergeMemoriesArbitraryResponse> =>
+    mutationFn: (
+      request: MergeMemoriesArbitraryRequest,
+    ): Promise<MergeMemoriesArbitraryResponse> =>
       memoryAPI.mergeMemoriesArbitrary(request),
     onSuccess: (_, request) => {
-      queryClient.invalidateQueries({ queryKey: memoryKeys.detail(request.keep_memory_id) });
+      queryClient.invalidateQueries({
+        queryKey: memoryKeys.detail(request.keep_memory_id),
+      });
       queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
       queryClient.invalidateQueries({ queryKey: memoryKeys.searches() });
       queryClient.invalidateQueries({ queryKey: memoryKeys.stats() });
@@ -301,36 +308,43 @@ export function useSubmitFeedback() {
       const applyFeedback = (memory: Memory): Memory => {
         const next = { ...memory };
         const type = request.feedback_type;
-        if (type === 'thumbs_up') next.feedback_positive += 1;
-        if (type === 'thumbs_down') next.feedback_negative += 1;
-        if (type === 'resolution_success') next.resolution_success_count += 1;
-        if (type === 'resolution_failure') next.resolution_failure_count += 1;
-        if (typeof response.new_confidence_score === 'number') {
+        if (type === "thumbs_up") next.feedback_positive += 1;
+        if (type === "thumbs_down") next.feedback_negative += 1;
+        if (type === "resolution_success") next.resolution_success_count += 1;
+        if (type === "resolution_failure") next.resolution_failure_count += 1;
+        if (typeof response.new_confidence_score === "number") {
           next.confidence_score = response.new_confidence_score;
         }
         return next;
       };
 
       // Detail cache
-      queryClient.setQueryData(memoryKeys.detail(memoryId), (prev: Memory | undefined | null) =>
-        prev ? applyFeedback(prev) : prev
+      queryClient.setQueryData(
+        memoryKeys.detail(memoryId),
+        (prev: Memory | undefined | null) =>
+          prev ? applyFeedback(prev) : prev,
       );
 
       // Lists (paginated)
       queryClient.setQueriesData(
-        { queryKey: memoryKeys.lists(), type: 'all' },
+        { queryKey: memoryKeys.lists(), type: "all" },
         (prev: ListMemoriesResponse | undefined) => {
           if (!prev) return prev;
-          const items = prev.items.map((m) => (m.id === memoryId ? applyFeedback(m) : m));
+          const items = prev.items.map((m) =>
+            m.id === memoryId ? applyFeedback(m) : m,
+          );
           return { ...prev, items };
-        }
+        },
       );
 
       // Searches
-      queryClient.setQueriesData({ queryKey: memoryKeys.searches(), type: 'all' }, (prev: Memory[] | undefined) => {
-        if (!prev) return prev;
-        return prev.map((m) => (m.id === memoryId ? applyFeedback(m) : m));
-      });
+      queryClient.setQueriesData(
+        { queryKey: memoryKeys.searches(), type: "all" },
+        (prev: Memory[] | undefined) => {
+          if (!prev) return prev;
+          return prev.map((m) => (m.id === memoryId ? applyFeedback(m) : m));
+        },
+      );
 
       queryClient.invalidateQueries({ queryKey: memoryKeys.detail(memoryId) });
       queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
@@ -455,7 +469,8 @@ export function useDeleteRelationship() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (relationshipId: string) => memoryAPI.deleteRelationship(relationshipId),
+    mutationFn: (relationshipId: string) =>
+      memoryAPI.deleteRelationship(relationshipId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: memoryKeys.graphBase() });
       queryClient.invalidateQueries({ queryKey: memoryKeys.stats() });
@@ -482,7 +497,16 @@ export function useMergeRelationships() {
 /**
  * Hook to preview an AI-assisted relationship split (admin only)
  */
-export function useSplitRelationshipPreview() {
+export function useSplitRelationshipPreview(
+  options?: UseMutationOptions<
+    SplitRelationshipPreviewResponse,
+    Error,
+    {
+      relationshipId: string;
+      request: SplitRelationshipPreviewRequest;
+    }
+  >,
+) {
   return useMutation({
     mutationFn: ({
       relationshipId,
@@ -492,6 +516,7 @@ export function useSplitRelationshipPreview() {
       request: SplitRelationshipPreviewRequest;
     }): Promise<SplitRelationshipPreviewResponse> =>
       memoryAPI.splitRelationshipPreview(relationshipId, request),
+    ...options,
   });
 }
 

@@ -3,28 +3,34 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 try:  # pragma: no cover - optional dependency
-    from langchain.agents.middleware.types import AgentMiddleware
+    from langchain.agents.middleware.types import AgentMiddleware, AgentState
 
-    MIDDLEWARE_AVAILABLE = True
+    AGENT_MIDDLEWARE_AVAILABLE = True
 except Exception:  # pragma: no cover
-    AgentMiddleware = object  # type: ignore[assignment]
-    MIDDLEWARE_AVAILABLE = False
+    AGENT_MIDDLEWARE_AVAILABLE = False
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class AgentState(dict):  # type: ignore[no-redef]
+        pass
 
 
-class TraceSeedMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object):
+class TraceSeedMiddleware(AgentMiddleware):
     """Seed a correlation_id into sparrow_ctx."""
 
     name = "trace_seed"
 
-    def before_agent(self, state: Dict[str, Any], runtime: Any) -> Optional[Dict[str, Any]]:
+    def before_agent(self, state: AgentState, runtime: Any) -> Optional[Dict[str, Any]]:
         if not isinstance(state, dict):
             return None
-        ctx = state.get("sparrow_ctx", {})
+        state_dict = cast(Dict[str, Any], state)
+        ctx = state_dict.get("sparrow_ctx", {})
         if not isinstance(ctx, dict):
             ctx = {}
         ctx.setdefault("correlation_id", str(uuid.uuid4()))
-        state["sparrow_ctx"] = ctx
+        state_dict["sparrow_ctx"] = ctx
         return {"sparrow_ctx": ctx}

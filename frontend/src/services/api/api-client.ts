@@ -1,380 +1,419 @@
-import { supabase } from '@/services/supabase'
-import { getAuthToken as getLocalToken } from '@/services/auth/local-auth'
+import { supabase } from "@/services/supabase";
+import { getAuthToken as getLocalToken } from "@/services/auth/local-auth";
 
 // URL validation with proper error handling
 const validateApiBaseUrl = (url: string): string => {
   try {
-    const parsed = new URL(url)
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-      throw new Error('API base URL must use HTTP or HTTPS protocol')
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      throw new Error("API base URL must use HTTP or HTTPS protocol");
     }
-    return url
+    return url;
   } catch (error) {
-    throw new Error(`Invalid API base URL: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    throw new Error(
+      `Invalid API base URL: ${error instanceof Error ? error.message : "Unknown error"}`,
+    );
   }
-}
+};
 
 const resolveApiBaseUrl = (): string => {
-  const envUrl = process.env.NEXT_PUBLIC_API_URL
+  const envUrl = process.env.NEXT_PUBLIC_API_URL;
 
   // In the browser, use relative paths to leverage Next.js rewrites (proxy).
   // This avoids CORS issues by routing API requests through the same origin.
-  if (typeof window !== 'undefined') {
-    return ''
+  if (typeof window !== "undefined") {
+    return "";
   }
 
-  return validateApiBaseUrl(envUrl || 'http://localhost:8000')
-}
+  return validateApiBaseUrl(envUrl || "http://localhost:8000");
+};
 
-const API_BASE_URL = resolveApiBaseUrl()
-const TRUSTED_FALLBACK_ORIGINS = (process.env.NEXT_PUBLIC_TRUSTED_API_ORIGINS || '')
-  .split(',')
+const API_BASE_URL = resolveApiBaseUrl();
+const TRUSTED_FALLBACK_ORIGINS = (
+  process.env.NEXT_PUBLIC_TRUSTED_API_ORIGINS || ""
+)
+  .split(",")
   .map((origin) => origin.trim())
-  .filter(Boolean)
+  .filter(Boolean);
 
 const buildRequestUrl = (endpoint: string): string => {
   try {
     // Absolute endpoints pass through unchanged
-    new URL(endpoint)
-    return endpoint
+    new URL(endpoint);
+    return endpoint;
   } catch {
-    return `${API_BASE_URL}${endpoint}`
+    return `${API_BASE_URL}${endpoint}`;
   }
-}
+};
 
 const toOrigin = (url?: string | null): string | null => {
-  if (!url) return null
+  if (!url) return null;
   try {
-    return new URL(url).origin
+    return new URL(url).origin;
   } catch {
-    return null
+    return null;
   }
-}
+};
 
 // TypeScript interfaces for better type safety
 interface User {
-  id: string
-  email: string
-  full_name?: string
-  metadata?: Record<string, unknown>
-  created_at: string
-  updated_at: string
+  id: string;
+  email: string;
+  full_name?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 interface ApiKey {
-  id: string
-  api_key_type: string
-  key_name?: string
-  is_active: boolean
-  created_at: string
-  updated_at: string
+  id: string;
+  api_key_type: string;
+  key_name?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 interface ApiKeyListResponse {
-  api_keys: ApiKey[]
-  total_count: number
+  api_keys: ApiKey[];
+  total_count: number;
 }
 
 interface ApiKeyStatus {
-  total_keys: number
-  active_keys: number
-  inactive_keys: number
-  key_types: string[]
+  total_keys: number;
+  active_keys: number;
+  inactive_keys: number;
+  key_types: string[];
 }
 
-type JsonRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>;
 
-const isRecord = (value: unknown): value is JsonRecord => (
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-)
+const isRecord = (value: unknown): value is JsonRecord =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
-const isBodyInit = (value: unknown): value is BodyInit => (
-  typeof value === 'string' ||
+const isBodyInit = (value: unknown): value is BodyInit =>
+  typeof value === "string" ||
   value instanceof Blob ||
   value instanceof FormData ||
   value instanceof URLSearchParams ||
   value instanceof ArrayBuffer ||
-  ArrayBuffer.isView(value as ArrayBufferView)
-)
+  ArrayBuffer.isView(value as ArrayBufferView);
 
 const parseBody = (rawBody: string, contentType: string | null): unknown => {
   if (!rawBody) {
-    return null
+    return null;
   }
 
-  if (contentType?.includes('application/json')) {
+  if (contentType?.includes("application/json")) {
     try {
-      return JSON.parse(rawBody)
+      return JSON.parse(rawBody);
     } catch {
-      return rawBody
+      return rawBody;
     }
   }
 
-  if (contentType?.includes('text/')) {
-    return rawBody
+  if (contentType?.includes("text/")) {
+    return rawBody;
   }
 
-  return rawBody
-}
+  return rawBody;
+};
 
 const extractErrorDetail = (body: unknown): string | null => {
   if (!body) {
-    return null
+    return null;
   }
 
-  if (typeof body === 'string') {
-    return body
+  if (typeof body === "string") {
+    return body;
   }
 
   if (isRecord(body)) {
-    const { detail, message } = body
+    const { detail, message } = body;
 
-    if (typeof detail === 'string') {
-      return detail
+    if (typeof detail === "string") {
+      return detail;
     }
 
-    if (typeof message === 'string') {
-      return message
+    if (typeof message === "string") {
+      return message;
     }
 
     if (isRecord(detail) || Array.isArray(detail)) {
       try {
-        return JSON.stringify(detail)
+        return JSON.stringify(detail);
       } catch {
-        return null
+        return null;
       }
     }
   }
 
-  return null
-}
+  return null;
+};
 
 const serializeBody = (data: unknown): BodyInit | undefined => {
   if (data === null || data === undefined) {
-    return undefined
+    return undefined;
   }
 
   if (isBodyInit(data)) {
-    return data
+    return data;
   }
 
-  return JSON.stringify(data)
-}
+  return JSON.stringify(data);
+};
 
-const toTextStream = (stream: ReadableStream<Uint8Array>): ReadableStream<string> => {
+const toTextStream = (
+  stream: ReadableStream<Uint8Array>,
+): ReadableStream<string> => {
   // Using "any" here to safely access cross-environment Web Streams APIs without failing type checks
   // across differing TS lib versions. Runtime behavior is guarded by feature detection.
-  const g: any = globalThis as any
-  if (typeof g.TextDecoderStream !== 'undefined') {
+  const g: any = globalThis as any;
+  if (typeof g.TextDecoderStream !== "undefined") {
     // Casts are intentional to avoid TS ReadableWritablePair type mismatch across lib versions
-    return (stream as any).pipeThrough(new g.TextDecoderStream()) as ReadableStream<string>
+    return (stream as any).pipeThrough(
+      new g.TextDecoderStream(),
+    ) as ReadableStream<string>;
   }
 
-  const decoder = new TextDecoder()
+  const decoder = new TextDecoder();
   const transform = new TransformStream<Uint8Array, string>({
     transform(chunk, controller) {
-      controller.enqueue(decoder.decode(chunk, { stream: true }))
+      controller.enqueue(decoder.decode(chunk, { stream: true }));
     },
     flush(controller) {
-      controller.enqueue(decoder.decode())
+      controller.enqueue(decoder.decode());
     },
-  })
-  return (stream as any).pipeThrough(transform as any) as ReadableStream<string>
-}
+  });
+  return (stream as any).pipeThrough(
+    transform as any,
+  ) as ReadableStream<string>;
+};
 
 export class APIRequestError extends Error {
-  public readonly status: number
-  public readonly statusText: string
-  public readonly body: unknown
+  public readonly status: number;
+  public readonly statusText: string;
+  public readonly body: unknown;
 
-  constructor(params: { status: number; statusText: string; body: unknown; message?: string }) {
-    const statusLine = `${params.status} ${params.statusText || ''}`.trim()
-    const defaultMessage = `HTTP error: ${statusLine}`
-    super(params.message ?? defaultMessage)
-    this.name = 'APIRequestError'
-    this.status = params.status
-    this.statusText = params.statusText
-    this.body = params.body
+  constructor(params: {
+    status: number;
+    statusText: string;
+    body: unknown;
+    message?: string;
+  }) {
+    const statusLine = `${params.status} ${params.statusText || ""}`.trim();
+    const defaultMessage = `HTTP error: ${statusLine}`;
+    super(params.message ?? defaultMessage);
+    this.name = "APIRequestError";
+    this.status = params.status;
+    this.statusText = params.statusText;
+    this.body = params.body;
   }
 }
 
 interface RequestOptions extends RequestInit {
-  skipAuth?: boolean
-  customContentType?: string
+  skipAuth?: boolean;
+  customContentType?: string;
 }
 
 interface StreamOptions extends RequestOptions {
-  onError?: (error: Error) => void
-  onClose?: () => void
+  onError?: (error: Error) => void;
+  onClose?: () => void;
 }
 
 // Enhanced EventSource interface for better typing
 export interface EnhancedEventSource {
-  close: () => void
-  readyState: 0 | 1 | 2 // CONNECTING | OPEN | CLOSED
-  addEventListener?: (type: string, listener: EventListener) => void
-  removeEventListener?: (type: string, listener: EventListener) => void
+  close: () => void;
+  readyState: 0 | 1 | 2; // CONNECTING | OPEN | CLOSED
+  addEventListener?: (type: string, listener: EventListener) => void;
+  removeEventListener?: (type: string, listener: EventListener) => void;
 }
 
 class APIClient {
-  private streamTokenUnavailable = false
+  private streamTokenUnavailable = false;
 
-  private async getAuthHeaders(customContentType?: string): Promise<HeadersInit> {
+  private async getAuthHeaders(
+    customContentType?: string,
+  ): Promise<HeadersInit> {
     try {
-      const session = await supabase.auth.getSession()
-      const supaToken = session.data.session?.access_token
-      const localBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true'
-      const localToken = localBypass && typeof window !== 'undefined' ? getLocalToken() : null
-      const token = supaToken || localToken || undefined
+      const session = await supabase.auth.getSession();
+      const supaToken = session.data.session?.access_token;
+      const localBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === "true";
+      const localToken =
+        localBypass && typeof window !== "undefined" ? getLocalToken() : null;
+      const token = supaToken || localToken || undefined;
 
       return {
-        'Content-Type': customContentType || 'application/json',
-        ...(token && { Authorization: `Bearer ${token}` })
-      }
+        "Content-Type": customContentType || "application/json",
+        ...(token && { Authorization: `Bearer ${token}` }),
+      };
     } catch {
       return {
-        'Content-Type': customContentType || 'application/json'
-      }
+        "Content-Type": customContentType || "application/json",
+      };
     }
   }
 
   async request<T = unknown>(
     endpoint: string,
-    options: RequestOptions = {}
+    options: RequestOptions = {},
   ): Promise<T> {
-    const { skipAuth = false, customContentType, headers, ...restOptions } = options
+    const {
+      skipAuth = false,
+      customContentType,
+      headers,
+      ...restOptions
+    } = options;
 
-    const authHeaders = skipAuth ? undefined : await this.getAuthHeaders(customContentType)
-    const requestHeaders = new Headers()
+    const authHeaders = skipAuth
+      ? undefined
+      : await this.getAuthHeaders(customContentType);
+    const requestHeaders = new Headers();
 
     if (authHeaders) {
-      new Headers(authHeaders).forEach((value, key) => requestHeaders.set(key, value))
+      new Headers(authHeaders).forEach((value, key) =>
+        requestHeaders.set(key, value),
+      );
     }
 
     if (headers) {
-      new Headers(headers).forEach((value, key) => requestHeaders.set(key, value))
+      new Headers(headers).forEach((value, key) =>
+        requestHeaders.set(key, value),
+      );
     }
 
-    const targetUrl = buildRequestUrl(endpoint)
-    const sameOrigin = typeof window !== 'undefined' ? window.location.origin : null
-    const apiOrigin = toOrigin(API_BASE_URL)
+    const targetUrl = buildRequestUrl(endpoint);
+    const sameOrigin =
+      typeof window !== "undefined" ? window.location.origin : null;
+    const apiOrigin = toOrigin(API_BASE_URL);
     const trustedOrigins = new Set<string>(
-      [apiOrigin, ...TRUSTED_FALLBACK_ORIGINS].filter(Boolean) as string[]
-    )
+      [apiOrigin, ...TRUSTED_FALLBACK_ORIGINS].filter(Boolean) as string[],
+    );
     const scrubHeadersForOrigin = (targetOrigin?: string | null) => {
-      if (!targetOrigin) return requestHeaders
-      const sanitized = new Headers(requestHeaders)
+      if (!targetOrigin) return requestHeaders;
+      const sanitized = new Headers(requestHeaders);
       if (apiOrigin && targetOrigin !== apiOrigin) {
-        sanitized.delete('authorization')
+        sanitized.delete("authorization");
       }
-      return sanitized
-    }
+      return sanitized;
+    };
 
-    let response: Response
+    let response: Response;
     try {
       response = await fetch(targetUrl, {
         ...restOptions,
-        headers: requestHeaders
-      })
+        headers: requestHeaders,
+      });
     } catch (err) {
       // Mixed-content or bad base URL can throw TypeError; retry relative if allowed.
-      const originIsTrusted = !!(sameOrigin && trustedOrigins.has(sameOrigin))
+      const originIsTrusted = !!(sameOrigin && trustedOrigins.has(sameOrigin));
       const shouldRetrySameOrigin =
         err instanceof TypeError &&
         originIsTrusted &&
-        !endpoint.startsWith('http') &&
-        sameOrigin !== API_BASE_URL
+        !endpoint.startsWith("http") &&
+        sameOrigin !== API_BASE_URL;
       if (shouldRetrySameOrigin) {
-        const fallbackHeaders = scrubHeadersForOrigin(sameOrigin)
+        const fallbackHeaders = scrubHeadersForOrigin(sameOrigin);
         response = await fetch(endpoint, {
           ...restOptions,
-          headers: fallbackHeaders
-        })
+          headers: fallbackHeaders,
+        });
       } else {
-        throw err
+        throw err;
       }
     }
 
-    const contentType = response.headers.get('content-type')
+    const contentType = response.headers.get("content-type");
 
     if (!response.ok) {
-      const rawBody = await response.text()
-      const parsedBody = parseBody(rawBody, contentType)
-      const statusLine = `${response.status} ${response.statusText || ''}`.trim()
-      const detail = extractErrorDetail(parsedBody)
-      const message = detail ? `${statusLine} - ${detail}` : statusLine
+      const rawBody = await response.text();
+      const parsedBody = parseBody(rawBody, contentType);
+      const statusLine =
+        `${response.status} ${response.statusText || ""}`.trim();
+      const detail = extractErrorDetail(parsedBody);
+      const message = detail ? `${statusLine} - ${detail}` : statusLine;
 
       throw new APIRequestError({
         status: response.status,
-        statusText: response.statusText ?? '',
+        statusText: response.statusText ?? "",
         body: parsedBody,
-        message: `HTTP error: ${message}`
-      })
+        message: `HTTP error: ${message}`,
+      });
     }
 
     if (!contentType || response.status === 204) {
-      return undefined as T
+      return undefined as T;
     }
 
-    if (contentType.includes('application/json')) {
-      return (await response.json()) as T
+    if (contentType.includes("application/json")) {
+      return (await response.json()) as T;
     }
 
-    if (contentType.includes('text/plain') || contentType.includes('text/html')) {
-      return (await response.text()) as unknown as T
+    if (
+      contentType.includes("text/plain") ||
+      contentType.includes("text/html")
+    ) {
+      return (await response.text()) as unknown as T;
     }
 
-    return (await response.arrayBuffer()) as unknown as T
+    return (await response.arrayBuffer()) as unknown as T;
   }
 
   // Convenience methods with explicit return types
-  async get<T = unknown>(endpoint: string, options?: RequestOptions): Promise<T> {
-    return this.request<T>(endpoint, { ...options, method: 'GET' })
+  async get<T = unknown>(
+    endpoint: string,
+    options?: RequestOptions,
+  ): Promise<T> {
+    return this.request<T>(endpoint, { ...options, method: "GET" });
   }
 
   async post<TResponse = unknown, TPayload = unknown>(
     endpoint: string,
     data?: TPayload,
-    options?: RequestOptions
+    options?: RequestOptions,
   ): Promise<TResponse> {
     return this.request<TResponse>(endpoint, {
       ...options,
-      method: 'POST',
-      body: serializeBody(data)
-    })
+      method: "POST",
+      body: serializeBody(data),
+    });
   }
 
   async put<TResponse = unknown, TPayload = unknown>(
     endpoint: string,
     data?: TPayload,
-    options?: RequestOptions
+    options?: RequestOptions,
   ): Promise<TResponse> {
     return this.request<TResponse>(endpoint, {
       ...options,
-      method: 'PUT',
-      body: serializeBody(data)
-    })
+      method: "PUT",
+      body: serializeBody(data),
+    });
   }
 
-  async delete<T = unknown>(endpoint: string, options?: RequestOptions): Promise<T> {
-    return this.request<T>(endpoint, { ...options, method: 'DELETE' })
+  async delete<T = unknown>(
+    endpoint: string,
+    options?: RequestOptions,
+  ): Promise<T> {
+    return this.request<T>(endpoint, { ...options, method: "DELETE" });
   }
 
   // Secure token exchange endpoint for SSE
   private async getStreamToken(): Promise<string | null> {
     // In-memory short-circuit
     if (this.streamTokenUnavailable) {
-      return null
+      return null;
     }
 
     // Persisted flag (survives HMR / reloads in dev)
     try {
-      if (typeof window !== 'undefined') {
-        const cached = window.sessionStorage.getItem('streamTokenUnavailable')
-          || window.localStorage.getItem('streamTokenUnavailable')
-        if (cached === '1') {
-          this.streamTokenUnavailable = true
-          return null
+      if (typeof window !== "undefined") {
+        const cached =
+          window.sessionStorage.getItem("streamTokenUnavailable") ||
+          window.localStorage.getItem("streamTokenUnavailable");
+        if (cached === "1") {
+          this.streamTokenUnavailable = true;
+          return null;
         }
       }
     } catch {
@@ -383,28 +422,33 @@ class APIClient {
 
     try {
       const response = await this.post<{ stream_token: string }>(
-        '/api/v1/auth/stream-token',
+        "/api/v1/auth/stream-token",
         {},
-        { skipAuth: false }
-      )
-      return response.stream_token
+        { skipAuth: false },
+      );
+      return response.stream_token;
     } catch (error) {
       if (error instanceof APIRequestError && error.status === 404) {
-        this.streamTokenUnavailable = true
+        this.streamTokenUnavailable = true;
         try {
-          if (typeof window !== 'undefined') {
-            window.sessionStorage.setItem('streamTokenUnavailable', '1')
-            window.localStorage.setItem('streamTokenUnavailable', '1')
+          if (typeof window !== "undefined") {
+            window.sessionStorage.setItem("streamTokenUnavailable", "1");
+            window.localStorage.setItem("streamTokenUnavailable", "1");
           }
         } catch {}
-        if (process.env.NODE_ENV === 'development') {
+        if (process.env.NODE_ENV === "development") {
           // One-time notice; subsequent calls are short-circuited
-          console.debug('Stream token endpoint unavailable (404); falling back to session auth.')
+          console.debug(
+            "Stream token endpoint unavailable (404); falling back to session auth.",
+          );
         }
-      } else if (process.env.NODE_ENV === 'development') {
-        console.debug('Failed to get stream token, using session auth fallback:', error)
+      } else if (process.env.NODE_ENV === "development") {
+        console.debug(
+          "Failed to get stream token, using session auth fallback:",
+          error,
+        );
       }
-      return null
+      return null;
     }
   }
 
@@ -416,97 +460,116 @@ class APIClient {
     endpoint: string,
     payload?: unknown,
     onMessage?: (data: T) => void,
-    options: StreamOptions = {}
+    options: StreamOptions = {},
   ): Promise<EnhancedEventSource> {
-    const controller = new AbortController()
+    const controller = new AbortController();
     try {
-      const headers = await this.getAuthHeaders('application/json')
+      const headers = await this.getAuthHeaders("application/json");
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: payload ? 'POST' : 'GET',
+        method: payload ? "POST" : "GET",
         headers,
         body: payload ? JSON.stringify(payload) : undefined,
         signal: controller.signal,
-      })
+      });
 
       if (!response.ok) {
-        const text = await response.text().catch(() => '')
-        throw new APIRequestError({ status: response.status, statusText: response.statusText, body: text })
+        const text = await response.text().catch(() => "");
+        throw new APIRequestError({
+          status: response.status,
+          statusText: response.statusText,
+          body: text,
+        });
       }
 
-      const body = response.body
+      const body = response.body;
       if (!body) {
-        throw new Error('Stream response has no body')
+        throw new Error("Stream response has no body");
       }
 
-      const reader = toTextStream(body).getReader()
+      const reader = toTextStream(body).getReader();
       const pump = async () => {
         try {
-          let buffer = ''
+          let buffer = "";
           while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buffer += value || ''
-            let idx: number
-            while ((idx = buffer.indexOf('\n')) >= 0) {
-              const line = buffer.slice(0, idx).trim()
-              buffer = buffer.slice(idx + 1)
-              if (!line) continue
-              const dataStr = line.startsWith('data:') ? line.slice(5).trim() : line
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += value || "";
+            let idx: number;
+            while ((idx = buffer.indexOf("\n")) >= 0) {
+              const line = buffer.slice(0, idx).trim();
+              buffer = buffer.slice(idx + 1);
+              if (!line) continue;
+              const dataStr = line.startsWith("data:")
+                ? line.slice(5).trim()
+                : line;
               try {
-                onMessage?.(JSON.parse(dataStr))
+                onMessage?.(JSON.parse(dataStr));
               } catch {
-                onMessage?.(dataStr as unknown as T)
+                onMessage?.(dataStr as unknown as T);
               }
             }
           }
-          options.onClose?.()
+          options.onClose?.();
         } catch (err) {
-          options.onError?.(err as Error)
+          options.onError?.(err as Error);
         }
-      }
+      };
       // Start pumping asynchronously
-      void pump()
+      void pump();
 
       return {
         close: () => {
-          try { controller.abort() } catch {}
+          try {
+            controller.abort();
+          } catch {}
         },
         readyState: 1,
-      }
+      };
     } catch (err) {
-      options.onError?.(err as Error)
+      options.onError?.(err as Error);
       // Return a closed stub
       return {
-        close: () => { try { controller.abort() } catch {} },
+        close: () => {
+          try {
+            controller.abort();
+          } catch {}
+        },
         readyState: 2,
-      }
+      };
     }
   }
 }
 
-export const apiClient = new APIClient()
+export const apiClient = new APIClient();
 
 // Export specific API functions with proper typing
 export const authAPI = {
-  signOut: (): Promise<void> => apiClient.post('/api/v1/auth/signout'),
+  signOut: (): Promise<void> => apiClient.post("/api/v1/auth/signout"),
 
-  getMe: (): Promise<User> => apiClient.get<User>('/api/v1/auth/me'),
+  getMe: (): Promise<User> => apiClient.get<User>("/api/v1/auth/me"),
 
-  updateProfile: (data: { full_name?: string; metadata?: Record<string, unknown> }): Promise<User> =>
-    apiClient.put<User>('/api/v1/auth/me', data)
-}
+  updateProfile: (data: {
+    full_name?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<User> => apiClient.put<User>("/api/v1/auth/me", data),
+};
 
 export const apiKeyAPI = {
-  list: (): Promise<ApiKeyListResponse> => apiClient.get<ApiKeyListResponse>('/api/v1/api-keys/'),
+  list: (): Promise<ApiKeyListResponse> =>
+    apiClient.get<ApiKeyListResponse>("/api/v1/api-keys/"),
 
-  create: (data: { api_key_type: string; api_key: string; key_name?: string }): Promise<ApiKey> =>
-    apiClient.post<ApiKey>('/api/v1/api-keys/', data),
+  create: (data: {
+    api_key_type: string;
+    api_key: string;
+    key_name?: string;
+  }): Promise<ApiKey> => apiClient.post<ApiKey>("/api/v1/api-keys/", data),
 
   delete: (apiKeyType: string): Promise<void> =>
     apiClient.delete<void>(`/api/v1/api-keys/${apiKeyType}`),
 
-  getStatus: (): Promise<ApiKeyStatus> => apiClient.get<ApiKeyStatus>('/api/v1/api-keys/status')
-}
+  getStatus: (): Promise<ApiKeyStatus> =>
+    apiClient.get<ApiKeyStatus>("/api/v1/api-keys/status"),
+};
 
 export const agentAPI = {
   /**
@@ -525,18 +588,18 @@ export const agentAPI = {
     onError?: (error: Error) => void,
     onClose?: () => void,
     messages?: Array<{ role: string; content: string; [key: string]: unknown }>,
-    sessionId?: string
+    sessionId?: string,
   ): Promise<EnhancedEventSource> =>
     apiClient.stream<TMessage>(
-      '/api/v1/v2/agent/chat/stream',
+      "/api/v1/v2/agent/chat/stream",
       { message, messages, session_id: sessionId },
       onMessage,
-      { onError, onClose }
+      { onError, onClose },
     ),
 
   analyzeLogs: (content: string): Promise<unknown> =>
-    apiClient.post('/api/v1/agent/logs', { content }),
+    apiClient.post("/api/v1/agent/logs", { content }),
 
   research: (query: string): Promise<unknown> =>
-    apiClient.post('/api/v1/agent/research', { query })
-}
+    apiClient.post("/api/v1/agent/research", { query }),
+};

@@ -8,7 +8,9 @@ from typing import Any, Pattern
 logger = logging.getLogger(__name__)
 
 # Precompiled regex patterns for performance
-SELF_CRITIQUE_RE: Pattern[str] = re.compile(r"<self_critique>.*?</self_critique>", flags=re.DOTALL)
+SELF_CRITIQUE_RE: Pattern[str] = re.compile(
+    r"<self_critique>.*?</self_critique>", flags=re.DOTALL
+)
 
 SYSTEM_PATTERNS: list[Pattern[str]] = [
     re.compile(r"<system>.*?</system>", flags=re.DOTALL | re.IGNORECASE),
@@ -55,7 +57,9 @@ def serialize_analysis_results(final_report: Any) -> dict | Any:
     try:
         if is_dataclass(final_report):
             structured_output = getattr(final_report, "structured_output_dict", None)
-            if structured_output is None and getattr(final_report, "structured_output", None):
+            if structured_output is None and getattr(
+                final_report, "structured_output", None
+            ):
                 try:
                     structured_output = final_report.structured_output.to_dict()  # type: ignore[union-attr]
                 except Exception:
@@ -86,9 +90,9 @@ def serialize_analysis_results(final_report: Any) -> dict | Any:
                     },
                 }
 
-            markdown = getattr(final_report, "conversational_markdown", None) or getattr(
-                final_report, "executive_summary", ""
-            )
+            markdown = getattr(
+                final_report, "conversational_markdown", None
+            ) or getattr(final_report, "executive_summary", "")
 
             findings_legacy: list[dict[str, Any]] = []
             if structured_output:
@@ -110,14 +114,18 @@ def serialize_analysis_results(final_report: Any) -> dict | Any:
                 "ingestion_metadata": ingestion_metadata,
                 "identified_issues": findings_legacy,
                 "overall_summary": getattr(final_report, "executive_summary", markdown),
-                "redactions_applied": structured_output.get("redactions_applied", []) if structured_output else [],
+                "redactions_applied": (
+                    structured_output.get("redactions_applied", [])
+                    if structured_output
+                    else []
+                ),
             }
 
             return safe_json_serializer(serialized)
 
-        if hasattr(final_report, 'model_dump'):
+        if hasattr(final_report, "model_dump"):
             serialized = final_report.model_dump()
-        elif hasattr(final_report, 'dict'):
+        elif hasattr(final_report, "dict"):
             serialized = final_report.dict()
         elif isinstance(final_report, dict):
             serialized = final_report
@@ -131,7 +139,7 @@ def serialize_analysis_results(final_report: Any) -> dict | Any:
             "error": str(e),
             "system_metadata": {},
             "identified_issues": [],
-            "proposed_solutions": []
+            "proposed_solutions": [],
         }
 
 
@@ -155,9 +163,13 @@ def augment_analysis_metadata(
         ingest_meta = analysis_results["ingestion_metadata"]
 
         if ingestion_metadata and isinstance(ingestion_metadata, dict):
-            if ingestion_metadata.get("time_range") and not ingest_meta.get("time_range"):
+            if ingestion_metadata.get("time_range") and not ingest_meta.get(
+                "time_range"
+            ):
                 ingest_meta["time_range"] = ingestion_metadata.get("time_range")
-            if ingestion_metadata.get("line_count") and not ingest_meta.get("line_count"):
+            if ingestion_metadata.get("line_count") and not ingest_meta.get(
+                "line_count"
+            ):
                 ingest_meta["line_count"] = ingestion_metadata.get("line_count")
 
         if isinstance(raw_log, str) and raw_log:
@@ -165,22 +177,38 @@ def augment_analysis_metadata(
             if ingest_meta.get("line_count") is None:
                 ingest_meta["line_count"] = len(lines)
             if system_meta.get("error_count") is None:
-                system_meta["error_count"] = sum(1 for ln in lines if "|ERROR|" in ln or " ERROR " in ln)
+                system_meta["error_count"] = sum(
+                    1 for ln in lines if "|ERROR|" in ln or " ERROR " in ln
+                )
             if system_meta.get("warning_count") is None:
-                system_meta["warning_count"] = sum(1 for ln in lines if "|WARN|" in ln or " WARNING " in ln)
+                system_meta["warning_count"] = sum(
+                    1 for ln in lines if "|WARN|" in ln or " WARNING " in ln
+                )
             if system_meta.get("database_size") is None:
                 import re as _re
-                m = _re.search(r"(?:Store\.db\s+|Database size:\s*)([\d,.]+\s*[KMGTP]B)", raw_log, _re.IGNORECASE)
+
+                m = _re.search(
+                    r"(?:Store\.db\s+|Database size:\s*)([\d,.]+\s*[KMGTP]B)",
+                    raw_log,
+                    _re.IGNORECASE,
+                )
                 if m:
                     system_meta["database_size"] = m.group(1).replace(",", "")
 
-        if system_meta.get("accounts_with_errors") is None and isinstance(issues, list) and issues:
+        if (
+            system_meta.get("accounts_with_errors") is None
+            and isinstance(issues, list)
+            and issues
+        ):
             import re as _re
+
             accs: set[str] = set()
             for it in issues:
                 if not isinstance(it, dict):
                     continue
-                text = " ".join(str(it.get(k, "")) for k in ("details", "description", "title"))
+                text = " ".join(
+                    str(it.get(k, "")) for k in ("details", "description", "title")
+                )
                 for m in _re.findall(r"Account[:\s]+([^\s|]+@[^\s|]+)", text):
                     accs.add(m)
             if accs:
@@ -193,7 +221,9 @@ def augment_analysis_metadata(
 
 def get_user_id_for_dev_mode(settings) -> str:
     """Get user ID for development mode or 'anonymous' in production w/o auth."""
-    if getattr(settings, 'skip_auth', False) and getattr(settings, 'development_user_id', None):
+    if getattr(settings, "skip_auth", False) and getattr(
+        settings, "development_user_id", None
+    ):
         return settings.development_user_id
     return "anonymous"
 
@@ -202,22 +232,31 @@ def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> 
     """Build a cohesive markdown answer for log analysis results (v10-aligned)."""
     try:
         if not isinstance(analysis, dict):
-            if hasattr(analysis, 'model_dump'):
+            if hasattr(analysis, "model_dump"):
                 analysis = analysis.model_dump()  # type: ignore
-            elif hasattr(analysis, 'dict'):
+            elif hasattr(analysis, "dict"):
                 analysis = analysis.dict()  # type: ignore
             else:
                 analysis = {"overall_summary": str(analysis)}
 
-        overall_summary = analysis.get("overall_summary") or analysis.get("summary") or "Log analysis complete."
+        overall_summary = (
+            analysis.get("overall_summary")
+            or analysis.get("summary")
+            or "Log analysis complete."
+        )
         issues = analysis.get("identified_issues") or analysis.get("issues") or []
-        solutions = analysis.get("proposed_solutions") or analysis.get("solutions") or analysis.get("actions") or []
+        solutions = (
+            analysis.get("proposed_solutions")
+            or analysis.get("solutions")
+            or analysis.get("actions")
+            or []
+        )
 
         parts: list[str] = []
         # Empathetic opener
         if question:
             parts.append(
-                f"Thanks for sharing the log — I reviewed it in the context of your question: \"{question}\". I have a clear plan for you."
+                f'Thanks for sharing the log — I reviewed it in the context of your question: "{question}". I have a clear plan for you.'
             )
         else:
             parts.append(
@@ -246,13 +285,21 @@ def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> 
 
         # Quick things to try (use first few steps from the first solution if present)
         first_steps: list[str] = []
-        if isinstance(solutions, list) and len(solutions) > 0 and isinstance(solutions[0], dict):
+        if (
+            isinstance(solutions, list)
+            and len(solutions) > 0
+            and isinstance(solutions[0], dict)
+        ):
             s0 = solutions[0]
             steps0 = s0.get("steps") or []
             if isinstance(steps0, list):
-                first_steps = [str(x).rstrip('.') for x in steps0[:3] if isinstance(x, str)]
+                first_steps = [
+                    str(x).rstrip(".") for x in steps0[:3] if isinstance(x, str)
+                ]
         if first_steps:
-            quick_lines = ["## Quick things to try (takes a minute)"] + [f"{i+1}) {st}" for i, st in enumerate(first_steps)]
+            quick_lines = ["## Quick things to try (takes a minute)"] + [
+                f"{i + 1}) {st}" for i, st in enumerate(first_steps)
+            ]
             parts.append("\n".join(quick_lines))
 
         # Guided fix (enumerate solutions and their steps)
@@ -270,18 +317,29 @@ def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> 
                         section_lines.append(f"{j}. {step}")
                 step_sections.append("\n".join(section_lines))
         if step_sections:
-            parts.append("## If the above steps does not help then please try this guided fix\n" + "\n\n".join(step_sections))
+            parts.append(
+                "## If the above steps does not help then please try this guided fix\n"
+                + "\n\n".join(step_sections)
+            )
 
         # Good to know fallback
-        parts.append("## Good to know\n* These steps are safe and reversible. If anything looks different, let me know and I’ll adapt the plan.")
+        parts.append(
+            "## Good to know\n* These steps are safe and reversible. If anything looks different, let me know and I’ll adapt the plan."
+        )
 
         # Helpful tips placeholder (kept minimal for simplified path)
-        parts.append("## Helpful Tips\n* After fixing, watch the app for a few minutes to confirm no new error banners appear.")
+        parts.append(
+            "## Helpful Tips\n* After fixing, watch the app for a few minutes to confirm no new error banners appear."
+        )
 
         # Encouraging wrap-up
-        parts.append("## Encouraging Wrap-up\nYou’ve got this. Tell me how it looks after the first two steps and we’ll iterate together.")
+        parts.append(
+            "## Encouraging Wrap-up\nYou’ve got this. Tell me how it looks after the first two steps and we’ll iterate together."
+        )
 
         return "\n\n".join(parts)
     except Exception:
-        summary = analysis.get("overall_summary") if isinstance(analysis, dict) else None
+        summary = (
+            analysis.get("overall_summary") if isinstance(analysis, dict) else None
+        )
         return f"Log analysis complete! {summary or ''}".strip()

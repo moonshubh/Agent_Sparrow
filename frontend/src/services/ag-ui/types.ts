@@ -1,13 +1,13 @@
 // Local type definitions for CopilotKit v1.50 compatibility
 export interface BinaryInputContent {
-  type: 'binary';
+  type: "binary";
   mimeType: string;
   filename: string;
   data: string;
 }
 
 export interface TextInputContent {
-  type: 'text';
+  type: "text";
   text: string;
 }
 
@@ -33,10 +33,10 @@ export function createBinaryContent(file: File): Promise<BinaryInputContent> {
     reader.onload = () => {
       const dataUrl = reader.result as string;
       // Extract base64 data from data URL
-      const base64Data = dataUrl.split(',')[1];
+      const base64Data = dataUrl.split(",")[1];
 
       resolve({
-        type: 'binary',
+        type: "binary",
         mimeType: file.type,
         filename: file.name,
         data: base64Data,
@@ -49,7 +49,7 @@ export function createBinaryContent(file: File): Promise<BinaryInputContent> {
 
 export function createTextContent(text: string): TextInputContent {
   return {
-    type: 'text',
+    type: "text",
     text,
   } as TextInputContent;
 }

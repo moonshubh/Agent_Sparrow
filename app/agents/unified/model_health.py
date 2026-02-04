@@ -49,7 +49,9 @@ class ModelHealth:
 class ModelQuotaTracker:
     """Thin wrapper around the bucket rate limiter for read-only health checks."""
 
-    def __init__(self, cache_ttl_seconds: float = 5.0, warning_threshold: float = 0.9) -> None:
+    def __init__(
+        self, cache_ttl_seconds: float = 5.0, warning_threshold: float = 0.9
+    ) -> None:
         self._limiter = get_rate_limiter()
         self._cache: Optional[UsageStats] = None
         self._cache_ts: float = 0.0
@@ -111,7 +113,9 @@ class ModelQuotaTracker:
             self._cache_ts = now
             return stats
 
-    def _evaluate_availability(self, metadata: RateLimitMetadata, circuit_state: CircuitState) -> tuple[bool, Optional[str]]:
+    def _evaluate_availability(
+        self, metadata: RateLimitMetadata, circuit_state: CircuitState
+    ) -> tuple[bool, Optional[str]]:
         if circuit_state == CircuitState.OPEN:
             return False, "circuit_open"
 

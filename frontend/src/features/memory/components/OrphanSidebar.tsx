@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import React, { useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, Layers, Search, X } from 'lucide-react';
-import { ENTITY_COLORS, ENTITY_LABELS } from '../types';
-import type { OrphanEntity } from '../types';
+import React, { useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ChevronDown, Layers, Search, X } from "lucide-react";
+import { ENTITY_COLORS, ENTITY_LABELS } from "../types";
+import type { OrphanEntity } from "../types";
 
 export function OrphanSidebar({
   orphans,
@@ -17,7 +17,7 @@ export function OrphanSidebar({
   onToggle: () => void;
   onSelect: (entityId: string) => void;
 }) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
     const trimmed = query.trim().toLowerCase();
@@ -27,17 +27,19 @@ export function OrphanSidebar({
       const label = o.node.displayLabel.toLowerCase();
       const type = o.node.entityType.toLowerCase();
       return (
-        name.includes(trimmed) || label.includes(trimmed) || type.includes(trimmed)
+        name.includes(trimmed) ||
+        label.includes(trimmed) ||
+        type.includes(trimmed)
       );
     });
   }, [orphans, query]);
 
   return (
     <motion.aside
-      className={`orphan-sidebar ${open ? 'open' : 'collapsed'}`}
+      className={`orphan-sidebar ${open ? "open" : "collapsed"}`}
       initial={false}
       animate={{ width: open ? 280 : 44 }}
-      transition={{ type: 'spring', stiffness: 500, damping: 40 }}
+      transition={{ type: "spring", stiffness: 500, damping: 40 }}
     >
       <button
         className="orphan-sidebar__toggle"
@@ -46,7 +48,7 @@ export function OrphanSidebar({
       >
         <ChevronDown
           size={18}
-          style={{ transform: open ? 'rotate(90deg)' : 'rotate(-90deg)' }}
+          style={{ transform: open ? "rotate(90deg)" : "rotate(-90deg)" }}
         />
       </button>
 
@@ -67,7 +69,8 @@ export function OrphanSidebar({
             </div>
 
             <div className="orphan-sidebar__hint">
-              Entities not connected to the current tree root. Click one to jump and re-root the tree.
+              Entities not connected to the current tree root. Click one to jump
+              and re-root the tree.
             </div>
 
             <div className="orphan-sidebar__search">
@@ -80,7 +83,7 @@ export function OrphanSidebar({
               {query && (
                 <button
                   className="orphan-sidebar__clear"
-                  onClick={() => setQuery('')}
+                  onClick={() => setQuery("")}
                   title="Clear search"
                 >
                   <X size={14} />
@@ -101,7 +104,9 @@ export function OrphanSidebar({
                   >
                     <span
                       className="orphan-sidebar__dot"
-                      style={{ backgroundColor: ENTITY_COLORS[o.node.entityType] }}
+                      style={{
+                        backgroundColor: ENTITY_COLORS[o.node.entityType],
+                      }}
                     />
                     <div className="orphan-sidebar__item-main">
                       <span className="orphan-sidebar__item-name">

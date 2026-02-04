@@ -1,8 +1,9 @@
 """Redis-backed quota manager for agent services."""
+
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 import redis
 
@@ -37,7 +38,9 @@ class QuotaManager:
         per_day_limits: Optional[Dict[str, int]] = None,
     ) -> None:
         self.logger = get_logger("quota_manager")
-        self.redis = redis_client or redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        self.redis = redis_client or redis.Redis.from_url(
+            settings.redis_url, decode_responses=True
+        )
         self.redis_client = self.redis  # Expose as redis_client for compatibility
         self.key_prefix = key_prefix
         # Prefer config-driven limits; fall back to provided overrides or conservative defaults.
@@ -53,7 +56,9 @@ class QuotaManager:
     def check_and_track(self, service: str, increment: int = 1) -> bool:
         """Increment counters and return True if the request is within quota."""
         if increment <= 0:
-            self.logger.warning("quota_increment_non_positive", service=service, increment=increment)
+            self.logger.warning(
+                "quota_increment_non_positive", service=service, increment=increment
+            )
             return True
 
         minute_limit, daily_limit = self._get_limits(service)
@@ -65,15 +70,25 @@ class QuotaManager:
         minute_key, daily_key = self._build_keys(service, now)
 
         try:
-            minute_count = self._increment(minute_key, increment, ttl_seconds=120) if minute_limit > 0 else None
-            daily_count = self._increment(daily_key, increment, ttl_seconds=86400 + 60) if daily_limit > 0 else None
+            minute_count = (
+                self._increment(minute_key, increment, ttl_seconds=120)
+                if minute_limit > 0
+                else None
+            )
+            daily_count = (
+                self._increment(daily_key, increment, ttl_seconds=86400 + 60)
+                if daily_limit > 0
+                else None
+            )
         except redis.RedisError as exc:  # pragma: no cover - network failure
             self.logger.warning("quota_manager_redis_error", error=str(exc))
             return True  # Fail-open to avoid blocking traffic when Redis is down
 
         if minute_limit > 0 and (minute_count or 0) > minute_limit:
             self._decrement(minute_key, increment)
-            self.logger.info("quota_exceeded_minute", service=service, limit=minute_limit)
+            self.logger.info(
+                "quota_exceeded_minute", service=service, limit=minute_limit
+            )
             return False
         if daily_limit > 0 and (daily_count or 0) > daily_limit:
             self._decrement(daily_key, increment)
@@ -95,13 +110,13 @@ class QuotaManager:
 
         try:
             if minute_limit > 0:
-                minute_count = self.redis.get(minute_key)
-                if minute_count and int(minute_count) >= minute_limit:
+                minute_count = self._to_int(self.redis.get(minute_key))
+                if minute_count >= minute_limit:
                     return False
 
             if daily_limit > 0:
-                daily_count = self.redis.get(daily_key)
-                if daily_count and int(daily_count) >= daily_limit:
+                daily_count = self._to_int(self.redis.get(daily_key))
+                if daily_count >= daily_limit:
                     return False
         except redis.RedisError as exc:
             self.logger.warning("quota_check_redis_error", error=str(exc))
@@ -115,8 +130,7 @@ class QuotaManager:
         _, daily_key = self._build_keys(service, now)
 
         try:
-            count = self.redis.get(daily_key)
-            return int(count) if count else 0
+            return self._to_int(self.redis.get(daily_key))
         except (redis.RedisError, ValueError) as exc:
             self.logger.warning("quota_get_usage_error", error=str(exc))
             return 0
@@ -147,10 +161,23 @@ class QuotaManager:
         }
 
     def _increment(self, key: str, increment: int, ttl_seconds: int) -> int:
-        value = self.redis.incrby(key, increment)
+        value = self._to_int(self.redis.incrby(key, increment))
         if value == increment:
             self.redis.expire(key, ttl_seconds)
         return value
+
+    def _to_int(self, value: Any) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8", errors="ignore")
+            except Exception:
+                return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     def _decrement(self, key: str, decrement: int) -> None:
         try:

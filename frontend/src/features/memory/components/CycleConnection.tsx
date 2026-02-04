@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import { useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
-import { Line } from '@react-three/drei';
+import { useRef } from "react";
+import { useFrame } from "@react-three/fiber";
+import { Line } from "@react-three/drei";
 
 export function CycleConnection({
   points,
@@ -12,9 +12,11 @@ export function CycleConnection({
   const lineRef = useRef<React.ElementRef<typeof Line> | null>(null);
 
   useFrame((state) => {
-    const line = lineRef.current as unknown as { material?: { dashOffset?: number } } | null;
+    const line = lineRef.current as unknown as {
+      material?: { dashOffset?: number };
+    } | null;
     if (!line?.material) return;
-    if (typeof line.material.dashOffset !== 'number') return;
+    if (typeof line.material.dashOffset !== "number") return;
     line.material.dashOffset = -state.clock.elapsedTime * 0.8;
   });
 
@@ -32,4 +34,3 @@ export function CycleConnection({
     />
   );
 }
-

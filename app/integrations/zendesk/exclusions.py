@@ -29,7 +29,9 @@ def _normalize_tags(raw: Any) -> list[str]:
     if raw is None:
         return []
     if isinstance(raw, list):
-        return [str(t).strip() for t in raw if isinstance(t, (str, int)) and str(t).strip()]
+        return [
+            str(t).strip() for t in raw if isinstance(t, (str, int)) and str(t).strip()
+        ]
     if isinstance(raw, str):
         s = raw.strip()
         if not s:

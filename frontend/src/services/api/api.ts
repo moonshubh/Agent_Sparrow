@@ -11,7 +11,12 @@ export interface PrimaryAgentChatRequestBody {
   trace_id?: string;
 }
 
-export type PrimaryAgentStreamEventRole = "assistant" | "tool" | "error" | "system" | "user"; // Added system & user for completeness
+export type PrimaryAgentStreamEventRole =
+  | "assistant"
+  | "tool"
+  | "error"
+  | "system"
+  | "user"; // Added system & user for completeness
 
 export interface PrimaryAgentStreamEvent {
   role: PrimaryAgentStreamEventRole;
@@ -19,7 +24,7 @@ export interface PrimaryAgentStreamEvent {
   trace_id?: string; // Optional: if we decide to send trace_id per event
 }
 
-// --- Research Agent --- 
+// --- Research Agent ---
 export interface ChatMessage {
   id: string;
   type: "user" | "agent";
@@ -34,7 +39,6 @@ export interface ResearchStep {
   description: string;
   status: "completed" | "in-progress";
 }
-
 
 // --- Log Analysis Agent (V2) ---
 
@@ -59,7 +63,7 @@ export interface IdentifiedIssue {
   issue_id: string;
   signature: string;
   occurrences: number;
-  severity: 'High' | 'Medium' | 'Low' | string; // Allow string for flexibility
+  severity: "High" | "Medium" | "Low" | string; // Allow string for flexibility
   root_cause: string;
   user_impact: string;
   first_occurrence?: string | null;
@@ -72,7 +76,7 @@ export interface ProposedSolution {
   solution_summary: string;
   solution_steps: string[];
   references: string[];
-  success_probability: 'High' | 'Medium' | 'Low' | string;
+  success_probability: "High" | "Medium" | "Low" | string;
 }
 
 // Matches backend SupplementalResearch

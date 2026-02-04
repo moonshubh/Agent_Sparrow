@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING, cast
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -25,26 +25,46 @@ from app.core.settings import settings
 try:  # pragma: no cover - optional dependency
     from langgraph.types import Command as LangGraphCommand
 except Exception:  # pragma: no cover
-    LangGraphCommand = None  # type: ignore[assignment]
+
+    class LangGraphCommand:  # type: ignore[no-redef]
+        pass
+
 
 try:
     from langchain.agents.middleware import AgentMiddleware
-    from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
+    from langchain.agents.middleware.types import (
+        ModelRequest,
+        ModelResponse,
+        ToolCallRequest,
+    )
+
     MIDDLEWARE_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
-    AgentMiddleware = object  # type: ignore[assignment]
-    ModelRequest = object  # type: ignore[assignment]
-    ModelResponse = object  # type: ignore[assignment]
-    ToolCallRequest = object  # type: ignore[assignment]
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class ModelRequest:  # type: ignore[no-redef]
+        pass
+
+    class ModelResponse:  # type: ignore[no-redef]
+        pass
+
+    class ToolCallRequest:  # type: ignore[no-redef]
+        pass
+
     MIDDLEWARE_AVAILABLE = False
 
+LangGraphToolRuntimeType: type | None
 try:  # pragma: no cover - optional dependency
-    from langgraph.prebuilt import ToolRuntime as LangGraphToolRuntime
+    from langgraph.prebuilt import ToolRuntime as _LangGraphToolRuntime
+
+    LangGraphToolRuntimeType = _LangGraphToolRuntime
 except Exception:  # pragma: no cover
-    LangGraphToolRuntime = None  # type: ignore[assignment]
+    LangGraphToolRuntimeType = None
 
 if TYPE_CHECKING:  # pragma: no cover
-    from app.agents.harness.store.workspace_store import SparrowWorkspaceStore
+    pass
 
 
 _TASK_TOOL_NAME = "task"
@@ -360,7 +380,9 @@ def _build_memory_context_lines(memories: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _matches_scope(metadata: dict[str, Any], *, scope_key: str, scope_value: str) -> bool:
+def _matches_scope(
+    metadata: dict[str, Any], *, scope_key: str, scope_value: str
+) -> bool:
     if not metadata:
         return False
     for key in (scope_key, scope_key.lower(), scope_key.upper()):
@@ -380,7 +402,9 @@ def _filter_memories_by_scope(
     filtered: list[dict[str, Any]] = []
     for item in memories:
         metadata = item.get("metadata") if isinstance(item, dict) else None
-        if isinstance(metadata, dict) and _matches_scope(metadata, scope_key=scope_key, scope_value=scope_value):
+        if isinstance(metadata, dict) and _matches_scope(
+            metadata, scope_key=scope_key, scope_value=scope_value
+        ):
             filtered.append(item)
     return filtered
 
@@ -448,7 +472,9 @@ async def _maybe_retrieve_memory_context(task: str, state: Any) -> Optional[str]
         logger.warning("subagent_memory_retrieve_failed", error=str(exc))
 
     scope_key, scope_value = _resolve_memory_scope(state)
-    scoped = _filter_memories_by_scope(results or [], scope_key=scope_key, scope_value=scope_value)
+    scoped = _filter_memories_by_scope(
+        results or [], scope_key=scope_key, scope_value=scope_value
+    )
     if scope_key and scope_value and not scoped:
         logger.info(
             "subagent_memory_scope_empty",
@@ -462,7 +488,8 @@ async def _maybe_retrieve_memory_context(task: str, state: Any) -> Optional[str]
         return None
     return "Server memory relevant to this task:\n" + lines
 
-class SubagentWorkspaceBridgeMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object):
+
+class SubagentWorkspaceBridgeMiddleware(AgentMiddleware):
     """Middleware that bridges DeepAgents `task` runs into workspace-backed reports."""
 
     def __init__(
@@ -493,7 +520,9 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
         args = _extract_task_args(tool_call)
         subagent_type = _get_subagent_type(args)
         original_description = _get_task_description(args)
-        tool_call_id = tool_call.get("id") or getattr(getattr(request, "runtime", None), "tool_call_id", None)
+        tool_call_id = tool_call.get("id") or getattr(
+            getattr(request, "runtime", None), "tool_call_id", None
+        )
 
         if not isinstance(tool_call_id, str) or not tool_call_id:
             return await handler(request)
@@ -508,7 +537,9 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
             "report_path": report_path,
         }
 
-        memory_context = await _maybe_retrieve_memory_context(original_description, getattr(request, "state", None))
+        memory_context = await _maybe_retrieve_memory_context(
+            original_description, getattr(request, "state", None)
+        )
         capsule = _build_context_capsule(
             getattr(request, "state", None),
             memory_context=memory_context,
@@ -516,13 +547,17 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
         )
         capsule_json = _json_block(capsule, max_chars=self._capsule_max_chars)
 
-        forwarded = _filter_forwarded_props(_state_get(getattr(request, "state", None), "forwarded_props", {}) or {})
+        forwarded = _filter_forwarded_props(
+            _state_get(getattr(request, "state", None), "forwarded_props", {}) or {}
+        )
         is_zendesk = bool(forwarded.get("is_zendesk_ticket"))
         workspace_lines = [
             "<workspace_instructions>",
         ]
         if not is_zendesk:
-            workspace_lines.append(f"- You MAY write intermediate artifacts under `{run_dir}/...`.")
+            workspace_lines.append(
+                f"- You MAY write intermediate artifacts under `{run_dir}/...`."
+            )
         workspace_lines.extend(
             [
                 f"- Do NOT write to `{report_path}` (the system will overwrite it with your final report).",
@@ -542,20 +577,26 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
         new_tool_call["args"] = new_args
 
         # Enforce strict subagent state allowlist (Claude-style isolation)
-        filtered_state = _build_subagent_state(getattr(request, "state", None), subagent_meta=subagent_meta)
+        filtered_state = _build_subagent_state(
+            getattr(request, "state", None), subagent_meta=subagent_meta
+        )
         runtime = getattr(request, "runtime", None)
         stream_writer = getattr(runtime, "stream_writer", None)
         new_runtime = runtime
         if runtime is not None:
-            runtime_cls = LangGraphToolRuntime or runtime.__class__
+            runtime_cls = (
+                runtime.__class__
+                if LangGraphToolRuntimeType is None
+                else LangGraphToolRuntimeType
+            )
             try:
                 new_runtime = runtime_cls(
                     state=filtered_state,
                     tool_call_id=getattr(runtime, "tool_call_id", None),
-                    config=getattr(runtime, "config", None),
+                    config=cast(Any, getattr(runtime, "config", None)),
                     context=getattr(runtime, "context", None),
                     store=getattr(runtime, "store", None),
-                    stream_writer=getattr(runtime, "stream_writer", None),
+                    stream_writer=cast(Any, getattr(runtime, "stream_writer", None)),
                 )
             except Exception as exc:
                 logger.warning("subagent_runtime_filter_failed", error=str(exc))
@@ -589,14 +630,19 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
             # Persist and replace tool output (Command update from DeepAgents task tool).
             if LangGraphCommand is None:
                 return result
-            if not isinstance(result, LangGraphCommand) or not isinstance(getattr(result, "update", None), dict):
+            if not isinstance(result, LangGraphCommand) or not isinstance(
+                getattr(result, "update", None), dict
+            ):
                 return result
 
             raw_update = dict(getattr(result, "update", None) or {})
             messages = list(raw_update.get("messages") or [])
             update: dict[str, Any] = {"messages": messages}
             for msg in messages:
-                if isinstance(msg, ToolMessage) and getattr(msg, "tool_call_id", None) == tool_call_id:
+                if (
+                    isinstance(msg, ToolMessage)
+                    and getattr(msg, "tool_call_id", None) == tool_call_id
+                ):
                     content = getattr(msg, "content", None)
                     report_text = content if isinstance(content, str) else str(content)
                     break
@@ -614,7 +660,9 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
                         },
                     )
                 except Exception as exc:
-                    logger.warning("subagent_report_write_failed", path=report_path, error=str(exc))
+                    logger.warning(
+                        "subagent_report_write_failed", path=report_path, error=str(exc)
+                    )
                     return LangGraphCommand(
                         graph=getattr(result, "graph", None),
                         update=update,
@@ -629,8 +677,13 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
                 )
                 replaced: list[Any] = []
                 for msg in messages:
-                    if isinstance(msg, ToolMessage) and getattr(msg, "tool_call_id", None) == tool_call_id:
-                        replaced.append(ToolMessage(content=pointer, tool_call_id=tool_call_id))
+                    if (
+                        isinstance(msg, ToolMessage)
+                        and getattr(msg, "tool_call_id", None) == tool_call_id
+                    ):
+                        replaced.append(
+                            ToolMessage(content=pointer, tool_call_id=tool_call_id)
+                        )
                     else:
                         replaced.append(msg)
                 update["messages"] = replaced
@@ -702,21 +755,25 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
 
         tool_calls: list[dict[str, Any]] = []
         for tool_call_id, rec in unread.items():
-            tool_calls.append({
-                "id": f"read_subagent_report_{uuid4().hex}",
-                "name": _READ_WORKSPACE_TOOL_NAME,
-                "args": {
-                    "path": rec["path"],
-                    "offset": 0,
-                    "limit": self._report_read_limit_chars,
-                },
-            })
+            tool_calls.append(
+                {
+                    "id": f"read_subagent_report_{uuid4().hex}",
+                    "name": _READ_WORKSPACE_TOOL_NAME,
+                    "args": {
+                        "path": rec["path"],
+                        "offset": 0,
+                        "limit": self._report_read_limit_chars,
+                    },
+                }
+            )
 
-        tool_calls.append({
-            "id": f"mark_subagent_reports_read_{uuid4().hex}",
-            "name": _MARK_READ_TOOL_NAME,
-            "args": {"report_tool_call_ids": list(unread.keys())},
-        })
+        tool_calls.append(
+            {
+                "id": f"mark_subagent_reports_read_{uuid4().hex}",
+                "name": _MARK_READ_TOOL_NAME,
+                "args": {"report_tool_call_ids": list(unread.keys())},
+            }
+        )
 
         return AIMessage(
             content="",

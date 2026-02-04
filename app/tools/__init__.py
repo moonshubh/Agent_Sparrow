@@ -24,15 +24,15 @@ from app.tools.research_tools import (
 
 __all__ = [
     # FeedMe Knowledge tools
-    'enhanced_mailbird_kb_search',
-    'mailbird_kb_search',
-    'enhanced_mailbird_kb_search_call',
-    'enhanced_mailbird_kb_search_structured',
-    'EnhancedKBSearchInput',
-    'SearchResultSummary',
-    'ENHANCED_KB_SEARCH_TOOL',
-    'LEGACY_KB_SEARCH_TOOL',
+    "enhanced_mailbird_kb_search",
+    "mailbird_kb_search",
+    "enhanced_mailbird_kb_search_call",
+    "enhanced_mailbird_kb_search_structured",
+    "EnhancedKBSearchInput",
+    "SearchResultSummary",
+    "ENHANCED_KB_SEARCH_TOOL",
+    "LEGACY_KB_SEARCH_TOOL",
     # Research tools
-    'FirecrawlTool',
-    'TavilySearchTool',
+    "FirecrawlTool",
+    "TavilySearchTool",
 ]

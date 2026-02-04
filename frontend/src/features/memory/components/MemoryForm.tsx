@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
-import type { User } from '@supabase/supabase-js';
-import { motion, AnimatePresence } from 'framer-motion';
-import { MemoryTipTapEditor } from './MemoryTipTapEditor';
+import React, { useMemo, useState, useCallback, useEffect } from "react";
+import type { User } from "@supabase/supabase-js";
+import { motion, AnimatePresence } from "framer-motion";
+import { MemoryTipTapEditor } from "./MemoryTipTapEditor";
 import {
   X,
   Save,
@@ -18,15 +18,15 @@ import {
   Link2,
   FileText,
   Zap,
-} from 'lucide-react';
-import { useAddMemory, useUpdateMemory } from '../hooks';
-import type { Memory, SourceType } from '../types';
-import { SourceBadge } from './SourceBadge';
-import { useAuth } from '@/shared/contexts/AuthContext';
-import { ADMIN_EDITOR_EMAILS } from '../lib/memoryFlags';
-import { normalizeLegacyMemoryContent } from '../lib/legacyMemoryFormatting';
-import { toast } from 'sonner';
-import type { Editor } from '@tiptap/core';
+} from "lucide-react";
+import { useAddMemory, useUpdateMemory } from "../hooks";
+import type { Memory, SourceType } from "../types";
+import { SourceBadge } from "./SourceBadge";
+import { useAuth } from "@/shared/contexts/AuthContext";
+import { ADMIN_EDITOR_EMAILS } from "../lib/memoryFlags";
+import { normalizeLegacyMemoryContent } from "../lib/legacyMemoryFormatting";
+import { toast } from "sonner";
+import type { Editor } from "@tiptap/core";
 
 interface MemoryFormProps {
   onClose: () => void;
@@ -36,26 +36,27 @@ interface MemoryFormProps {
 
 // Spring animation config
 const springConfig = {
-  type: 'spring' as const,
+  type: "spring" as const,
   stiffness: 400,
   damping: 30,
 };
 
 const isPlainMetadata = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const getUserDisplayName = (user: User | null): string | null => {
   if (!user) return null;
 
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
-  const fullName = typeof meta.full_name === 'string' ? meta.full_name.trim() : '';
-  const name = typeof meta.name === 'string' ? meta.name.trim() : '';
+  const fullName =
+    typeof meta.full_name === "string" ? meta.full_name.trim() : "";
+  const name = typeof meta.name === "string" ? meta.name.trim() : "";
 
   if (fullName) return fullName;
   if (name) return name;
 
   const email = user.email?.trim();
-  if (email) return email.split('@')[0] || email;
+  if (email) return email.split("@")[0] || email;
 
   return user.id || null;
 };
@@ -64,17 +65,17 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const isEditMode = Boolean(memory);
   const { user } = useAuth();
   const initialContent = useMemo(
-    () => normalizeLegacyMemoryContent(memory?.content ?? ''),
-    [memory?.content]
+    () => normalizeLegacyMemoryContent(memory?.content ?? ""),
+    [memory?.content],
   );
   const [content, setContent] = useState(initialContent);
   const [sourceType, setSourceType] = useState<SourceType>(
-    memory?.source_type ?? 'manual'
+    memory?.source_type ?? "manual",
   );
   const [metadata, setMetadata] = useState(
     memory?.metadata && Object.keys(memory.metadata).length > 0
       ? JSON.stringify(memory.metadata, null, 2)
-      : ''
+      : "",
   );
   const [error, setError] = useState<string | null>(null);
   const [metadataError, setMetadataError] = useState<string | null>(null);
@@ -89,7 +90,10 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const updateMemory = useUpdateMemory();
   const isSaving = isEditMode ? updateMemory.isPending : addMemory.isPending;
   const editorName = useMemo(() => getUserDisplayName(user), [user]);
-  const editorEmail = useMemo(() => (user?.email ? user.email.toLowerCase() : null), [user]);
+  const editorEmail = useMemo(
+    () => (user?.email ? user.email.toLowerCase() : null),
+    [user],
+  );
 
   const handleBold = useCallback(() => {
     editor?.chain().focus().toggleBold().run();
@@ -110,8 +114,8 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
     editor?.chain().focus().toggleOrderedList().run();
   }, [editor]);
   const handleLink = useCallback(() => {
-    const previousUrl = editor?.getAttributes('link').href || '';
-    const url = window.prompt('Enter URL', previousUrl);
+    const previousUrl = editor?.getAttributes("link").href || "";
+    const url = window.prompt("Enter URL", previousUrl);
     if (url === null) return;
     if (!url) {
       editor?.chain().focus().unsetLink().run();
@@ -123,28 +127,32 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const handlePrettifyMetadata = useCallback(() => {
     const trimmed = metadata.trim();
     if (!trimmed) {
-      setMetadata('');
+      setMetadata("");
       setMetadataError(null);
       return;
     }
 
     try {
       const parsed: unknown = JSON.parse(trimmed);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
         setMetadataExpanded(true);
-        setMetadataError('Metadata must be a JSON object');
+        setMetadataError("Metadata must be a JSON object");
         return;
       }
       setMetadata(JSON.stringify(parsed, null, 2));
       setMetadataError(null);
     } catch {
       setMetadataExpanded(true);
-      setMetadataError('Invalid JSON');
+      setMetadataError("Invalid JSON");
     }
   }, [metadata]);
 
   const handleClearMetadata = useCallback(() => {
-    setMetadata('');
+    setMetadata("");
     setMetadataError(null);
   }, []);
 
@@ -158,7 +166,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
       const trimmedContent = editorContent.trim();
 
       if (!trimmedContent) {
-        setError('Content is required');
+        setError("Content is required");
         return;
       }
 
@@ -170,21 +178,25 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
             // Validate that parsed result is an object
             if (!isPlainMetadata(parsed)) {
               setMetadataExpanded(true);
-              setMetadataError('Metadata must be a JSON object');
-              setError('Metadata must be a JSON object');
+              setMetadataError("Metadata must be a JSON object");
+              setError("Metadata must be a JSON object");
               return;
             }
             parsedMetadata = parsed;
           } catch {
             setMetadataExpanded(true);
-            setMetadataError('Invalid JSON');
-            setError('Invalid JSON in metadata field');
+            setMetadataError("Invalid JSON");
+            setError("Invalid JSON in metadata field");
             return;
           }
         }
 
-        const metadataBase = isPlainMetadata(parsedMetadata) ? parsedMetadata : {};
-        const isAllowedEditor = editorEmail ? ADMIN_EDITOR_EMAILS.has(editorEmail) : false;
+        const metadataBase = isPlainMetadata(parsedMetadata)
+          ? parsedMetadata
+          : {};
+        const isAllowedEditor = editorEmail
+          ? ADMIN_EDITOR_EMAILS.has(editorEmail)
+          : false;
         const metadataWithEditor =
           isEditMode && isAllowedEditor
             ? {
@@ -205,20 +217,22 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
               metadata: metadataWithEditor,
             },
           });
-          toast.success('Memory updated');
+          toast.success("Memory updated");
         } else {
           await addMemory.mutateAsync({
             content: trimmedContent,
             source_type: sourceType,
             metadata: parsedMetadata,
           });
-          toast.success('Memory saved');
+          toast.success("Memory saved");
         }
 
         onSuccess?.();
         onClose();
       } catch (err: unknown) {
-        const defaultMessage = isEditMode ? 'Failed to update memory' : 'Failed to add memory';
+        const defaultMessage = isEditMode
+          ? "Failed to update memory"
+          : "Failed to add memory";
         setError(err instanceof Error ? err.message : defaultMessage);
       }
     },
@@ -235,7 +249,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
       editorEmail,
       onSuccess,
       onClose,
-    ]
+    ],
   );
 
   const metadataKeyCount = useMemo(() => {
@@ -274,9 +288,13 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
         {/* Header */}
         <div className="add-memory-header">
           <div className="add-memory-header-content">
-            <h2 className="add-memory-title">{isEditMode ? 'Edit Memory' : 'New Memory'}</h2>
+            <h2 className="add-memory-title">
+              {isEditMode ? "Edit Memory" : "New Memory"}
+            </h2>
             <p className="add-memory-subtitle">
-              {isEditMode ? 'Refine knowledge for the agent' : 'Add knowledge to the graph'}
+              {isEditMode
+                ? "Refine knowledge for the agent"
+                : "Add knowledge to the graph"}
             </p>
           </div>
           <div className="add-memory-header-right">
@@ -353,7 +371,9 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
                 <Link2 size={14} />
               </motion.button>
               <div className="add-memory-tool-divider" />
-              <span className="add-memory-char-count">{content.length} chars</span>
+              <span className="add-memory-char-count">
+                {content.length} chars
+              </span>
             </div>
             <motion.button
               className="add-memory-close"
@@ -375,7 +395,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
                 <motion.div
                   className="add-memory-error"
                   initial={{ opacity: 0, y: -10, height: 0 }}
-                  animate={{ opacity: 1, y: 0, height: 'auto' }}
+                  animate={{ opacity: 1, y: 0, height: "auto" }}
                   exit={{ opacity: 0, y: -10, height: 0 }}
                 >
                   <AlertCircle size={16} />
@@ -404,7 +424,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
                 <motion.div
                   className="add-memory-meta-panel"
                   initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
+                  animate={{ height: "auto", opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
                   transition={{ duration: 0.2 }}
                 >
@@ -457,16 +477,16 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
                 <div className="add-memory-source-toggle">
                   <button
                     type="button"
-                    className={`add-memory-source-pill ${sourceType === 'manual' ? 'active' : ''}`}
-                    onClick={() => setSourceType('manual')}
+                    className={`add-memory-source-pill ${sourceType === "manual" ? "active" : ""}`}
+                    onClick={() => setSourceType("manual")}
                   >
                     <FileText size={14} />
                     Manual
                   </button>
                   <button
                     type="button"
-                    className={`add-memory-source-pill ${sourceType === 'auto_extracted' ? 'active' : ''}`}
-                    onClick={() => setSourceType('auto_extracted')}
+                    className={`add-memory-source-pill ${sourceType === "auto_extracted" ? "active" : ""}`}
+                    onClick={() => setSourceType("auto_extracted")}
                   >
                     <Zap size={14} />
                     Auto
@@ -478,11 +498,13 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
             {/* Collapsible Metadata */}
             <button
               type="button"
-              className={`add-memory-meta-toggle ${metadataExpanded ? 'expanded' : ''} ${metadataKeyCount > 0 ? 'has-data' : ''}`}
+              className={`add-memory-meta-toggle ${metadataExpanded ? "expanded" : ""} ${metadataKeyCount > 0 ? "has-data" : ""}`}
               onClick={() => setMetadataExpanded(!metadataExpanded)}
             >
               <Code size={14} />
-              <span>Metadata{metadataKeyCount > 0 ? ` (${metadataKeyCount})` : ''}</span>
+              <span>
+                Metadata{metadataKeyCount > 0 ? ` (${metadataKeyCount})` : ""}
+              </span>
               <ChevronDown size={14} className="add-memory-meta-chevron" />
             </button>
 
@@ -509,14 +531,18 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
                     <motion.div
                       className="add-memory-spinner"
                       animate={{ rotate: 360 }}
-                      transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                      transition={{
+                        duration: 1,
+                        repeat: Infinity,
+                        ease: "linear",
+                      }}
                     />
                     <span>Saving...</span>
                   </>
                 ) : (
                   <>
                     <Save size={16} />
-                    <span>{isEditMode ? 'Update Memory' : 'Save Memory'}</span>
+                    <span>{isEditMode ? "Update Memory" : "Save Memory"}</span>
                   </>
                 )}
               </motion.button>

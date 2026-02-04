@@ -33,8 +33,11 @@ from fastapi.responses import RedirectResponse, Response
 from app.core.security import get_current_user, TokenPayload
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client, SupabaseClient
-from app.memory.title import derive_memory_title, ensure_memory_title
-from app.memory.memory_ui_service import MemoryUIService, get_memory_ui_service as _get_service
+from app.memory.title import derive_memory_title
+from app.memory.memory_ui_service import (
+    MemoryUIService,
+    get_memory_ui_service as _get_service,
+)
 
 from .schemas import (
     AddMemoryRequest,
@@ -91,8 +94,9 @@ MEMORY_ASSET_SIGNED_TTL_SEC = int(os.getenv("MEMORY_ASSET_SIGNED_TTL_SEC", "900"
 # Auth Dependencies
 # ============================================================================
 
+
 async def require_admin(
-    current_user: Annotated[TokenPayload, Depends(get_current_user)]
+    current_user: Annotated[TokenPayload, Depends(get_current_user)],
 ) -> TokenPayload:
     """
     Dependency that requires the user to have admin role.
@@ -106,7 +110,7 @@ async def require_admin(
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required for this operation"
+            detail="Admin access required for this operation",
         )
     return current_user
 
@@ -114,6 +118,7 @@ async def require_admin(
 # ============================================================================
 # Service Dependency
 # ============================================================================
+
 
 def get_memory_ui_service() -> MemoryUIService:
     """Get the MemoryUIService singleton instance."""
@@ -163,7 +168,9 @@ async def get_memory_asset(
     supabase: SupabaseClient = Depends(get_supabase_client),
 ) -> Response:
     if not bucket or not object_path:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found"
+        )
     if not settings.supabase_service_key:
         logger.warning(
             "memory_asset_service_key_missing bucket=%s path=%s",
@@ -176,11 +183,20 @@ async def get_memory_asset(
             lambda: supabase.client.storage.from_(bucket).download(object_path)
         )
     except Exception as exc:
-        logger.debug("memory_asset_download_failed bucket=%s path=%s error=%s", bucket, object_path, str(exc)[:180])
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found") from exc
+        logger.debug(
+            "memory_asset_download_failed bucket=%s path=%s error=%s",
+            bucket,
+            object_path,
+            str(exc)[:180],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found"
+        ) from exc
 
     if data is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found"
+        )
 
     mime_type, _ = mimetypes.guess_type(object_path)
     return Response(content=data, media_type=mime_type or "application/octet-stream")
@@ -203,7 +219,9 @@ async def get_memory_asset_signed(
     supabase: SupabaseClient = Depends(get_supabase_client),
 ) -> dict[str, Any]:
     if not bucket or not object_path:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found"
+        )
 
     try:
         signed = await supabase._exec(
@@ -220,7 +238,9 @@ async def get_memory_asset_signed(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found"
             )
 
-        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=MEMORY_ASSET_SIGNED_TTL_SEC)).isoformat()
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=MEMORY_ASSET_SIGNED_TTL_SEC)
+        ).isoformat()
         return {
             "signed_url": signed_url,
             "expires_at": expires_at,
@@ -240,11 +260,7 @@ def _escape_like_pattern(value: str) -> str:
     Escape LIKE metacharacters (% _ \\) to avoid surprising matches.
     Supabase parameterizes queries, but the LIKE pattern itself is user-controlled.
     """
-    return (
-        value.replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
-    )
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 @router.get(
@@ -277,8 +293,9 @@ async def list_memories(
             offset=int(offset),
             sort_order=sort_order,
         )
+        items = [MemoryRecord.model_validate(item) for item in memories]
         return MemoryListResponse(
-            items=memories,
+            items=items,
             total=total,
             limit=int(limit),
             offset=int(offset),
@@ -419,7 +436,9 @@ async def list_relationships(
         401: {"description": "Authentication required"},
         403: {"description": "Admin access required"},
         404: {"description": "Relationship not found"},
-        409: {"description": "Relationship update conflicts with existing relationship"},
+        409: {
+            "description": "Relationship update conflicts with existing relationship"
+        },
         500: {"description": "Internal server error"},
     },
 )
@@ -543,9 +562,15 @@ def _infer_relationship_type(text: str) -> str:
 
     haystack = (text or "").lower()
     patterns: list[tuple[str, tuple[str, ...]]] = [
-        ("RESOLVED_BY", ("resolved by", "fix", "fixed", "workaround", "solution", "resolve")),
+        (
+            "RESOLVED_BY",
+            ("resolved by", "fix", "fixed", "workaround", "solution", "resolve"),
+        ),
         ("REQUIRES", ("requires", "requirement", "needs", "must have", "depends on")),
-        ("SUPERSEDES", ("supersedes", "replaces", "replaced by", "deprecated", "newer version")),
+        (
+            "SUPERSEDES",
+            ("supersedes", "replaces", "replaced by", "deprecated", "newer version"),
+        ),
         ("CAUSED_BY", ("caused by", "due to", "root cause", "because of")),
         ("REPORTED_BY", ("reported by", "customer", "user reported", "reported this")),
         ("WORKS_ON", ("works on", "compatible with", "supported on")),
@@ -606,7 +631,7 @@ def _sanitize_llm_json(raw: str) -> str:
         if "\n" in trimmed:
             trimmed = trimmed.split("\n", 1)[1].strip()
         if trimmed.endswith("```"):
-            trimmed = trimmed[: -3].strip()
+            trimmed = trimmed[:-3].strip()
     # Best-effort: find first "{" and last "}".
     start = trimmed.find("{")
     end = trimmed.rfind("}")
@@ -615,7 +640,7 @@ def _sanitize_llm_json(raw: str) -> str:
     return trimmed
 
 
-_JSON_UNQUOTED_KEY_RE = re.compile(r'([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:')
+_JSON_UNQUOTED_KEY_RE = re.compile(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:")
 _JSON_SINGLE_QUOTED_VALUE_RE = re.compile(r":\s*'([^']*)'")
 _JSON_TRAILING_COMMA_RE = re.compile(r",(\s*[}\\]])")
 
@@ -630,7 +655,7 @@ def _repair_json_like(raw: str) -> str:
 
     # Convert single-quoted string values to JSON strings.
     repaired = _JSON_SINGLE_QUOTED_VALUE_RE.sub(
-        lambda m: f': {json.dumps(m.group(1))}',
+        lambda m: f": {json.dumps(m.group(1))}",
         repaired,
     )
 
@@ -761,9 +786,7 @@ async def merge_relationships(
             .execute()
         )
         conflict_ids = {
-            UUID(str(r.get("id")))
-            for r in list(conflict.data or [])
-            if r.get("id")
+            UUID(str(r.get("id"))) for r in list(conflict.data or []) if r.get("id")
         }
         if conflict_ids and not conflict_ids.intersection(set(relationship_ids)):
             raise HTTPException(
@@ -862,7 +885,9 @@ async def merge_relationships(
             )
 
         insert_resp = await supabase._exec(
-            lambda: supabase.client.table("memory_relationships").insert(payload).execute()
+            lambda: supabase.client.table("memory_relationships")
+            .insert(payload)
+            .execute()
         )
         inserted_rows = list(insert_resp.data or [])
         if not inserted_rows:
@@ -1115,7 +1140,9 @@ async def split_relationship_preview(
         if not groups:
             return []
 
-        sorted_groups = sorted(groups.items(), key=lambda item: len(item[1]), reverse=True)
+        sorted_groups = sorted(
+            groups.items(), key=lambda item: len(item[1]), reverse=True
+        )
         suggestions: list[SplitRelationshipClusterSuggestion] = []
 
         for cluster_index, (rtype, rows_in_group) in enumerate(
@@ -1139,7 +1166,9 @@ async def split_relationship_preview(
             relationship_label = rtype.replace("_", " ").title()
             name = sample_title
             if not name or name == "Untitled memory":
-                name = relationship_label if rtype != "RELATED_TO" else "Related context"
+                name = (
+                    relationship_label if rtype != "RELATED_TO" else "Related context"
+                )
 
             memory_ids_cluster: list[UUID] = []
             for row in rows_in_group:
@@ -1158,6 +1187,7 @@ async def split_relationship_preview(
                     mid = row.get("id")
                     if not mid:
                         continue
+                    score = row.get("confidence_score")
                     try:
                         samples.append(
                             SplitRelationshipClusterSample(
@@ -1165,9 +1195,11 @@ async def split_relationship_preview(
                                 content_preview=_truncate(
                                     str(row.get("content") or ""), 280
                                 ),
-                                confidence_score=float(row.get("confidence_score"))
-                                if isinstance(row.get("confidence_score"), (int, float))
-                                else None,
+                                confidence_score=(
+                                    float(score)
+                                    if isinstance(score, (int, float))
+                                    else None
+                                ),
                                 created_at=_parse_iso_timestamp(row.get("created_at")),
                             )
                         )
@@ -1223,13 +1255,13 @@ async def split_relationship_preview(
             )
 
         if request.use_ai and not settings.gemini_api_key:
-            ai_error = "AI enrichment unavailable: missing GEMINI_API_KEY / GOOGLE_API_KEY."
+            ai_error = (
+                "AI enrichment unavailable: missing GEMINI_API_KEY / GOOGLE_API_KEY."
+            )
 
         if request.use_ai and settings.gemini_api_key:
             if len(suggestions) <= 1:
-                ai_error = (
-                    "AI enrichment skipped (not enough clusters to meaningfully refine)."
-                )
+                ai_error = "AI enrichment skipped (not enough clusters to meaningfully refine)."
             else:
                 try:
                     from app.agents.unified.provider_factory import build_chat_model
@@ -1252,7 +1284,9 @@ async def split_relationship_preview(
                                         "name": {"type": "string"},
                                         "relationship_type": {
                                             "type": "string",
-                                            "enum": [rt.value for rt in RelationshipType],
+                                            "enum": [
+                                                rt.value for rt in RelationshipType
+                                            ],
                                         },
                                         "direction": {
                                             "type": "string",
@@ -1323,12 +1357,12 @@ async def split_relationship_preview(
                         "- cluster_id (number)",
                         "- name (short label)",
                         "- relationship_type (one of allowed)",
-                        "- direction (either \"A_TO_B\" or \"B_TO_A\")",
+                        '- direction (either "A_TO_B" or "B_TO_A")',
                         "- weight (number 0-10)",
                         "",
                         "Naming guidance:",
                         "- Prefer human-readable names derived from the memory titles/summaries below.",
-                        "- Avoid IDs, UUIDs, ticket numbers, and generic labels like \"Cluster 1\".",
+                        '- Avoid IDs, UUIDs, ticket numbers, and generic labels like "Cluster 1".',
                         "",
                         "Clusters:",
                     ]
@@ -1388,7 +1422,9 @@ async def split_relationship_preview(
                             rtype = item.get("relationship_type")
                             if isinstance(rtype, str) and rtype.strip():
                                 try:
-                                    s.relationship_type = RelationshipType(rtype.strip())
+                                    s.relationship_type = RelationshipType(
+                                        rtype.strip()
+                                    )
                                 except ValueError:
                                     continue
 
@@ -1400,9 +1436,9 @@ async def split_relationship_preview(
                                 s.source_entity_id = UUID(source_id)
                                 s.target_entity_id = UUID(target_id)
 
-                            weight = item.get("weight")
-                            if isinstance(weight, (int, float)):
-                                s.weight = float(max(0.0, min(10.0, weight)))
+                            item_weight = item.get("weight")
+                            if isinstance(item_weight, (int, float)):
+                                s.weight = float(max(0.0, min(10.0, item_weight)))
 
                         used_ai = True
                 except Exception as exc:
@@ -1486,8 +1522,10 @@ async def split_relationship_preview(
     for idx, label in enumerate(labels):
         clusters_by_label.setdefault(label, []).append(idx)
 
-    suggestions: list[SplitRelationshipClusterSuggestion] = []
-    sorted_labels = sorted(clusters_by_label.items(), key=lambda item: len(item[1]), reverse=True)
+    cluster_suggestions: list[SplitRelationshipClusterSuggestion] = []
+    sorted_labels = sorted(
+        clusters_by_label.items(), key=lambda item: len(item[1]), reverse=True
+    )
 
     for cluster_index, (_, indices) in enumerate(sorted_labels):
         cluster_text = "\n".join(
@@ -1516,10 +1554,16 @@ async def split_relationship_preview(
         relationship_label = inferred_type.replace("_", " ").title()
         name = sample_title
         if not name or name == "Untitled memory":
-            name = relationship_label if inferred_type != "RELATED_TO" else "Related context"
+            name = (
+                relationship_label
+                if inferred_type != "RELATED_TO"
+                else "Related context"
+            )
 
         memory_ids_cluster = [
-            UUID(str(mem_by_idx[i].get("id"))) for i in indices if mem_by_idx[i].get("id")
+            UUID(str(mem_by_idx[i].get("id")))
+            for i in indices
+            if mem_by_idx[i].get("id")
         ]
 
         samples: list[SplitRelationshipClusterSample] = []
@@ -1530,18 +1574,21 @@ async def split_relationship_preview(
                 mid = row.get("id")
                 if not mid:
                     continue
+                confidence_value = row.get("confidence_score")
                 samples.append(
                     SplitRelationshipClusterSample(
                         id=UUID(str(mid)),
                         content_preview=_truncate(str(row.get("content") or ""), 280),
-                        confidence_score=float(row.get("confidence_score"))
-                        if isinstance(row.get("confidence_score"), (int, float))
-                        else None,
+                        confidence_score=(
+                            float(confidence_value)
+                            if isinstance(confidence_value, (int, float))
+                            else None
+                        ),
                         created_at=_parse_iso_timestamp(row.get("created_at")),
                     )
                 )
 
-        suggestions.append(
+        cluster_suggestions.append(
             SplitRelationshipClusterSuggestion(
                 cluster_id=cluster_index,
                 name=name,
@@ -1556,12 +1603,12 @@ async def split_relationship_preview(
         )
 
     # Assign memories without embeddings to the closest inferred relationship_type cluster.
-    if mem_no_embedding and suggestions:
+    if mem_no_embedding and cluster_suggestions:
         by_type: dict[str, SplitRelationshipClusterSuggestion] = {}
-        for s in suggestions:
+        for s in cluster_suggestions:
             by_type[s.relationship_type.value] = s
 
-        default_cluster = suggestions[0]
+        default_cluster = cluster_suggestions[0]
         sample_limit = int(request.samples_per_cluster)
 
         for row in mem_no_embedding:
@@ -1583,13 +1630,18 @@ async def split_relationship_preview(
 
             if sample_limit > 0 and len(target_cluster.samples) < sample_limit:
                 try:
+                    confidence_value = row.get("confidence_score")
                     target_cluster.samples.append(
                         SplitRelationshipClusterSample(
                             id=memory_uuid,
-                            content_preview=_truncate(str(row.get("content") or ""), 280),
-                            confidence_score=float(row.get("confidence_score"))
-                            if isinstance(row.get("confidence_score"), (int, float))
-                            else None,
+                            content_preview=_truncate(
+                                str(row.get("content") or ""), 280
+                            ),
+                            confidence_score=(
+                                float(confidence_value)
+                                if isinstance(confidence_value, (int, float))
+                                else None
+                            ),
                             created_at=_parse_iso_timestamp(row.get("created_at")),
                         )
                     )
@@ -1597,19 +1649,23 @@ async def split_relationship_preview(
                     continue
 
     used_ai = False
-    model_id: str | None = None
-    ai_error: str | None = None
+    cluster_model_id: str | None = None
+    cluster_ai_error: str | None = None
 
     if request.use_ai and not settings.gemini_api_key:
-        ai_error = "AI enrichment unavailable: missing GEMINI_API_KEY / GOOGLE_API_KEY."
+        cluster_ai_error = (
+            "AI enrichment unavailable: missing GEMINI_API_KEY / GOOGLE_API_KEY."
+        )
 
-    if request.use_ai and settings.gemini_api_key and len(suggestions) > 1:
+    if request.use_ai and settings.gemini_api_key and len(cluster_suggestions) > 1:
         try:
             from app.agents.unified.provider_factory import build_chat_model
             from app.core.config import get_registry
 
             registry = get_registry()
-            model_id = getattr(registry, "memory_clustering", registry.coordinator_google).id
+            cluster_model_id = getattr(
+                registry, "memory_clustering", registry.coordinator_google
+            ).id
 
             response_schema = {
                 "type": "object",
@@ -1625,7 +1681,10 @@ async def split_relationship_preview(
                                     "type": "string",
                                     "enum": [rt.value for rt in RelationshipType],
                                 },
-                                "direction": {"type": "string", "enum": ["A_TO_B", "B_TO_A"]},
+                                "direction": {
+                                    "type": "string",
+                                    "enum": ["A_TO_B", "B_TO_A"],
+                                },
                                 "weight": {"type": "number"},
                             },
                             "required": [
@@ -1645,7 +1704,7 @@ async def split_relationship_preview(
 
             llm_base = build_chat_model(
                 provider="google",
-                model=model_id,
+                model=cluster_model_id,
                 role="memory_clustering",
             )
             try:
@@ -1665,10 +1724,18 @@ async def split_relationship_preview(
                 response_schema=response_schema,
             )
 
-            entity_a_label = str(entity_meta.get(source_id, {}).get("display_label") or entity_meta.get(source_id, {}).get("entity_name") or source_id)
-            entity_b_label = str(entity_meta.get(target_id, {}).get("display_label") or entity_meta.get(target_id, {}).get("entity_name") or target_id)
+            entity_a_label = str(
+                entity_meta.get(source_id, {}).get("display_label")
+                or entity_meta.get(source_id, {}).get("entity_name")
+                or source_id
+            )
+            entity_b_label = str(
+                entity_meta.get(target_id, {}).get("display_label")
+                or entity_meta.get(target_id, {}).get("entity_name")
+                or target_id
+            )
 
-            prompt_lines: list[str] = [
+            cluster_prompt_lines: list[str] = [
                 "You are helping split a knowledge-graph edge into clearer relationship types.",
                 "Return STRICT JSON only. No markdown. No commentary.",
                 "",
@@ -1683,34 +1750,38 @@ async def split_relationship_preview(
                 "- cluster_id (number)",
                 "- name (short label)",
                 "- relationship_type (one of allowed)",
-                "- direction (either \"A_TO_B\" or \"B_TO_A\")",
+                '- direction (either "A_TO_B" or "B_TO_A")',
                 "- weight (number 0-10)",
                 "",
                 "Naming guidance:",
                 "- Prefer human-readable names derived from the memory titles/summaries below.",
-                "- Avoid IDs, UUIDs, ticket numbers, and generic labels like \"Cluster 1\".",
+                '- Avoid IDs, UUIDs, ticket numbers, and generic labels like "Cluster 1".',
                 "",
                 "Clusters:",
             ]
 
-            for s in suggestions:
-                prompt_lines.append(f"- cluster_id={s.cluster_id}")
-                prompt_lines.append(f"  * heuristic_name={s.name!r}")
-                prompt_lines.append(f"  * heuristic_relationship_type={s.relationship_type.value!r}")
-                prompt_lines.append(
+            for s in cluster_suggestions:
+                cluster_prompt_lines.append(f"- cluster_id={s.cluster_id}")
+                cluster_prompt_lines.append(f"  * heuristic_name={s.name!r}")
+                cluster_prompt_lines.append(
+                    f"  * heuristic_relationship_type={s.relationship_type.value!r}"
+                )
+                cluster_prompt_lines.append(
                     f"  * heuristic_direction={'A_TO_B' if s.source_entity_id == UUID(source_id) else 'B_TO_A'}"
                 )
                 for sample in s.samples[:2]:
-                    sample_title = derive_memory_title(sample.content_preview, max_length=72)
+                    sample_title = derive_memory_title(
+                        sample.content_preview, max_length=72
+                    )
                     sample_preview = _truncate(str(sample.content_preview or ""), 260)
-                    prompt_lines.append(f"  * sample_title: {sample_title!r}")
-                    prompt_lines.append(f"    sample_text: {sample_preview!r}")
+                    cluster_prompt_lines.append(f"  * sample_title: {sample_title!r}")
+                    cluster_prompt_lines.append(f"    sample_text: {sample_preview!r}")
 
-            prompt_lines.append("")
-            prompt_lines.append('Output JSON as: {"clusters":[...]}')
+            cluster_prompt_lines.append("")
+            cluster_prompt_lines.append('Output JSON as: {"clusters":[...]}')
 
             response = await asyncio.wait_for(
-                llm.ainvoke("\n".join(prompt_lines)),
+                llm.ainvoke("\n".join(cluster_prompt_lines)),
                 timeout=24.0,
             )
             raw_text = _llm_content_to_text(getattr(response, "content", ""))
@@ -1718,14 +1789,14 @@ async def split_relationship_preview(
             if not data:
                 raise ValueError("LLM returned invalid JSON for split preview")
 
-            clusters_data: Any = None
+            cluster_clusters_data: Any = None
             if isinstance(data, dict):
-                clusters_data = data.get("clusters")
+                cluster_clusters_data = data.get("clusters")
             elif isinstance(data, list):
-                clusters_data = data
-            if isinstance(clusters_data, list):
-                by_id = {s.cluster_id: s for s in suggestions}
-                for item in clusters_data:
+                cluster_clusters_data = data
+            if isinstance(cluster_clusters_data, list):
+                by_id = {s.cluster_id: s for s in cluster_suggestions}
+                for item in cluster_clusters_data:
                     if not isinstance(item, dict):
                         continue
                     cid = item.get("cluster_id")
@@ -1752,24 +1823,28 @@ async def split_relationship_preview(
                         s.source_entity_id = UUID(source_id)
                         s.target_entity_id = UUID(target_id)
 
-                    weight = item.get("weight")
-                    if isinstance(weight, (int, float)):
-                        s.weight = float(max(0.0, min(10.0, weight)))
+                    item_weight = item.get("weight")
+                    if isinstance(item_weight, (int, float)):
+                        s.weight = float(max(0.0, min(10.0, item_weight)))
 
                 used_ai = True
         except Exception as exc:
             logger.exception(
                 "Split preview AI enrichment failed",
-                extra={"model_id": model_id},
+                extra={"model_id": cluster_model_id},
             )
             if isinstance(exc, asyncio.TimeoutError):
-                ai_error = "AI enrichment timed out. Using heuristic labels."
+                cluster_ai_error = "AI enrichment timed out. Using heuristic labels."
             else:
                 message = str(exc).lower()
-                if "quota" in message or "rate" in message or "resourceexhausted" in message:
-                    ai_error = "AI enrichment unavailable (quota/rate-limited). Using heuristic labels."
+                if (
+                    "quota" in message
+                    or "rate" in message
+                    or "resourceexhausted" in message
+                ):
+                    cluster_ai_error = "AI enrichment unavailable (quota/rate-limited). Using heuristic labels."
                 else:
-                    ai_error = "AI enrichment failed. Using heuristic labels."
+                    cluster_ai_error = "AI enrichment failed. Using heuristic labels."
             used_ai = False
 
     return SplitRelationshipPreviewResponse(
@@ -1777,10 +1852,10 @@ async def split_relationship_preview(
         source_entity_id=UUID(source_id),
         target_entity_id=UUID(target_id),
         existing_relationship_ids=existing_relationship_ids,
-        clusters=suggestions,
+        clusters=cluster_suggestions,
         used_ai=used_ai,
-        ai_model_id=model_id if used_ai else None,
-        ai_error=ai_error,
+        ai_model_id=cluster_model_id if used_ai else None,
+        ai_error=cluster_ai_error,
     )
 
 
@@ -1919,10 +1994,14 @@ async def analyze_relationship(
 
     # Fetch top neighbor edges for both endpoints.
     neighbor_rows_a = (
-        await _get_neighbor_rows(source_id, target_id) if request.max_neighbor_edges else []
+        await _get_neighbor_rows(source_id, target_id)
+        if request.max_neighbor_edges
+        else []
     )
     neighbor_rows_b = (
-        await _get_neighbor_rows(target_id, source_id) if request.max_neighbor_edges else []
+        await _get_neighbor_rows(target_id, source_id)
+        if request.max_neighbor_edges
+        else []
     )
     neighbor_rows = neighbor_rows_a + neighbor_rows_b
 
@@ -1997,7 +2076,9 @@ async def analyze_relationship(
             if not isinstance(rtype, str) or not rtype:
                 continue
             occ = row.get("occurrence_count")
-            pair_types[rtype] = pair_types.get(rtype, 0) + (int(occ) if isinstance(occ, int) else 1)
+            pair_types[rtype] = pair_types.get(rtype, 0) + (
+                int(occ) if isinstance(occ, int) else 1
+            )
 
         lines: list[str] = []
         lines.append("# Relationship analysis (heuristic)")
@@ -2039,9 +2120,13 @@ async def analyze_relationship(
 
         lines.append("")
         lines.append("## Recommended next steps")
-        lines.append("- Use **Split (Preview)** to explore whether this edge should be split into multiple relationship types.")
+        lines.append(
+            "- Use **Split (Preview)** to explore whether this edge should be split into multiple relationship types."
+        )
         lines.append("- Use **Show Evidence** to review shared memories for this pair.")
-        lines.append("- Use **Merge relationships** if multiple rows represent the same semantic relationship.")
+        lines.append(
+            "- Use **Merge relationships** if multiple rows represent the same semantic relationship."
+        )
         return "\n".join(lines)
 
     def build_heuristic_checklist() -> list[RelationshipChecklistItem]:
@@ -2234,11 +2319,17 @@ async def analyze_relationship(
             b_type = type_for_entity(target_id) or "unknown"
 
             prompt_lines: list[str] = []
-            prompt_lines.append("You are an expert knowledge-graph relationship analyst.")
-            prompt_lines.append("Return STRICT JSON only. No markdown outside JSON. No commentary.")
+            prompt_lines.append(
+                "You are an expert knowledge-graph relationship analyst."
+            )
+            prompt_lines.append(
+                "Return STRICT JSON only. No markdown outside JSON. No commentary."
+            )
             prompt_lines.append("The JSON MUST match the provided schema.")
             prompt_lines.append("Do NOT claim actions were executed. Only recommend.")
-            prompt_lines.append("Only reference entity IDs and memory IDs explicitly provided below; never invent IDs.")
+            prompt_lines.append(
+                "Only reference entity IDs and memory IDs explicitly provided below; never invent IDs."
+            )
             prompt_lines.append("")
             prompt_lines.append("## Task")
             prompt_lines.append(
@@ -2248,10 +2339,16 @@ async def analyze_relationship(
                 "Also suggest any memory hygiene actions (e.g., possible duplicate memories to merge) based on the evidence."
             )
             prompt_lines.append("")
-            prompt_lines.append(f"Entity A: id={source_id}, type={a_type}, label={a_label!r}")
-            prompt_lines.append(f"Entity B: id={target_id}, type={b_type}, label={b_label!r}")
+            prompt_lines.append(
+                f"Entity A: id={source_id}, type={a_type}, label={a_label!r}"
+            )
+            prompt_lines.append(
+                f"Entity B: id={target_id}, type={b_type}, label={b_label!r}"
+            )
             prompt_lines.append("")
-            prompt_lines.append("### Existing relationship rows for the pair (may include multiple types/directions)")
+            prompt_lines.append(
+                "### Existing relationship rows for the pair (may include multiple types/directions)"
+            )
             if edge_rows:
                 for row in edge_rows[:50]:
                     rid = row.get("id")
@@ -2285,7 +2382,9 @@ async def analyze_relationship(
                 )
 
             prompt_lines.append("")
-            prompt_lines.append("### Top neighbor edges (context only; do not expand beyond this list)")
+            prompt_lines.append(
+                "### Top neighbor edges (context only; do not expand beyond this list)"
+            )
             if neighbor_rows:
                 for row in neighbor_rows[:50]:
                     rid = row.get("id")
@@ -2308,7 +2407,9 @@ async def analyze_relationship(
                 row = mem_by_id.get(mid) or {}
                 content = _truncate(str(row.get("content") or ""), 320)
                 conf = row.get("confidence_score")
-                prompt_lines.append(f"- memory_id={mid} confidence={conf}\n  content: {content!r}")
+                prompt_lines.append(
+                    f"- memory_id={mid} confidence={conf}\n  content: {content!r}"
+                )
             if len(neighbor_memory_ids) > len(neighbor_for_ai):
                 prompt_lines.append(
                     f"- (omitted {len(neighbor_memory_ids) - len(neighbor_for_ai)} additional neighbor memories)"
@@ -2317,18 +2418,30 @@ async def analyze_relationship(
             prompt_lines.append("")
             prompt_lines.append("## Output JSON")
             prompt_lines.append("Return JSON with:")
-            prompt_lines.append('- analysis_markdown: a Markdown artifact with sections:')
+            prompt_lines.append(
+                "- analysis_markdown: a Markdown artifact with sections:"
+            )
             prompt_lines.append("  1) TL;DR (3 bullets max)")
             prompt_lines.append("  2) What the evidence suggests")
-            prompt_lines.append("  3) Recommended actions (table with Action | Target | Why | Confidence)")
+            prompt_lines.append(
+                "  3) Recommended actions (table with Action | Target | Why | Confidence)"
+            )
             prompt_lines.append("  4) Split plan (only if you recommend split)")
-            prompt_lines.append("  5) Memory hygiene suggestions (possible merges/edits; reference memory_id)")
+            prompt_lines.append(
+                "  5) Memory hygiene suggestions (possible merges/edits; reference memory_id)"
+            )
             prompt_lines.append("  6) Human review checklist")
-            prompt_lines.append("- checklist: 5-9 checkbox items that a human can mark as they complete review.")
-            prompt_lines.append("- actions: 3-10 suggested executable actions (or [] if none).")
+            prompt_lines.append(
+                "- checklist: 5-9 checkbox items that a human can mark as they complete review."
+            )
+            prompt_lines.append(
+                "- actions: 3-10 suggested executable actions (or [] if none)."
+            )
             prompt_lines.append("Action schema:")
             prompt_lines.append("- id: kebab-case stable label (no random numbers)")
-            prompt_lines.append("- title: human-friendly checkbox label (start with a verb)")
+            prompt_lines.append(
+                "- title: human-friendly checkbox label (start with a verb)"
+            )
             prompt_lines.append("- kind: one of:")
             prompt_lines.append(
                 "  update_relationship | merge_relationships | split_relationship_commit | "
@@ -2363,12 +2476,24 @@ async def analyze_relationship(
             prompt_lines.append("  * delete_relationship payload:")
             prompt_lines.append('    {"relationship_id":"..."}')
             prompt_lines.append("Checklist guidelines:")
-            prompt_lines.append("- Use short, human-friendly titles that start with a verb (e.g., “Reviewed…”, “Confirmed…”)")
-            prompt_lines.append("- category must be one of: evidence, type, direction, entities, hygiene, scope, merge, split, other")
-            prompt_lines.append("- id should be kebab-case and stable (no random numbers)")
-            prompt_lines.append("- If a checklist item references specific evidence, include memory_ids (0-6) from the provided memory_id list")
-            prompt_lines.append("- If a checklist item requires inspecting nodes, include entity_ids (0-4) from the provided entity IDs")
-            prompt_lines.append("- Use empty arrays or omit memory_ids/entity_ids when not applicable")
+            prompt_lines.append(
+                "- Use short, human-friendly titles that start with a verb (e.g., “Reviewed…”, “Confirmed…”)"
+            )
+            prompt_lines.append(
+                "- category must be one of: evidence, type, direction, entities, hygiene, scope, merge, split, other"
+            )
+            prompt_lines.append(
+                "- id should be kebab-case and stable (no random numbers)"
+            )
+            prompt_lines.append(
+                "- If a checklist item references specific evidence, include memory_ids (0-6) from the provided memory_id list"
+            )
+            prompt_lines.append(
+                "- If a checklist item requires inspecting nodes, include entity_ids (0-4) from the provided entity IDs"
+            )
+            prompt_lines.append(
+                "- Use empty arrays or omit memory_ids/entity_ids when not applicable"
+            )
             prompt_lines.append("")
             prompt_lines.append(
                 'Output JSON only: {"analysis_markdown":"...","checklist":[...],"actions":[...]}'
@@ -2402,7 +2527,9 @@ async def analyze_relationship(
                         continue
 
                     why = item.get("why")
-                    why_str = why.strip() if isinstance(why, str) and why.strip() else None
+                    why_str = (
+                        why.strip() if isinstance(why, str) and why.strip() else None
+                    )
 
                     memory_ids: list[UUID] = []
                     raw_memory_ids = item.get("memory_ids")
@@ -2417,17 +2544,17 @@ async def analyze_relationship(
                             if len(memory_ids) >= 6:
                                 break
 
-                    entity_ids: list[UUID] = []
+                    checklist_entity_ids: list[UUID] = []
                     raw_entity_ids = item.get("entity_ids")
                     if isinstance(raw_entity_ids, list):
                         for eid in raw_entity_ids:
                             if not isinstance(eid, str) or not eid.strip():
                                 continue
                             try:
-                                entity_ids.append(UUID(eid.strip()))
+                                checklist_entity_ids.append(UUID(eid.strip()))
                             except Exception:
                                 continue
-                            if len(entity_ids) >= 4:
+                            if len(checklist_entity_ids) >= 4:
                                 break
 
                     next_checklist.append(
@@ -2437,7 +2564,7 @@ async def analyze_relationship(
                             category=_truncate(category.strip(), 32),
                             why=_truncate(why_str, 420) if why_str else None,
                             memory_ids=memory_ids,
-                            entity_ids=entity_ids,
+                            entity_ids=checklist_entity_ids,
                         )
                     )
 
@@ -2463,8 +2590,12 @@ async def analyze_relationship(
                 if rid_str:
                     allowed_relationship_ids.add(rid_str)
 
-            allowed_memory_ids = {mid for mid in all_memory_ids if isinstance(mid, str) and mid}
-            allowed_entity_ids = {eid for eid in entity_ids if isinstance(eid, str) and eid}
+            allowed_memory_ids = {
+                mid for mid in all_memory_ids if isinstance(mid, str) and mid
+            }
+            allowed_entity_ids = {
+                eid for eid in entity_ids if isinstance(eid, str) and eid
+            }
             allowed_pair = {source_id, target_id}
 
             def _to_uuid(value: Any) -> UUID | None:
@@ -2488,7 +2619,9 @@ async def analyze_relationship(
                         break
                 return out
 
-            def _sanitize_action_payload(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+            def _sanitize_action_payload(
+                kind: str, payload: dict[str, Any]
+            ) -> dict[str, Any] | None:
                 if kind == "update_relationship":
                     rid = _to_uuid(payload.get("relationship_id"))
                     if not rid or str(rid) not in allowed_relationship_ids:
@@ -2498,7 +2631,9 @@ async def analyze_relationship(
                     if not sid or not tid or {str(sid), str(tid)} != allowed_pair:
                         return None
                     rtype = payload.get("relationship_type")
-                    if not isinstance(rtype, str) or rtype.strip() not in {rt.value for rt in RelationshipType}:
+                    if not isinstance(rtype, str) or rtype.strip() not in {
+                        rt.value for rt in RelationshipType
+                    }:
                         return None
                     weight = payload.get("weight")
                     if not isinstance(weight, (int, float)):
@@ -2523,7 +2658,9 @@ async def analyze_relationship(
                     if not sid or not tid or {str(sid), str(tid)} != allowed_pair:
                         return None
                     rtype = payload.get("relationship_type")
-                    if not isinstance(rtype, str) or rtype.strip() not in {rt.value for rt in RelationshipType}:
+                    if not isinstance(rtype, str) or rtype.strip() not in {
+                        rt.value for rt in RelationshipType
+                    }:
                         return None
                     weight = payload.get("weight")
                     if not isinstance(weight, (int, float)):
@@ -2568,19 +2705,21 @@ async def analyze_relationship(
                     if not keep_mid or str(keep_mid) not in allowed_memory_ids:
                         return None
                     merge_mids = _uuid_list(payload.get("merge_memory_ids"), 12)
-                    merge_mids = [mid for mid in dict.fromkeys(merge_mids) if mid != keep_mid]
+                    merge_mids = [
+                        mid for mid in dict.fromkeys(merge_mids) if mid != keep_mid
+                    ]
                     if not merge_mids:
                         return None
                     if any(str(mid) not in allowed_memory_ids for mid in merge_mids):
                         return None
                     content = payload.get("merge_content")
-                    next_payload: dict[str, Any] = {
+                    merge_payload: dict[str, Any] = {
                         "keep_memory_id": str(keep_mid),
                         "merge_memory_ids": [str(mid) for mid in merge_mids],
                     }
                     if isinstance(content, str) and content.strip():
-                        next_payload["merge_content"] = content.strip()
-                    return next_payload
+                        merge_payload["merge_content"] = content.strip()
+                    return merge_payload
 
                 if kind == "split_relationship_commit":
                     rid = _to_uuid(payload.get("relationship_id"))
@@ -2590,7 +2729,13 @@ async def analyze_relationship(
                     if not isinstance(clusters, list) or not clusters:
                         return None
                     out_clusters: list[dict[str, Any]] = []
-                    for item in clusters[: int(request.max_direct_memories) if request.max_direct_memories else 8]:
+                    for item in clusters[
+                        : (
+                            int(request.max_direct_memories)
+                            if request.max_direct_memories
+                            else 8
+                        )
+                    ]:
                         if not isinstance(item, dict):
                             continue
                         sid = _to_uuid(item.get("source_entity_id"))
@@ -2598,19 +2743,29 @@ async def analyze_relationship(
                         if not sid or not tid or {str(sid), str(tid)} != allowed_pair:
                             continue
                         rtype = item.get("relationship_type")
-                        if not isinstance(rtype, str) or rtype.strip() not in {rt.value for rt in RelationshipType}:
+                        if not isinstance(rtype, str) or rtype.strip() not in {
+                            rt.value for rt in RelationshipType
+                        }:
                             continue
                         weight = item.get("weight")
                         if not isinstance(weight, (int, float)):
                             continue
                         mem_ids = _uuid_list(item.get("memory_ids"), 60)
-                        mem_ids = [mid for mid in dict.fromkeys(mem_ids) if str(mid) in allowed_memory_ids]
+                        mem_ids = [
+                            mid
+                            for mid in dict.fromkeys(mem_ids)
+                            if str(mid) in allowed_memory_ids
+                        ]
                         if not mem_ids:
                             continue
                         name = item.get("name")
                         out_clusters.append(
                             {
-                                "name": name.strip() if isinstance(name, str) and name.strip() else None,
+                                "name": (
+                                    name.strip()
+                                    if isinstance(name, str) and name.strip()
+                                    else None
+                                ),
                                 "source_entity_id": str(sid),
                                 "target_entity_id": str(tid),
                                 "relationship_type": rtype.strip(),
@@ -2671,13 +2826,17 @@ async def analyze_relationship(
                     memory_ids = [
                         mid for mid in memory_ids if str(mid) in allowed_memory_ids
                     ]
-                    entity_ids = _uuid_list(item.get("entity_ids"), 10)
-                    entity_ids = [
-                        eid for eid in entity_ids if str(eid) in allowed_entity_ids
+                    action_entity_ids = _uuid_list(item.get("entity_ids"), 10)
+                    action_entity_ids = [
+                        eid
+                        for eid in action_entity_ids
+                        if str(eid) in allowed_entity_ids
                     ]
                     relationship_ids = _uuid_list(item.get("relationship_ids"), 12)
                     relationship_ids = [
-                        rid for rid in relationship_ids if str(rid) in allowed_relationship_ids
+                        rid
+                        for rid in relationship_ids
+                        if str(rid) in allowed_relationship_ids
                     ]
 
                     next_actions.append(
@@ -2689,7 +2848,7 @@ async def analyze_relationship(
                             destructive=destructive_value,
                             payload=sanitized,
                             memory_ids=memory_ids,
-                            entity_ids=entity_ids,
+                            entity_ids=action_entity_ids,
                             relationship_ids=relationship_ids,
                         )
                     )
@@ -2705,7 +2864,11 @@ async def analyze_relationship(
                 ai_error = "AI analysis timed out. Falling back to heuristic analysis."
             else:
                 message = str(exc).lower()
-                if "quota" in message or "rate" in message or "resourceexhausted" in message:
+                if (
+                    "quota" in message
+                    or "rate" in message
+                    or "resourceexhausted" in message
+                ):
                     ai_error = "AI analysis unavailable (quota/rate-limited). Falling back to heuristic analysis."
                 else:
                     ai_error = "AI analysis failed. Falling back to heuristic analysis."
@@ -2843,7 +3006,11 @@ async def split_relationship_commit(
             .limit(5000)
             .execute()
         )
-        to_delete = [str(row.get("id")) for row in list(existing_rel_resp.data or []) if row.get("id")]
+        to_delete = [
+            str(row.get("id"))
+            for row in list(existing_rel_resp.data or [])
+            if row.get("id")
+        ]
         if to_delete:
             await supabase._exec(
                 lambda: supabase.client.table("memory_relationships")
@@ -2863,7 +3030,9 @@ async def split_relationship_commit(
     payloads: list[dict[str, Any]] = []
     for key, entry in deduped.items():
         mids: set[str] = entry["memory_ids"]
-        representative_mid = next((mid for mid in mids if mid in existing_memory_ids), None)
+        representative_mid = next(
+            (mid for mid in mids if mid in existing_memory_ids), None
+        )
         occurrence_count = max(1, len(mids))
         payloads.append(
             {
@@ -2881,7 +3050,9 @@ async def split_relationship_commit(
 
     try:
         insert_resp = await supabase._exec(
-            lambda: supabase.client.table("memory_relationships").insert(payloads).execute()
+            lambda: supabase.client.table("memory_relationships")
+            .insert(payloads)
+            .execute()
         )
         inserted_rows = list(insert_resp.data or [])
     except Exception as exc:
@@ -2900,7 +3071,9 @@ async def split_relationship_commit(
     return SplitRelationshipCommitResponse(
         source_entity_id=UUID(source_id),
         target_entity_id=UUID(target_id),
-        deleted_relationship_ids=[UUID(v) for v in to_delete] if "to_delete" in locals() else [],
+        deleted_relationship_ids=(
+            [UUID(v) for v in to_delete] if "to_delete" in locals() else []
+        ),
         created_relationships=inserted_rows,  # type: ignore[arg-type]
     )
 
@@ -3058,7 +3231,9 @@ async def list_memories_for_entity(
         return ordered  # type: ignore[return-value]
 
     except Exception as exc:
-        logger.exception("Error listing related memories for entity %s: %s", entity_id, exc)
+        logger.exception(
+            "Error listing related memories for entity %s: %s", entity_id, exc
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list related memories for entity",
@@ -3130,6 +3305,7 @@ async def list_duplicate_candidates(
             detail="Failed to list duplicate candidates",
         )
 
+
 @router.post(
     "/add",
     response_model=AddMemoryResponse,
@@ -3141,7 +3317,7 @@ async def list_duplicate_candidates(
         400: {"description": "Invalid request data"},
         401: {"description": "Authentication required"},
         500: {"description": "Internal server error"},
-    }
+    },
 )
 async def add_memory(
     request: AddMemoryRequest,
@@ -3166,6 +3342,20 @@ async def add_memory(
 
         # Extract the memory ID from result
         memory_id = result.get("id")
+        memory_uuid: UUID | None = None
+        if isinstance(memory_id, UUID):
+            memory_uuid = memory_id
+        elif isinstance(memory_id, str):
+            try:
+                memory_uuid = UUID(memory_id)
+            except ValueError:
+                memory_uuid = None
+        if memory_uuid is None:
+            logger.error("Add memory returned invalid id: %s", memory_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create memory",
+            )
         created_at = result.get("created_at")
         if isinstance(created_at, str):
             created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
@@ -3173,20 +3363,22 @@ async def add_memory(
             created_at = datetime.now(timezone.utc)
 
         # Best-effort duplicate detection (async, non-blocking)
-        if isinstance(memory_id, str):
-            try:
-                async def _run_duplicate_detection() -> None:
-                    try:
-                        await service.detect_duplicates(UUID(memory_id))
-                    except Exception as exc:
-                        logger.warning("Duplicate detection failed for memory %s: %s", memory_id, exc)
+        try:
 
-                asyncio.create_task(_run_duplicate_detection())
-            except Exception as exc:
-                logger.warning("Failed to schedule duplicate detection: %s", exc)
+            async def _run_duplicate_detection() -> None:
+                try:
+                    await service.detect_duplicates(memory_uuid)
+                except Exception as exc:
+                    logger.warning(
+                        "Duplicate detection failed for memory %s: %s", memory_uuid, exc
+                    )
+
+            asyncio.create_task(_run_duplicate_detection())
+        except Exception as exc:
+            logger.warning("Failed to schedule duplicate detection: %s", exc)
 
         return AddMemoryResponse(
-            id=UUID(memory_id) if isinstance(memory_id, str) else memory_id,
+            id=memory_uuid,
             content=result.get("content", request.content),
             confidence_score=result.get("confidence_score", 0.5),
             source_type=result.get("source_type", request.source_type),
@@ -3197,17 +3389,14 @@ async def add_memory(
 
     except ValueError as e:
         logger.warning(f"Invalid add memory request: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"Error adding memory: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to add memory"
+            detail="Failed to add memory",
         )
 
 
@@ -3258,7 +3447,7 @@ async def get_memory_by_id(
         403: {"description": "Admin access required"},
         404: {"description": "Memory not found"},
         500: {"description": "Internal server error"},
-    }
+    },
 )
 async def update_memory(
     memory_id: UUID,
@@ -3275,7 +3464,7 @@ async def update_memory(
     if request.content is None and request.metadata is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one of 'content' or 'metadata' must be provided"
+            detail="At least one of 'content' or 'metadata' must be provided",
         )
 
     try:
@@ -3284,12 +3473,20 @@ async def update_memory(
         if not existing:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Memory {memory_id} not found"
+                detail=f"Memory {memory_id} not found",
             )
 
         # Use existing values if not provided
-        content = request.content if request.content is not None else existing.get("content", "")
-        metadata = request.metadata if request.metadata is not None else existing.get("metadata", {})
+        content = (
+            request.content
+            if request.content is not None
+            else existing.get("content", "")
+        )
+        metadata = (
+            request.metadata
+            if request.metadata is not None
+            else existing.get("metadata", {})
+        )
 
         result = await service.update_memory(
             memory_id=memory_id,
@@ -3312,17 +3509,14 @@ async def update_memory(
 
     except ValueError as e:
         logger.warning(f"Invalid update memory request: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"Error updating memory {memory_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update memory"
+            detail="Failed to update memory",
         )
 
 
@@ -3337,7 +3531,7 @@ async def update_memory(
         403: {"description": "Admin access required"},
         404: {"description": "Memory not found"},
         500: {"description": "Internal server error"},
-    }
+    },
 )
 async def delete_memory(
     memory_id: UUID,
@@ -3356,7 +3550,7 @@ async def delete_memory(
         if not existing:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Memory {memory_id} not found"
+                detail=f"Memory {memory_id} not found",
             )
 
         result = await service.delete_memory(memory_id=memory_id)
@@ -3373,7 +3567,7 @@ async def delete_memory(
         logger.exception(f"Error deleting memory {memory_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete memory"
+            detail="Failed to delete memory",
         )
 
 
@@ -3389,7 +3583,7 @@ async def delete_memory(
         403: {"description": "Admin access required"},
         404: {"description": "Memory or duplicate candidate not found"},
         500: {"description": "Internal server error"},
-    }
+    },
 )
 async def merge_memories(
     request: MergeMemoriesRequest,
@@ -3409,16 +3603,24 @@ async def merge_memories(
         if not kept_memory:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Memory {request.keep_memory_id} not found"
+                detail=f"Memory {request.keep_memory_id} not found",
             )
 
         # Determine content to use
-        content = request.merge_content if request.merge_content else kept_memory.get("content", "")
+        content = (
+            request.merge_content
+            if request.merge_content
+            else kept_memory.get("content", "")
+        )
 
         result = await service.merge_memories(
             candidate_id=request.duplicate_candidate_id,
             keep_memory_id=request.keep_memory_id,
-            reviewer_id=UUID(admin_user.sub) if admin_user.sub else UUID("00000000-0000-0000-0000-000000000000"),
+            reviewer_id=(
+                UUID(admin_user.sub)
+                if admin_user.sub
+                else UUID("00000000-0000-0000-0000-000000000000")
+            ),
             merged_content=content,
         )
 
@@ -3438,24 +3640,23 @@ async def merge_memories(
 
         return MergeMemoriesResponse(
             merged_memory_id=request.keep_memory_id,
-            deleted_memory_id=UUID(deleted_id) if isinstance(deleted_id, str) else deleted_id,
+            deleted_memory_id=(
+                UUID(deleted_id) if isinstance(deleted_id, str) else deleted_id
+            ),
             confidence_score=result.get("new_confidence", 0.6),
             entities_transferred=result.get("entities_transferred", 0),
         )
 
     except ValueError as e:
         logger.warning(f"Invalid merge request: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"Error merging memories: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to merge memories"
+            detail="Failed to merge memories",
         )
 
 
@@ -3492,7 +3693,9 @@ async def merge_memories_arbitrary(
             detail=f"Memory {request.keep_memory_id} not found",
         )
 
-    merge_ids = [mid for mid in request.merge_memory_ids if mid != request.keep_memory_id]
+    merge_ids = [
+        mid for mid in request.merge_memory_ids if mid != request.keep_memory_id
+    ]
     merge_ids = list(dict.fromkeys(merge_ids))
     if not merge_ids:
         raise HTTPException(
@@ -3500,7 +3703,11 @@ async def merge_memories_arbitrary(
             detail="merge_memory_ids must contain at least one ID different from keep_memory_id",
         )
 
-    content = request.merge_content if request.merge_content else str(kept_memory.get("content") or "")
+    content = (
+        request.merge_content
+        if request.merge_content
+        else str(kept_memory.get("content") or "")
+    )
     if not content.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -3649,7 +3856,7 @@ async def merge_memories_arbitrary(
         401: {"description": "Authentication required"},
         404: {"description": "Memory not found"},
         500: {"description": "Internal server error"},
-    }
+    },
 )
 async def submit_feedback(
     memory_id: UUID,
@@ -3670,12 +3877,16 @@ async def submit_feedback(
         if not existing:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Memory {memory_id} not found"
+                detail=f"Memory {memory_id} not found",
             )
 
         result = await service.submit_feedback(
             memory_id=memory_id,
-            user_id=UUID(current_user.sub) if current_user.sub else UUID("00000000-0000-0000-0000-000000000000"),
+            user_id=(
+                UUID(current_user.sub)
+                if current_user.sub
+                else UUID("00000000-0000-0000-0000-000000000000")
+            ),
             feedback_type=request.feedback_type,
             session_id=request.session_id,
             ticket_id=request.ticket_id,
@@ -3689,7 +3900,9 @@ async def submit_feedback(
 
         return SubmitFeedbackResponse(
             feedback_id=feedback_id or UUID("00000000-0000-0000-0000-000000000000"),
-            new_confidence_score=result.get("new_confidence_score", result.get("new_confidence", 0.5)),
+            new_confidence_score=result.get(
+                "new_confidence_score", result.get("new_confidence", 0.5)
+            ),
         )
 
     except HTTPException:
@@ -3698,7 +3911,7 @@ async def submit_feedback(
         logger.exception(f"Error submitting feedback for memory {memory_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to submit feedback"
+            detail="Failed to submit feedback",
         )
 
 
@@ -3713,7 +3926,7 @@ async def submit_feedback(
         401: {"description": "Authentication required"},
         403: {"description": "Admin access required"},
         500: {"description": "Internal server error"},
-    }
+    },
 )
 async def export_memories(
     request: ExportMemoriesRequest,
@@ -3748,27 +3961,38 @@ async def export_memories(
 
         # Apply additional filters
         if min_confidence is not None:
-            memories = [m for m in memories if m.get("confidence_score", 0) >= min_confidence]
+            memories = [
+                m for m in memories if m.get("confidence_score", 0) >= min_confidence
+            ]
         if created_after is not None:
-            memories = [m for m in memories if m.get("created_at") and datetime.fromisoformat(m["created_at"].replace("Z", "+00:00")) >= created_after]
+            memories = [
+                m
+                for m in memories
+                if m.get("created_at")
+                and datetime.fromisoformat(m["created_at"].replace("Z", "+00:00"))
+                >= created_after
+            ]
 
         # Generate export data
+        export_id_str = str(uuid_module.uuid4())
         export_data = {
-            "export_id": str(uuid_module.uuid4()),
+            "export_id": export_id_str,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "exported_by": admin_user.sub,
             "total_memories": len(memories),
             "memories": memories,
         }
 
-        export_id = UUID(export_data["export_id"])
+        export_id = UUID(export_id_str)
         download_url = f"/api/v1/memory/exports/{export_id}/download"
 
         # Upload to Supabase Storage (admin-only bucket)
         supabase = service._get_supabase()
 
         try:
-            await supabase._exec(lambda: supabase.client.storage.get_bucket(EXPORTS_BUCKET))
+            await supabase._exec(
+                lambda: supabase.client.storage.get_bucket(EXPORTS_BUCKET)
+            )
         except Exception:
             await supabase._exec(
                 lambda: supabase.client.storage.create_bucket(
@@ -3799,8 +4023,12 @@ async def export_memories(
             export_id=export_id,
             download_url=download_url,
             memory_count=len(memories),
-            entity_count=stats.get("total_entities", 0) if isinstance(stats, dict) else 0,
-            relationship_count=stats.get("total_relationships", 0) if isinstance(stats, dict) else 0,
+            entity_count=(
+                stats.get("total_entities", 0) if isinstance(stats, dict) else 0
+            ),
+            relationship_count=(
+                stats.get("total_relationships", 0) if isinstance(stats, dict) else 0
+            ),
         )
 
     except HTTPException:
@@ -3809,7 +4037,7 @@ async def export_memories(
         logger.exception(f"Error exporting memories: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to export memories"
+            detail="Failed to export memories",
         )
 
 
@@ -3824,7 +4052,7 @@ async def export_memories(
         403: {"description": "Admin access required"},
         404: {"description": "Duplicate candidate not found"},
         500: {"description": "Internal server error"},
-    }
+    },
 )
 async def dismiss_duplicate(
     candidate_id: UUID,
@@ -3842,7 +4070,11 @@ async def dismiss_duplicate(
     try:
         result = await service.dismiss_duplicate(
             candidate_id=candidate_id,
-            reviewer_id=UUID(admin_user.sub) if admin_user.sub else UUID("00000000-0000-0000-0000-000000000000"),
+            reviewer_id=(
+                UUID(admin_user.sub)
+                if admin_user.sub
+                else UUID("00000000-0000-0000-0000-000000000000")
+            ),
             notes=request.notes,
         )
 
@@ -3863,7 +4095,7 @@ async def dismiss_duplicate(
         logger.exception(f"Error dismissing duplicate {candidate_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to dismiss duplicate"
+            detail="Failed to dismiss duplicate",
         )
 
 
@@ -3876,7 +4108,7 @@ async def dismiss_duplicate(
         200: {"description": "Statistics retrieved successfully"},
         401: {"description": "Authentication required"},
         500: {"description": "Internal server error"},
-    }
+    },
 )
 async def get_memory_stats(
     current_user: Annotated[TokenPayload, Depends(get_current_user)],
@@ -3917,7 +4149,7 @@ async def get_memory_stats(
         logger.exception(f"Error getting memory stats: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get memory statistics"
+            detail="Failed to get memory statistics",
         )
 
 
@@ -3945,6 +4177,7 @@ async def import_memory_sources(
         status_code=status.HTTP_410_GONE,
         detail="Memory import disabled. Use /api/v1/memory/import/zendesk-tagged instead.",
     )
+
 
 @router.post(
     "/import/zendesk-tagged",
@@ -3980,6 +4213,7 @@ async def import_zendesk_tagged(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to queue Zendesk import",
         ) from exc
+
 
 @router.get(
     "/exports/{export_id}/download",

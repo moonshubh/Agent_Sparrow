@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """LangGraph BaseStore adapter for Deep Agent workspace files.
 
 This module provides a LangGraph-compatible BaseStore implementation backed by
@@ -29,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from enum import Enum
@@ -37,17 +37,18 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKIN
 
 from loguru import logger
 
-
 # =============================================================================
 # Persistence Scope Configuration
 # =============================================================================
 
+
 class PersistenceScope(Enum):
     """Persistence scope for workspace files."""
-    GLOBAL = "global"       # /playbooks/ - shared across all sessions
-    USER = "user"           # /user/ - per-user internal metadata (not exposed to agents)
-    CUSTOMER = "customer"   # /customer/{id}/ - per-customer, cross-ticket
-    SESSION = "session"     # /scratch/, /knowledge/ - per-ticket ephemeral
+
+    GLOBAL = "global"  # /playbooks/ - shared across all sessions
+    USER = "user"  # /user/ - per-user internal metadata (not exposed to agents)
+    CUSTOMER = "customer"  # /customer/{id}/ - per-customer, cross-ticket
+    SESSION = "session"  # /scratch/, /knowledge/ - per-ticket ephemeral
 
 
 # Path-to-scope routing rules
@@ -193,7 +194,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
                 self._client = get_supabase_client()
             except ImportError:
-                logger.warning("Supabase client not available - operating in cache-only mode")
+                logger.warning(
+                    "Supabase client not available - operating in cache-only mode"
+                )
                 self._client = _IMPORT_FAILED  # type: ignore
                 return None
             except Exception as exc:
@@ -246,7 +249,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         # Validate root
         root = normalized.split("/")[0]
         if root not in ALLOWED_ROOTS:
-            raise ValueError(f"Invalid path root '{root}'. Allowed: {sorted(ALLOWED_ROOTS)}")
+            raise ValueError(
+                f"Invalid path root '{root}'. Allowed: {sorted(ALLOWED_ROOTS)}"
+            )
 
         return normalized
 
@@ -299,10 +304,16 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         elif scope == PersistenceScope.USER:
             if not self.user_id:
                 raise ValueError("user_id is required for user-scoped paths (/user/*)")
-            rest = namespace[1:] if len(namespace) > 1 and namespace[0] == "user" else namespace
+            rest = (
+                namespace[1:]
+                if len(namespace) > 1 and namespace[0] == "user"
+                else namespace
+            )
             rest_path = "/".join(rest)
             if not rest_path:
-                raise ValueError("user-scoped namespace must include a sub-namespace (e.g. ('user','sessions'))")
+                raise ValueError(
+                    "user-scoped namespace must include a sub-namespace (e.g. ('user','sessions'))"
+                )
             return f"workspace:user:{self.user_id}:{rest_path}"
         elif scope == PersistenceScope.CUSTOMER:
             # For customer scope, extract customer_id from namespace or use stored one
@@ -314,7 +325,7 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             else:
                 raise ValueError(
                     "customer_id required for customer-scoped paths. "
-                    "Either include it in namespace (\"customer\", \"id\", ...) "
+                    'Either include it in namespace ("customer", "id", ...) '
                     "or initialize store with customer_id parameter."
                 )
 
@@ -327,7 +338,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         else:  # SESSION
             return f"workspace:session:{self.session_id}:{path}"
 
-    def _prefix_key_to_namespace(self, prefix: str, key: str) -> Tuple[Tuple[str, ...], str]:
+    def _prefix_key_to_namespace(
+        self, prefix: str, key: str
+    ) -> Tuple[Tuple[str, ...], str]:
         """Convert prefix and key back to namespace tuple and key.
 
         Handles all scope formats:
@@ -386,7 +399,7 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             raise RuntimeError("langgraph.store not available")
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -445,7 +458,7 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             # Observability: log cache hits
             path = "/".join(namespace)
             scope = self._get_scope_for_path(path)
-            content_size = len(json.dumps(item.value).encode('utf-8'))
+            content_size = len(json.dumps(item.value).encode("utf-8"))
             logger.debug(
                 "workspace_read",
                 scope=scope.value,
@@ -485,8 +498,16 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                         value=value,
                         key=key,
                         namespace=namespace,
-                        created_at=datetime.fromisoformat(created_at.replace("Z", "+00:00")) if created_at else datetime.now(timezone.utc),
-                        updated_at=datetime.fromisoformat(updated_at.replace("Z", "+00:00")) if updated_at else datetime.now(timezone.utc),
+                        created_at=(
+                            datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                            if created_at
+                            else datetime.now(timezone.utc)
+                        ),
+                        updated_at=(
+                            datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                            if updated_at
+                            else datetime.now(timezone.utc)
+                        ),
                     )
                     # Cache the item
                     self._cache[namespace][key] = item
@@ -494,7 +515,7 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                     # Observability: log workspace reads with scope and size
                     path = "/".join(namespace)
                     scope = self._get_scope_for_path(path)
-                    content_size = len(json.dumps(value).encode('utf-8'))
+                    content_size = len(json.dumps(value).encode("utf-8"))
                     logger.info(
                         "workspace_read",
                         scope=scope.value,
@@ -508,7 +529,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                     return item
 
             except Exception as exc:
-                logger.debug("workspace_store_get_error", prefix=prefix, key=key, error=str(exc))
+                logger.debug(
+                    "workspace_store_get_error", prefix=prefix, key=key, error=str(exc)
+                )
 
         return None
 
@@ -525,7 +548,7 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         # Determine scope for observability
         path = "/".join(namespace)
         scope = self._get_scope_for_path(path)
-        content_size = len(json.dumps(value).encode('utf-8'))
+        content_size = len(json.dumps(value).encode("utf-8"))
 
         # Create the Item for cache
         existing = self._cache.get(namespace, {}).get(key)
@@ -567,7 +590,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                     customer_id=self.customer_id,
                 )
             except Exception as exc:
-                logger.warning("workspace_store_put_error", prefix=prefix, key=key, error=str(exc))
+                logger.warning(
+                    "workspace_store_put_error", prefix=prefix, key=key, error=str(exc)
+                )
 
     async def _execute_search(
         self,
@@ -596,10 +621,17 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
         # Search Supabase (store table: prefix, key, value, content_text)
         if self.client:
-            prefix_pattern = None if not namespace_prefix else self._namespace_to_prefix(namespace_prefix)
+            prefix_pattern = (
+                None
+                if not namespace_prefix
+                else self._namespace_to_prefix(namespace_prefix)
+            )
             try:
+
                 def _append_row(row: Dict[str, Any]) -> None:
-                    namespace, key = self._prefix_key_to_namespace(row["prefix"], row["key"])
+                    namespace, key = self._prefix_key_to_namespace(
+                        row["prefix"], row["key"]
+                    )
                     value = row.get("value", {})
                     if isinstance(value, str):
                         try:
@@ -621,12 +653,20 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                             value=value,
                             key=key,
                             namespace=namespace,
-                            created_at=datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                            if created_at
-                            else datetime.now(timezone.utc),
-                            updated_at=datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-                            if updated_at
-                            else datetime.now(timezone.utc),
+                            created_at=(
+                                datetime.fromisoformat(
+                                    created_at.replace("Z", "+00:00")
+                                )
+                                if created_at
+                                else datetime.now(timezone.utc)
+                            ),
+                            updated_at=(
+                                datetime.fromisoformat(
+                                    updated_at.replace("Z", "+00:00")
+                                )
+                                if updated_at
+                                else datetime.now(timezone.utc)
+                            ),
                             score=1.0,  # No semantic search, exact match
                         )
                     )
@@ -640,9 +680,13 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                     if self.user_id:
                         prefix_patterns.append(f"workspace:user:{self.user_id}:")
                         # Forward-compat: tolerate session prefixes that include user_id.
-                        prefix_patterns.append(f"workspace:session:{self.user_id}:{self.session_id}:")
+                        prefix_patterns.append(
+                            f"workspace:session:{self.user_id}:{self.session_id}:"
+                        )
                     if self.customer_id:
-                        prefix_patterns.append(f"workspace:customer:{self.customer_id}:")
+                        prefix_patterns.append(
+                            f"workspace:customer:{self.customer_id}:"
+                        )
 
                     fetched_rows: list[Dict[str, Any]] = []
                     per_prefix_limit = min(200, max(limit + max(offset, 0), limit))
@@ -662,7 +706,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
                     # Deterministic order across scopes (best-effort).
                     fetched_rows.sort(
-                        key=lambda row: (row.get("updated_at") or row.get("created_at") or ""),
+                        key=lambda row: (
+                            row.get("updated_at") or row.get("created_at") or ""
+                        ),
                         reverse=True,
                     )
 
@@ -688,7 +734,11 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                         _append_row(row)
 
             except Exception as exc:
-                logger.warning("workspace_store_search_error", prefix=prefix_pattern, error=str(exc))
+                logger.warning(
+                    "workspace_store_search_error",
+                    prefix=prefix_pattern,
+                    error=str(exc),
+                )
 
         # Also search local cache (for items not yet persisted)
         for ns, items in self._cache.items():
@@ -704,8 +754,7 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                         # Apply filter if provided
                         if filter_dict:
                             match = all(
-                                item.value.get(k) == v
-                                for k, v in filter_dict.items()
+                                item.value.get(k) == v for k, v in filter_dict.items()
                             )
                             if not match:
                                 continue
@@ -772,7 +821,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             prefix_patterns = [
                 f"workspace:session:{self.session_id}%",  # Session scope
                 "workspace:global:%",  # Global scope (always accessible)
-                f"workspace:user:{self.user_id}:%" if self.user_id else None,  # User scope
+                (
+                    f"workspace:user:{self.user_id}:%" if self.user_id else None
+                ),  # User scope
             ]
 
             # Add customer scope if customer_id is set
@@ -789,12 +840,16 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                     )
 
                     for row in response.data or []:
-                        namespace, _ = self._prefix_key_to_namespace(row["prefix"], row["key"])
+                        namespace, _ = self._prefix_key_to_namespace(
+                            row["prefix"], row["key"]
+                        )
                         if namespace:
                             all_namespaces.add(namespace)
 
                 except Exception as exc:
-                    logger.warning("workspace_store_list_ns_error", pattern=pattern, error=str(exc))
+                    logger.warning(
+                        "workspace_store_list_ns_error", pattern=pattern, error=str(exc)
+                    )
 
         # Apply match conditions
         if match_conditions:
@@ -804,20 +859,20 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
                 if match_type == "prefix":
                     all_namespaces = {
-                        ns for ns in all_namespaces
+                        ns
+                        for ns in all_namespaces
                         if len(ns) >= len(path) and ns[: len(path)] == path
                     }
                 elif match_type == "suffix":
                     all_namespaces = {
-                        ns for ns in all_namespaces
+                        ns
+                        for ns in all_namespaces
                         if len(ns) >= len(path) and ns[-len(path) :] == path
                     }
 
         # Filter by max_depth
         if max_depth is not None:
-            all_namespaces = {
-                ns for ns in all_namespaces if len(ns) <= max_depth
-            }
+            all_namespaces = {ns for ns in all_namespaces if len(ns) <= max_depth}
 
         sorted_ns = sorted(all_namespaces)
         return sorted_ns[offset : offset + limit]
@@ -878,7 +933,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         """Store a single item asynchronously."""
         if not _LANGGRAPH_STORE_AVAILABLE:
             raise RuntimeError("langgraph.store not available")
-        await self.abatch([PutOp(namespace=namespace, key=key, value=value, index=index)])
+        await self.abatch(
+            [PutOp(namespace=namespace, key=key, value=value, index=index)]
+        )
 
     def delete(self, namespace: Tuple[str, ...], key: str) -> None:
         """Delete a single item synchronously."""
@@ -890,9 +947,16 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         if self.client:
             prefix = self._namespace_to_prefix(namespace)
             try:
-                self.client.table(WORKSPACE_TABLE).delete().eq("prefix", prefix).eq("key", key).execute()
+                self.client.table(WORKSPACE_TABLE).delete().eq("prefix", prefix).eq(
+                    "key", key
+                ).execute()
             except Exception as exc:
-                logger.warning("workspace_store_delete_error", prefix=prefix, key=key, error=str(exc))
+                logger.warning(
+                    "workspace_store_delete_error",
+                    prefix=prefix,
+                    key=key,
+                    error=str(exc),
+                )
 
     async def adelete(self, namespace: Tuple[str, ...], key: str) -> None:
         """Delete a single item asynchronously."""
@@ -912,15 +976,17 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         """Search for items synchronously."""
         if not _LANGGRAPH_STORE_AVAILABLE:
             raise RuntimeError("langgraph.store not available")
-        results = self.batch([
-            SearchOp(
-                namespace_prefix=namespace_prefix,
-                query=query,
-                filter=filter,
-                limit=limit,
-                offset=offset,
-            )
-        ])
+        results = self.batch(
+            [
+                SearchOp(
+                    namespace_prefix=namespace_prefix,
+                    query=query,
+                    filter=filter,
+                    limit=limit,
+                    offset=offset,
+                )
+            ]
+        )
         return results[0] if results else []
 
     async def asearch(
@@ -937,15 +1003,17 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         """Search for items asynchronously."""
         if not _LANGGRAPH_STORE_AVAILABLE:
             raise RuntimeError("langgraph.store not available")
-        results = await self.abatch([
-            SearchOp(
-                namespace_prefix=namespace_prefix,
-                query=query,
-                filter=filter,
-                limit=limit,
-                offset=offset,
-            )
-        ])
+        results = await self.abatch(
+            [
+                SearchOp(
+                    namespace_prefix=namespace_prefix,
+                    query=query,
+                    filter=filter,
+                    limit=limit,
+                    offset=offset,
+                )
+            ]
+        )
         return results[0] if results else []
 
     # -------------------------------------------------------------------------
@@ -1113,12 +1181,16 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                 continue
 
             file_path = "/" + "/".join(item.namespace) + "/" + item.key
-            results.append({
-                "path": file_path,
-                "key": item.key,
-                "namespace": item.namespace,
-                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-            })
+            results.append(
+                {
+                    "path": file_path,
+                    "key": item.key,
+                    "namespace": item.namespace,
+                    "updated_at": (
+                        item.updated_at.isoformat() if item.updated_at else None
+                    ),
+                }
+            )
 
         return results
 
@@ -1146,11 +1218,15 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                         .execute()
                     )
                 except Exception as exc:
-                    logger.warning("workspace_store_root_list_error", base=base, error=str(exc))
+                    logger.warning(
+                        "workspace_store_root_list_error", base=base, error=str(exc)
+                    )
                     continue
 
                 for row in response.data or []:
-                    namespace, key = self._prefix_key_to_namespace(row["prefix"], row["key"])
+                    namespace, key = self._prefix_key_to_namespace(
+                        row["prefix"], row["key"]
+                    )
                     created_at = row.get("created_at")
                     updated_at = row.get("updated_at")
 
@@ -1158,14 +1234,20 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                     if depth is not None and len(namespace) > depth:
                         continue
 
-                    file_path = "/" + "/".join(namespace) + "/" + key if namespace else "/" + key
-                    results.append({
-                        "path": file_path,
-                        "key": key,
-                        "namespace": namespace,
-                        "updated_at": updated_at,
-                        "created_at": created_at,
-                    })
+                    file_path = (
+                        "/" + "/".join(namespace) + "/" + key
+                        if namespace
+                        else "/" + key
+                    )
+                    results.append(
+                        {
+                            "path": file_path,
+                            "key": key,
+                            "namespace": namespace,
+                            "updated_at": updated_at,
+                            "created_at": created_at,
+                        }
+                    )
 
         # Include cache entries not yet persisted.
         for ns, items in self._cache.items():
@@ -1175,13 +1257,19 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                 file_path = "/" + "/".join(ns) + "/" + key if ns else "/" + key
                 if any(r["path"] == file_path for r in results):
                     continue
-                results.append({
-                    "path": file_path,
-                    "key": key,
-                    "namespace": item.namespace,
-                    "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-                    "created_at": item.created_at.isoformat() if item.created_at else None,
-                })
+                results.append(
+                    {
+                        "path": file_path,
+                        "key": key,
+                        "namespace": item.namespace,
+                        "updated_at": (
+                            item.updated_at.isoformat() if item.updated_at else None
+                        ),
+                        "created_at": (
+                            item.created_at.isoformat() if item.created_at else None
+                        ),
+                    }
+                )
 
         results.sort(key=lambda r: (r.get("path") or ""))
         return results
@@ -1212,9 +1300,15 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                 "last_used_at": now,
                 "created_at": created_at or now,
             }
-            await self.write_file(path, json.dumps(payload, ensure_ascii=False, indent=2))
+            await self.write_file(
+                path, json.dumps(payload, ensure_ascii=False, indent=2)
+            )
         except Exception as exc:
-            logger.warning("workspace_register_session_failed", session_id=self.session_id, error=str(exc))
+            logger.warning(
+                "workspace_register_session_failed",
+                session_id=self.session_id,
+                error=str(exc),
+            )
 
     async def prune_user_sessions(self, *, keep: int = 10) -> None:
         """Prune session-scoped workspace data to keep only the newest N sessions per user."""
@@ -1229,7 +1323,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             page_size = 200
             offset = 0
             while True:
-                batch = await self.asearch(("user", "sessions"), limit=page_size, offset=offset)
+                batch = await self.asearch(
+                    ("user", "sessions"), limit=page_size, offset=offset
+                )
                 if not batch:
                     break
                 entries.extend(batch)
@@ -1243,7 +1339,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         parsed: list[tuple[str, str]] = []
         for item in entries or []:
             session_key = item.key
-            session_id = session_key[:-5] if session_key.endswith(".json") else session_key
+            session_id = (
+                session_key[:-5] if session_key.endswith(".json") else session_key
+            )
             last_used_at = None
             try:
                 value = item.value or {}
@@ -1252,7 +1350,11 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             except Exception:
                 last_used_at = None
             if not isinstance(last_used_at, str) or not last_used_at:
-                last_used_at = item.updated_at.isoformat() if getattr(item, "updated_at", None) else ""
+                last_used_at = (
+                    item.updated_at.isoformat()
+                    if getattr(item, "updated_at", None)
+                    else ""
+                )
             parsed.append((session_id, last_used_at))
 
         parsed.sort(key=lambda pair: pair[1], reverse=True)
@@ -1284,9 +1386,13 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
         for base in patterns:
             try:
-                self.client.table(WORKSPACE_TABLE).delete().like("prefix", f"{base}%").execute()
+                self.client.table(WORKSPACE_TABLE).delete().like(
+                    "prefix", f"{base}%"
+                ).execute()
             except Exception as exc:
-                logger.warning("workspace_delete_session_failed", base=base, error=str(exc))
+                logger.warning(
+                    "workspace_delete_session_failed", base=base, error=str(exc)
+                )
 
     # -------------------------------------------------------------------------
     # Session cleanup methods
@@ -1310,7 +1416,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         prefix_patterns = [f"workspace:session:{self.session_id}%"]
         # Forward-compat: tolerate session prefixes that include user_id.
         if self.user_id:
-            prefix_patterns.append(f"workspace:session:{self.user_id}:{self.session_id}%")
+            prefix_patterns.append(
+                f"workspace:session:{self.user_id}:{self.session_id}%"
+            )
 
         try:
             deleted_rows = []

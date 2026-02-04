@@ -1,24 +1,31 @@
-'use client';
+"use client";
 
-import React, { memo, useState, useCallback, useEffect, useRef } from 'react';
-import dynamic from 'next/dynamic';
-import type { Message } from '@/services/ag-ui/client';
-import type { AttachmentInput } from '@/services/ag-ui/types';
-import type { TraceStep, TodoItem, ToolEvidenceUpdateEvent } from '@/services/ag-ui/event-types';
-import type { SubagentRun } from '@/features/librechat/AgentContext';
-import { ThinkingPanel } from './ThinkingPanel';
-import { ResearchProgress } from './ResearchProgress';
-import { ToolIndicator } from './ToolIndicator';
-import { Copy, Check, RefreshCw, Pencil } from 'lucide-react';
-import { AttachmentPreviewList } from '@/features/librechat/components/AttachmentPreview';
-import { EnhancedMarkdown } from '@/features/librechat/components/EnhancedMarkdown';
-import { FeedbackPopover } from './FeedbackPopover';
-import { LogAnalysisNotesDropdown } from './log-analysis-notes-dropdown';
-import { extractJsonObjects, stripInternalSearchPayloads } from '@/features/librechat/utils';
+import React, { memo, useState, useCallback, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
+import type { Message } from "@/services/ag-ui/client";
+import type { AttachmentInput } from "@/services/ag-ui/types";
+import type {
+  TraceStep,
+  TodoItem,
+  ToolEvidenceUpdateEvent,
+} from "@/services/ag-ui/event-types";
+import type { SubagentRun } from "@/features/librechat/AgentContext";
+import { ThinkingPanel } from "./ThinkingPanel";
+import { ResearchProgress } from "./ResearchProgress";
+import { ToolIndicator } from "./ToolIndicator";
+import { Copy, Check, RefreshCw, Pencil } from "lucide-react";
+import { AttachmentPreviewList } from "@/features/librechat/components/AttachmentPreview";
+import { EnhancedMarkdown } from "@/features/librechat/components/EnhancedMarkdown";
+import { FeedbackPopover } from "./FeedbackPopover";
+import { LogAnalysisNotesDropdown } from "./log-analysis-notes-dropdown";
+import {
+  extractJsonObjects,
+  stripInternalSearchPayloads,
+} from "@/features/librechat/utils";
 
 const TipTapEditor = dynamic(
-  () => import('./tiptap/TipTapEditor').then((mod) => mod.TipTapEditor),
-  { ssr: false }
+  () => import("./tiptap/TipTapEditor").then((mod) => mod.TipTapEditor),
+  { ssr: false },
 );
 
 interface MessageItemProps {
@@ -40,17 +47,21 @@ interface MessageItemProps {
   onRegenerate?: () => void;
 }
 
-type ResearchStatus = 'idle' | 'running' | 'stuck' | 'failed';
+type ResearchStatus = "idle" | "running" | "stuck" | "failed";
 
 const LONG_MESSAGE_THRESHOLD = 500;
-const THINK_BLOCK_REGEX = /:::\s*(?:thinking|think|analysis|reasoning)\s*([\s\S]*?)\s*:::/gi;
-const THINK_TAG_REGEX = /<\s*(?:thinking|think|analysis|reasoning)\s*>\s*([\s\S]*?)\s*<\/\s*(?:thinking|think|analysis|reasoning)\s*>/gi;
-const THINK_FENCE_REGEX = /```(?:thinking|think|analysis|reasoning)\s*([\s\S]*?)```/gi;
-const THINK_ORPHAN_START_REGEX = /:::\s*(?:thinking|think|analysis|reasoning)\s*/i;
+const THINK_BLOCK_REGEX =
+  /:::\s*(?:thinking|think|analysis|reasoning)\s*([\s\S]*?)\s*:::/gi;
+const THINK_TAG_REGEX =
+  /<\s*(?:thinking|think|analysis|reasoning)\s*>\s*([\s\S]*?)\s*<\/\s*(?:thinking|think|analysis|reasoning)\s*>/gi;
+const THINK_FENCE_REGEX =
+  /```(?:thinking|think|analysis|reasoning)\s*([\s\S]*?)```/gi;
+const THINK_ORPHAN_START_REGEX =
+  /:::\s*(?:thinking|think|analysis|reasoning)\s*/i;
 const THINK_ORPHAN_CLOSE_REGEX = /(?:^|\n)\s*:::\s*(?=\n|$)/g;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 const EMPTY_ATTACHMENTS: AttachmentInput[] = [];
 const EMPTY_ACTIVE_TOOLS: string[] = [];
@@ -59,9 +70,11 @@ const EMPTY_TODOS: TodoItem[] = [];
 const EMPTY_TOOL_EVIDENCE: Record<string, ToolEvidenceUpdateEvent> = {};
 const EMPTY_SUBAGENT_ACTIVITY: Map<string, SubagentRun> = new Map();
 
-function extractThinking(
-  content: string
-): { thinking: string | null; mainContent: string; hadThinking: boolean } {
+function extractThinking(content: string): {
+  thinking: string | null;
+  mainContent: string;
+  hadThinking: boolean;
+} {
   THINK_BLOCK_REGEX.lastIndex = 0;
   THINK_TAG_REGEX.lastIndex = 0;
   THINK_FENCE_REGEX.lastIndex = 0;
@@ -71,14 +84,12 @@ function extractThinking(
     ...content.matchAll(THINK_FENCE_REGEX),
   ];
 
-  const thinkingParts = blocks
-    .map((match) => match[1]?.trim())
-    .filter(Boolean);
+  const thinkingParts = blocks.map((match) => match[1]?.trim()).filter(Boolean);
 
   let mainContent = content
-    .replace(THINK_BLOCK_REGEX, '')
-    .replace(THINK_TAG_REGEX, '')
-    .replace(THINK_FENCE_REGEX, '');
+    .replace(THINK_BLOCK_REGEX, "")
+    .replace(THINK_TAG_REGEX, "")
+    .replace(THINK_FENCE_REGEX, "");
 
   const orphanMatch = mainContent.match(THINK_ORPHAN_START_REGEX);
   if (orphanMatch?.index !== undefined) {
@@ -94,11 +105,11 @@ function extractThinking(
   const hadThinking = thinkingParts.length > 0 || mainContent !== content;
 
   if (hadThinking) {
-    mainContent = mainContent.replace(THINK_ORPHAN_CLOSE_REGEX, '\n').trim();
+    mainContent = mainContent.replace(THINK_ORPHAN_CLOSE_REGEX, "\n").trim();
   }
 
   return {
-    thinking: thinkingParts.length > 0 ? thinkingParts.join('\n\n') : null,
+    thinking: thinkingParts.length > 0 ? thinkingParts.join("\n\n") : null,
     mainContent,
     hadThinking,
   };
@@ -115,12 +126,16 @@ type ParsedLogDiagnoserNote = {
 
 const looksLikeLogDiagnoserPayload = (text: string): boolean => {
   const sample = text.slice(0, 20000);
-  return sample.includes('"customer_ready"') && sample.includes('"internal_notes"') && sample.includes('"file_name"');
+  return (
+    sample.includes('"customer_ready"') &&
+    sample.includes('"internal_notes"') &&
+    sample.includes('"file_name"')
+  );
 };
 
 const parseLogDiagnoserPayload = (
   text: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
 ): { answer: string; notes: Record<string, ParsedLogDiagnoserNote> } | null => {
   if (!looksLikeLogDiagnoserPayload(text)) return null;
 
@@ -131,7 +146,9 @@ const parseLogDiagnoserPayload = (
     .map((raw) => {
       try {
         const obj = JSON.parse(raw);
-        return obj && typeof obj === 'object' ? (obj as Record<string, unknown>) : null;
+        return obj && typeof obj === "object"
+          ? (obj as Record<string, unknown>)
+          : null;
       } catch {
         return null;
       }
@@ -147,41 +164,50 @@ const parseLogDiagnoserPayload = (
   }> = [];
 
   parsed.forEach((obj, idx) => {
-    const fileName = typeof obj.file_name === 'string' ? obj.file_name : '';
+    const fileName = typeof obj.file_name === "string" ? obj.file_name : "";
     const key = fileName || `log-${idx + 1}`;
 
-    const evidence = Array.isArray(obj.evidence) ? obj.evidence.filter((v): v is string => typeof v === 'string') : undefined;
+    const evidence = Array.isArray(obj.evidence)
+      ? obj.evidence.filter((v): v is string => typeof v === "string")
+      : undefined;
     const actions = Array.isArray(obj.recommended_actions)
-      ? obj.recommended_actions.filter((v): v is string => typeof v === 'string')
+      ? obj.recommended_actions.filter(
+          (v): v is string => typeof v === "string",
+        )
       : undefined;
     const questions = Array.isArray(obj.open_questions)
-      ? obj.open_questions.filter((v): v is string => typeof v === 'string')
+      ? obj.open_questions.filter((v): v is string => typeof v === "string")
       : undefined;
 
     const customerReady =
-      typeof obj.customer_ready === 'string' && obj.customer_ready.trim()
+      typeof obj.customer_ready === "string" && obj.customer_ready.trim()
         ? obj.customer_ready.trim()
-        : '';
+        : "";
     const summaryRaw =
-      typeof obj.overall_summary === 'string'
+      typeof obj.overall_summary === "string"
         ? obj.overall_summary
-        : typeof obj.summary === 'string'
+        : typeof obj.summary === "string"
           ? obj.summary
-          : '';
+          : "";
     const summary = summaryRaw.trim();
 
     if (actions?.length) {
       actions.forEach((action) => {
-        if (!recommendedActions.includes(action)) recommendedActions.push(action);
+        if (!recommendedActions.includes(action))
+          recommendedActions.push(action);
       });
     }
 
     const confidenceRaw = obj.confidence;
-    const confidence = typeof confidenceRaw === 'number' && Number.isFinite(confidenceRaw) ? confidenceRaw : undefined;
+    const confidence =
+      typeof confidenceRaw === "number" && Number.isFinite(confidenceRaw)
+        ? confidenceRaw
+        : undefined;
 
     notes[key] = {
       file_name: fileName || undefined,
-      internal_notes: typeof obj.internal_notes === 'string' ? obj.internal_notes : undefined,
+      internal_notes:
+        typeof obj.internal_notes === "string" ? obj.internal_notes : undefined,
       confidence,
       evidence,
       recommended_actions: actions,
@@ -203,7 +229,7 @@ const parseLogDiagnoserPayload = (
     const first = artifacts[0];
     if (!isRecord(first)) return null;
     const title = first.title;
-    return typeof title === 'string' && title.trim() ? title.trim() : null;
+    return typeof title === "string" && title.trim() ? title.trim() : null;
   })();
 
   if (customerReadyBlocks.length > 0) {
@@ -211,52 +237,63 @@ const parseLogDiagnoserPayload = (
     let answer = primary.content;
     if (customerReadyBlocks.length > 1) {
       const extraLines: string[] = [];
-      extraLines.push('', '## Additional Files');
+      extraLines.push("", "## Additional Files");
       customerReadyBlocks.slice(1).forEach((block, index) => {
         const label = block.fileName || `Log file ${index + 2}`;
-        const detail = block.summary || 'Additional log analyzed.';
+        const detail = block.summary || "Additional log analyzed.";
         extraLines.push(`- **${label}:** ${detail}`);
       });
-      answer = `${answer}\n${extraLines.join('\n')}`;
+      answer = `${answer}\n${extraLines.join("\n")}`;
     }
     return { answer, notes };
   }
 
   const lines: string[] = [];
-  lines.push('Thanks for the log file. Here is a focused summary and next steps.');
-  lines.push('', '## The Diagnosis');
-  lines.push(`- Reviewed ${parsed.length} attached log file${parsed.length === 1 ? '' : 's'}.`);
+  lines.push(
+    "Thanks for the log file. Here is a focused summary and next steps.",
+  );
+  lines.push("", "## The Diagnosis");
+  lines.push(
+    `- Reviewed ${parsed.length} attached log file${parsed.length === 1 ? "" : "s"}.`,
+  );
   if (artifactTitle) {
     lines.push(`- Created artifact: ${artifactTitle}.`);
   }
 
   if (recommendedActions.length) {
-    lines.push('', '## How to Fix It');
+    lines.push("", "## How to Fix It");
     recommendedActions.slice(0, 12).forEach((action, index) => {
       lines.push(`${index + 1}. ${action}`);
     });
   } else {
-    lines.push('', '## Next Steps');
-    lines.push('Open Technical details for per-file diagnostics.');
+    lines.push("", "## Next Steps");
+    lines.push("Open Technical details for per-file diagnostics.");
   }
 
-  return { answer: lines.join('\n'), notes };
+  return { answer: lines.join("\n"), notes };
 };
 
 const getTimestampLabels = (
-  value?: string
+  value?: string,
 ): { label: string; title: string } | null => {
   if (!value?.trim()) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return {
-    label: date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
+    label: date.toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
     title: date.toLocaleString(),
   };
 };
 
-const MessageAvatar = memo(function MessageAvatar({ role }: { role: 'user' | 'assistant' }) {
-  if (role === 'user') {
+const MessageAvatar = memo(function MessageAvatar({
+  role,
+}: {
+  role: "user" | "assistant";
+}) {
+  if (role === "user") {
     return (
       <div className="lc-avatar user" aria-hidden="true">
         <span>U</span>
@@ -265,7 +302,13 @@ const MessageAvatar = memo(function MessageAvatar({ role }: { role: 'user' | 'as
   }
   return (
     <div className="lc-avatar assistant" aria-hidden="true">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        aria-hidden="true"
+      >
         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
       </svg>
     </div>
@@ -280,7 +323,13 @@ interface MessageActionsProps {
   onEdit?: () => void;
 }
 
-const MessageActions = memo(function MessageActions({ content, messageId, sessionId, onRegenerate, onEdit }: MessageActionsProps) {
+const MessageActions = memo(function MessageActions({
+  content,
+  messageId,
+  sessionId,
+  onRegenerate,
+  onEdit,
+}: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -302,13 +351,13 @@ const MessageActions = memo(function MessageActions({ content, messageId, sessio
 
     try {
       if (!navigator.clipboard) {
-        const textArea = document.createElement('textarea');
+        const textArea = document.createElement("textarea");
         textArea.value = content;
-        textArea.style.position = 'fixed';
-        textArea.style.opacity = '0';
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
         document.body.appendChild(textArea);
         textArea.select();
-        document.execCommand('copy');
+        document.execCommand("copy");
         document.body.removeChild(textArea);
         setCopied(true);
         copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
@@ -320,29 +369,47 @@ const MessageActions = memo(function MessageActions({ content, messageId, sessio
       setCopyError(false);
       copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error('Failed to copy to clipboard:', err);
+      console.error("Failed to copy to clipboard:", err);
       setCopyError(true);
       copyTimeoutRef.current = setTimeout(() => setCopyError(false), 2000);
     }
   }, [content]);
 
   return (
-    <div className="lc-message-actions" role="group" aria-label="Message actions">
+    <div
+      className="lc-message-actions"
+      role="group"
+      aria-label="Message actions"
+    >
       <FeedbackPopover messageId={messageId} sessionId={sessionId} />
       {onEdit && (
-        <button className="lc-action-btn" onClick={onEdit} aria-label="Edit response">
+        <button
+          className="lc-action-btn"
+          onClick={onEdit}
+          aria-label="Edit response"
+        >
           <Pencil size={14} />
         </button>
       )}
       <button
         className="lc-action-btn"
         onClick={handleCopy}
-        aria-label={copied ? 'Copied!' : copyError ? 'Copy failed' : 'Copy message'}
+        aria-label={
+          copied ? "Copied!" : copyError ? "Copy failed" : "Copy message"
+        }
       >
-        {copied ? <Check size={14} style={{ color: 'var(--lc-accent)' }} /> : <Copy size={14} />}
+        {copied ? (
+          <Check size={14} style={{ color: "var(--lc-accent)" }} />
+        ) : (
+          <Copy size={14} />
+        )}
       </button>
       {onRegenerate && (
-        <button className="lc-action-btn" onClick={onRegenerate} aria-label="Regenerate response">
+        <button
+          className="lc-action-btn"
+          onClick={onRegenerate}
+          aria-label="Regenerate response"
+        >
           <RefreshCw size={14} />
         </button>
       )}
@@ -356,7 +423,13 @@ function StreamingIndicator() {
       <span className="lc-streaming-dot" />
       <span className="lc-streaming-dot" />
       <span className="lc-streaming-dot" />
-      <span style={{ marginLeft: '8px', color: 'var(--lc-text-tertiary)', fontSize: '13px' }}>
+      <span
+        style={{
+          marginLeft: "8px",
+          color: "var(--lc-text-tertiary)",
+          fontSize: "13px",
+        }}
+      >
         Processing...
       </span>
     </span>
@@ -376,13 +449,13 @@ export const MessageItem = memo(function MessageItem({
   toolEvidence,
   subagentActivity,
   researchProgress = 0,
-  researchStatus = 'idle',
+  researchStatus = "idle",
   isResearching = false,
   onEditMessage,
   onRegenerate,
 }: MessageItemProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const [editContent, setEditContent] = useState('');
+  const [editContent, setEditContent] = useState("");
   const [isUserExpanded, setIsUserExpanded] = useState(false);
 
   const effectiveThinkingTrace = thinkingTrace ?? EMPTY_THINKING_TRACE;
@@ -390,46 +463,60 @@ export const MessageItem = memo(function MessageItem({
   const effectiveToolEvidence = toolEvidence ?? EMPTY_TOOL_EVIDENCE;
   const effectiveSubagentActivity = subagentActivity ?? EMPTY_SUBAGENT_ACTIVITY;
   const metadata = isRecord(message.metadata) ? message.metadata : undefined;
-  const isUserMessage = message.role === 'user';
-  const isToolMessage = message.role === 'tool';
+  const isUserMessage = message.role === "user";
+  const isToolMessage = message.role === "tool";
   const createdAtValue =
-    typeof message.created_at === 'string'
+    typeof message.created_at === "string"
       ? message.created_at
-      : typeof metadata?.created_at === 'string'
+      : typeof metadata?.created_at === "string"
         ? metadata.created_at
         : undefined;
   const timestamp = getTimestampLabels(createdAtValue);
 
-  const rawContent = typeof message.content === 'string' ? message.content : '';
+  const rawContent = typeof message.content === "string" ? message.content : "";
   const attachmentsOnly =
     metadata?.attachments_only === true ||
     (!rawContent.trim() && attachments.length > 0);
-  const attachmentLabel = attachments.length === 1 ? 'Attachment' : `${attachments.length} attachments`;
-  const logAnalysisNotes = metadata?.logAnalysisNotes ?? metadata?.log_analysis_notes;
+  const attachmentLabel =
+    attachments.length === 1
+      ? "Attachment"
+      : `${attachments.length} attachments`;
+  const logAnalysisNotes =
+    metadata?.logAnalysisNotes ?? metadata?.log_analysis_notes;
 
   // Content comes directly from message (updated by context)
-  const baseContent = attachmentsOnly && attachments.length > 0 ? attachmentLabel : rawContent;
-  const displayContent = isUserMessage ? baseContent : stripInternalSearchPayloads(baseContent);
-  const { thinking, mainContent, hadThinking } = extractThinking(displayContent);
+  const baseContent =
+    attachmentsOnly && attachments.length > 0 ? attachmentLabel : rawContent;
+  const displayContent = isUserMessage
+    ? baseContent
+    : stripInternalSearchPayloads(baseContent);
+  const { thinking, mainContent, hadThinking } =
+    extractThinking(displayContent);
   const showStreaming = isLast && isStreaming && !isUserMessage && !mainContent;
   const shouldRegisterArtifacts = !(isLast && isStreaming);
-  const showThinking = !isUserMessage && (
-    thinking || (isLast && (effectiveThinkingTrace.length > 0 || effectiveSubagentActivity.size > 0))
-  );
+  const showThinking =
+    !isUserMessage &&
+    (thinking ||
+      (isLast &&
+        (effectiveThinkingTrace.length > 0 ||
+          effectiveSubagentActivity.size > 0)));
   const showResearchProgress =
-    isLast && !isUserMessage && (isResearching || researchStatus !== 'idle');
+    isLast && !isUserMessage && (isResearching || researchStatus !== "idle");
   const showToolIndicator = isLast && !isUserMessage && activeTools.length > 0;
-  const roleName = isUserMessage ? 'You' : 'Agent Sparrow';
+  const roleName = isUserMessage ? "You" : "Agent Sparrow";
 
-  const derivedLogPayload = !isUserMessage ? parseLogDiagnoserPayload(rawContent, metadata) : null;
-  const looksLikeLogPayload = !isUserMessage && looksLikeLogDiagnoserPayload(rawContent);
+  const derivedLogPayload = !isUserMessage
+    ? parseLogDiagnoserPayload(rawContent, metadata)
+    : null;
+  const looksLikeLogPayload =
+    !isUserMessage && looksLikeLogDiagnoserPayload(rawContent);
   const artifactTitle = (() => {
     const artifacts = metadata?.artifacts;
     if (!Array.isArray(artifacts) || artifacts.length === 0) return null;
     const first = artifacts[0];
     if (!isRecord(first)) return null;
     const title = first.title;
-    return typeof title === 'string' && title.trim() ? title.trim() : null;
+    return typeof title === "string" && title.trim() ? title.trim() : null;
   })();
   const fallbackNotes = (() => {
     if (!looksLikeLogPayload) return null;
@@ -438,7 +525,7 @@ export const MessageItem = memo(function MessageItem({
     if (!payload) return null;
     return {
       raw_payload: {
-        file_name: 'Raw log analysis payload',
+        file_name: "Raw log analysis payload",
         internal_notes: payload,
       },
     } satisfies Record<string, ParsedLogDiagnoserNote>;
@@ -448,32 +535,38 @@ export const MessageItem = memo(function MessageItem({
     if (looksLikeLogPayload) {
       return artifactTitle
         ? `Created artifact: ${artifactTitle}.`
-        : 'Log analysis complete. Open Technical details for per-file diagnostics.';
+        : "Log analysis complete. Open Technical details for per-file diagnostics.";
     }
     return hadThinking ? mainContent : displayContent;
   })();
-  const notesForDropdown = logAnalysisNotes ?? derivedLogPayload?.notes ?? fallbackNotes;
+  const notesForDropdown =
+    logAnalysisNotes ?? derivedLogPayload?.notes ?? fallbackNotes;
 
-  const isLongUserMessage = isUserMessage && displayContent.length > LONG_MESSAGE_THRESHOLD;
-  const userDisplayContent = isLongUserMessage && !isUserExpanded
-    ? `${displayContent.slice(0, LONG_MESSAGE_THRESHOLD).trimEnd()}...`
-    : displayContent;
+  const isLongUserMessage =
+    isUserMessage && displayContent.length > LONG_MESSAGE_THRESHOLD;
+  const userDisplayContent =
+    isLongUserMessage && !isUserExpanded
+      ? `${displayContent.slice(0, LONG_MESSAGE_THRESHOLD).trimEnd()}...`
+      : displayContent;
 
   const handleStartEdit = useCallback(() => {
     setEditContent(mainContent || displayContent);
     setIsEditing(true);
   }, [mainContent, displayContent]);
 
-  const handleSaveEdit = useCallback(async (markdown: string) => {
-    const trimmed = markdown.trim();
-    if (onEditMessage && trimmed) {
-      await onEditMessage(message.id, trimmed);
-    }
-  }, [onEditMessage, message.id]);
+  const handleSaveEdit = useCallback(
+    async (markdown: string) => {
+      const trimmed = markdown.trim();
+      if (onEditMessage && trimmed) {
+        await onEditMessage(message.id, trimmed);
+      }
+    },
+    [onEditMessage, message.id],
+  );
 
   const handleExitEdit = useCallback(() => {
     setIsEditing(false);
-    setEditContent('');
+    setEditContent("");
   }, []);
 
   const toggleUserExpanded = useCallback(() => {
@@ -501,11 +594,15 @@ export const MessageItem = memo(function MessageItem({
                   onClick={toggleUserExpanded}
                   aria-expanded={isUserExpanded}
                 >
-                  {isUserExpanded ? 'Show Less' : 'Read More'}
+                  {isUserExpanded ? "Show Less" : "Read More"}
                 </button>
               )}
               {timestamp && (
-                <span className="lc-message-timestamp" aria-hidden="true" title={timestamp.title}>
+                <span
+                  className="lc-message-timestamp"
+                  aria-hidden="true"
+                  title={timestamp.title}
+                >
                   {timestamp.label}
                 </span>
               )}
@@ -520,7 +617,10 @@ export const MessageItem = memo(function MessageItem({
 
         {isUserMessage && attachments.length > 0 && (
           <div className="lc-user-attachments" aria-label="Attached files">
-            <AttachmentPreviewList attachments={attachments} variant="stacked" />
+            <AttachmentPreviewList
+              attachments={attachments}
+              variant="stacked"
+            />
           </div>
         )}
 
@@ -559,7 +659,9 @@ export const MessageItem = memo(function MessageItem({
         {!isUserMessage && (
           <div
             className="lc-message-body"
-            onDoubleClick={!isStreaming && onEditMessage ? handleStartEdit : undefined}
+            onDoubleClick={
+              !isStreaming && onEditMessage ? handleStartEdit : undefined
+            }
           >
             {isEditing ? (
               <TipTapEditor
@@ -585,7 +687,9 @@ export const MessageItem = memo(function MessageItem({
                   registerArtifacts={shouldRegisterArtifacts}
                   variant="librechat"
                 />
-                {notesForDropdown ? <LogAnalysisNotesDropdown notes={notesForDropdown} /> : null}
+                {notesForDropdown ? (
+                  <LogAnalysisNotesDropdown notes={notesForDropdown} />
+                ) : null}
               </>
             )}
           </div>

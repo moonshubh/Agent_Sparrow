@@ -22,7 +22,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 from app.core.logging_config import get_logger
 
@@ -54,19 +54,28 @@ class AgentLoopState(Enum):
 # Valid state transitions for validation
 VALID_TRANSITIONS: dict[AgentLoopState, set[AgentLoopState]] = {
     AgentLoopState.IDLE: {AgentLoopState.PROCESSING_INPUT, AgentLoopState.ERRORED},
-    AgentLoopState.PROCESSING_INPUT: {AgentLoopState.AWAITING_MODEL, AgentLoopState.ERRORED},
+    AgentLoopState.PROCESSING_INPUT: {
+        AgentLoopState.AWAITING_MODEL,
+        AgentLoopState.ERRORED,
+    },
     AgentLoopState.AWAITING_MODEL: {
         AgentLoopState.EXECUTING_TOOLS,
         AgentLoopState.STREAMING_RESPONSE,
         AgentLoopState.ERRORED,
     },
-    AgentLoopState.EXECUTING_TOOLS: {AgentLoopState.PROCESSING_RESULTS, AgentLoopState.ERRORED},
+    AgentLoopState.EXECUTING_TOOLS: {
+        AgentLoopState.PROCESSING_RESULTS,
+        AgentLoopState.ERRORED,
+    },
     AgentLoopState.PROCESSING_RESULTS: {
         AgentLoopState.AWAITING_MODEL,  # More tools needed
         AgentLoopState.STREAMING_RESPONSE,  # Done with tools
         AgentLoopState.ERRORED,
     },
-    AgentLoopState.STREAMING_RESPONSE: {AgentLoopState.COMPLETED, AgentLoopState.ERRORED},
+    AgentLoopState.STREAMING_RESPONSE: {
+        AgentLoopState.COMPLETED,
+        AgentLoopState.ERRORED,
+    },
     AgentLoopState.COMPLETED: {AgentLoopState.IDLE},  # Ready for next turn
     AgentLoopState.ERRORED: {AgentLoopState.IDLE},  # Can recover
 }
@@ -136,13 +145,17 @@ class LoopStateTracker:
         Returns:
             True if transition succeeded, False if invalid
         """
-        if validate and new_state not in VALID_TRANSITIONS.get(self.current_state, set()):
+        if validate and new_state not in VALID_TRANSITIONS.get(
+            self.current_state, set()
+        ):
             logger.warning(
                 "invalid_state_transition",
                 session_id=self.session_id,
                 from_state=self.current_state.value,
                 to_state=new_state.value,
-                valid_transitions=[s.value for s in VALID_TRANSITIONS.get(self.current_state, set())],
+                valid_transitions=[
+                    s.value for s in VALID_TRANSITIONS.get(self.current_state, set())
+                ],
             )
             return False
 
@@ -218,7 +231,9 @@ class LoopStateTracker:
         durations: dict[str, int] = {}
         for transition in self.transitions:
             state_name = transition.from_state.value
-            durations[state_name] = durations.get(state_name, 0) + transition.duration_ms
+            durations[state_name] = (
+                durations.get(state_name, 0) + transition.duration_ms
+            )
         return durations
 
     def get_summary(self) -> dict:
@@ -244,8 +259,8 @@ class LoopStateTracker:
             "model_wait_time_ms": state_durations.get("awaiting_model", 0),
             "tool_execution_time_ms": state_durations.get("executing_tools", 0),
             "processing_time_ms": (
-                state_durations.get("processing_input", 0) +
-                state_durations.get("processing_results", 0)
+                state_durations.get("processing_input", 0)
+                + state_durations.get("processing_results", 0)
             ),
         }
 

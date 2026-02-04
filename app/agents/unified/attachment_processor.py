@@ -13,7 +13,8 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, TYPE_CHECKING
 
 from loguru import logger
 
-from app.agents.unified.attachment_utils import is_text_mime, TEXT_EXTENSIONS, TEXT_MIME_TYPES
+from app.agents.unified.attachment_utils import is_text_mime
+
 if TYPE_CHECKING:
     from app.agents.orchestration.orchestration.state import Attachment
 
@@ -28,9 +29,15 @@ SUMMARIZATION_THRESHOLD = 4_000  # When to summarize attachments
 BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 
 # Log-like patterns
-LOG_LEVEL_RE = re.compile(r"\b(INFO|WARN|WARNING|ERROR|ERR|DEBUG|TRACE|FATAL|CRITICAL)\b")
-ISO_TS_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:\d{2})?\b")
-STACK_RE = re.compile(r"(Traceback \(most recent call last\):|^\s*at\s+\S+\(.*:\d+\))", re.MULTILINE)
+LOG_LEVEL_RE = re.compile(
+    r"\b(INFO|WARN|WARNING|ERROR|ERR|DEBUG|TRACE|FATAL|CRITICAL)\b"
+)
+ISO_TS_RE = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:\d{2})?\b"
+)
+STACK_RE = re.compile(
+    r"(Traceback \(most recent call last\):|^\s*at\s+\S+\(.*:\d+\))", re.MULTILINE
+)
 
 
 class AttachmentProcessor:
@@ -118,10 +125,9 @@ class AttachmentProcessor:
 
         # Heuristic: if no explicit header, guess base64 when payload looks base64-like
         if not is_base64:
-            is_base64 = (
-                bool(BASE64_PATTERN.fullmatch(encoded_clean))
-                and len(encoded_clean) % 4 in (0, 2, 3)
-            )
+            is_base64 = bool(BASE64_PATTERN.fullmatch(encoded_clean)) and len(
+                encoded_clean
+            ) % 4 in (0, 2, 3)
 
         text: Optional[str]
         try:
@@ -192,7 +198,9 @@ class AttachmentProcessor:
     async def inline_attachments(
         self,
         attachments: List["Attachment"],
-        summarizer: Optional[Callable[[str, int], Coroutine[Any, Any, Optional[str]]]] = None,
+        summarizer: Optional[
+            Callable[[str, int], Coroutine[Any, Any, Optional[str]]]
+        ] = None,
         summarizer_timeout: float = 8.0,
     ) -> Optional[str]:
         """Process attachments and create inline text for prompt injection.
@@ -295,7 +303,11 @@ class AttachmentProcessor:
             "levels": len(LOG_LEVEL_RE.findall(sample)),
             "stack": len(STACK_RE.findall(sample)),
         }
-        strong_signal = signals["levels"] >= 3 or signals["timestamps"] >= 5 or signals["stack"] >= 2
+        strong_signal = (
+            signals["levels"] >= 3
+            or signals["timestamps"] >= 5
+            or signals["stack"] >= 2
+        )
         multi_signal = sum(1 for val in signals.values() if val > 0) >= 2
         return strong_signal or multi_signal, {"signals": signals}
 
@@ -324,7 +336,9 @@ class AttachmentProcessor:
             "non_text_skipped": skipped,
         }
 
-    def is_log_attachment(self, attachment: "Attachment") -> tuple[bool, Dict[str, Any]]:
+    def is_log_attachment(
+        self, attachment: "Attachment"
+    ) -> tuple[bool, Dict[str, Any]]:
         """Return True if an attachment looks like a log file."""
         mime = self._get_attr(attachment, "mime_type")
         name = self._get_attr(attachment, "name") or ""
@@ -332,7 +346,11 @@ class AttachmentProcessor:
         data_url = self._get_attr(attachment, "data_url")
 
         if not data_url:
-            return False, {"name": name_lower, "mime": mime, "reason": "missing_data_url"}
+            return False, {
+                "name": name_lower,
+                "mime": mime,
+                "reason": "missing_data_url",
+            }
 
         if not self.is_text_mime(mime, name_lower):
             return False, {"name": name_lower, "mime": mime, "reason": "non_text_mime"}
@@ -340,7 +358,9 @@ class AttachmentProcessor:
         looks_like_log = False
         detail: Dict[str, Any] = {"name": name_lower, "mime": mime, "signals": {}}
 
-        if name_lower.endswith(".log") or (name_lower.endswith(".txt") and "log" in name_lower):
+        if name_lower.endswith(".log") or (
+            name_lower.endswith(".txt") and "log" in name_lower
+        ):
             looks_like_log = True
         else:
             sample = self.decode_data_url(str(data_url), max_chars=8000) or ""

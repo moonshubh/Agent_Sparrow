@@ -1,4 +1,4 @@
-import { Mathematics } from '@tiptap/extension-mathematics';
+import { Mathematics } from "@tiptap/extension-mathematics";
 
 export const createMathExtension = () =>
   Mathematics.configure({

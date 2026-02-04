@@ -16,7 +16,6 @@ from app.core.config import get_models_config
 from app.core.settings import settings
 from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
 
-
 try:
     # ChatGoogleGenerativeAI covers both Gemini and Gemma model IDs
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -58,7 +57,8 @@ class GemmaHelper:
         client = self._get_client()
         prompt = (
             "Summarize the following content concisely for downstream LLM context. "
-            "Preserve key facts and entities. Limit to ~" f"{budget_tokens} tokens.\n\n" + text
+            "Preserve key facts and entities. Limit to ~"
+            f"{budget_tokens} tokens.\n\n" + text
         )
         try:
             self._calls += 1
@@ -68,11 +68,13 @@ class GemmaHelper:
             logger.warning("gemma_summarize_failed", error=str(exc))
             return None
 
-    async def rerank(self, snippets: List[str], query: str, *, top_k: int = 3) -> Optional[List[str]]:
+    async def rerank(
+        self, snippets: List[str], query: str, *, top_k: int = 3
+    ) -> Optional[List[str]]:
         if not snippets or self._remaining() <= 0:
             return None
         client = self._get_client()
-        joined = "\n\n".join(f"Snippet {i+1}: {s}" for i, s in enumerate(snippets))
+        joined = "\n\n".join(f"Snippet {i + 1}: {s}" for i, s in enumerate(snippets))
         prompt = (
             "Given the user query, rerank the snippets by relevance and return the top items as a bulleted list. "
             "Only include the text of the best snippets, preserve wording, no commentary.\n\n"

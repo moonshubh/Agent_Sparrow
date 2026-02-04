@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
-import * as THREE from 'three';
-import { TREE_COLORS } from '../lib/tree3DGeometry';
-import { getBarkTextures } from '../lib/textureLoader';
+import { useEffect, useMemo, useRef } from "react";
+import { useFrame } from "@react-three/fiber";
+import * as THREE from "three";
+import { TREE_COLORS } from "../lib/tree3DGeometry";
+import { getBarkTextures } from "../lib/textureLoader";
 
-const BIOLUM_COLOR = new THREE.Color('#22d3ee');
+const BIOLUM_COLOR = new THREE.Color("#22d3ee");
 
 type TrunkStrand = {
   geometry: THREE.BufferGeometry;
@@ -32,7 +32,9 @@ function createTrunkStrands(height: number): TrunkStrand[] {
       const radius = bottomRadius * (1 - t) + topRadius * t;
       const angle = phase + t * Math.PI * 2 * rotations;
       const r = radius * 1.06;
-      points.push(new THREE.Vector3(Math.cos(angle) * r, y, Math.sin(angle) * r));
+      points.push(
+        new THREE.Vector3(Math.cos(angle) * r, y, Math.sin(angle) * r),
+      );
     }
 
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
@@ -46,7 +48,7 @@ export function TreeTrunk({ height }: { height: number }) {
   const barkTextures = useMemo(() => getBarkTextures(), []);
   const geometry = useMemo(
     () => new THREE.CylinderGeometry(0.55, 0.72, height, 18),
-    [height]
+    [height],
   );
   const material = useMemo(
     () =>
@@ -60,7 +62,7 @@ export function TreeTrunk({ height }: { height: number }) {
         emissive: BIOLUM_COLOR,
         emissiveIntensity: 0.04,
       }),
-    [barkTextures.map, barkTextures.normalMap]
+    [barkTextures.map, barkTextures.normalMap],
   );
 
   const glowMaterial = useMemo(
@@ -73,7 +75,7 @@ export function TreeTrunk({ height }: { height: number }) {
         side: THREE.BackSide,
         depthWrite: false,
       }),
-    []
+    [],
   );
 
   const strands = useMemo(() => createTrunkStrands(height), [height]);
@@ -89,7 +91,8 @@ export function TreeTrunk({ height }: { height: number }) {
     for (let i = 0; i < strands.length; i += 1) {
       const mat = strandMaterialRefs.current[i];
       if (!mat) continue;
-      mat.scale = 1 + Math.sin(t * 0.7 + (strands[i]?.dashOffsetSeed ?? 0)) * 0.12;
+      mat.scale =
+        1 + Math.sin(t * 0.7 + (strands[i]?.dashOffsetSeed ?? 0)) * 0.12;
       mat.opacity = 0.16 + (Math.sin(t * 1.1 + i) + 1) * 0.035;
     }
   });
@@ -99,7 +102,7 @@ export function TreeTrunk({ height }: { height: number }) {
       <mesh geometry={geometry} material={material} castShadow />
       <mesh geometry={geometry} material={glowMaterial} scale={1.06} />
       {strands.map((strand, idx) => (
-        <line
+        <threeLine
           key={`trunk-strand-${strand.dashOffsetSeed}`}
           geometry={strand.geometry}
           ref={(line) => {
@@ -118,7 +121,7 @@ export function TreeTrunk({ height }: { height: number }) {
             blending={THREE.AdditiveBlending}
             depthWrite={false}
           />
-        </line>
+        </threeLine>
       ))}
     </group>
   );

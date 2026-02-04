@@ -1,39 +1,55 @@
-"use client"
+"use client";
 
-import { useMemo, useState } from 'react'
-import { Settings } from 'lucide-react'
+import { useMemo, useState } from "react";
+import { Settings } from "lucide-react";
 
-import { Button } from '@/shared/ui/button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shared/ui/tooltip'
-import { SettingsDialogV2 } from '@/features/settings/components/SettingsDialogV2'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { Button } from "@/shared/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/shared/ui/tooltip";
+import { SettingsDialogV2 } from "@/features/settings/components/SettingsDialogV2";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export function SettingsButtonV2() {
-  const [manualOpen, setManualOpen] = useState(false)
-  const searchParams = useSearchParams()
-  const router = useRouter()
+  const [manualOpen, setManualOpen] = useState(false);
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
-  const settingsParam = useMemo(() => (searchParams?.get('settings') || '').toLowerCase(), [searchParams])
+  const settingsParam = useMemo(
+    () => (searchParams?.get("settings") || "").toLowerCase(),
+    [searchParams],
+  );
 
-  const allowedTabs = useMemo(() => (
-    new Set(['general', 'api-keys', 'zendesk', 'rate-limits', 'account'])
-  ), [])
-  const paramTab = allowedTabs.has(settingsParam) ? settingsParam : null
-  const defaultTab = (paramTab ?? 'general') as 'general' | 'api-keys' | 'zendesk' | 'rate-limits' | 'account'
-  const isOpen = manualOpen || Boolean(paramTab)
+  const allowedTabs = useMemo(
+    () => new Set(["general", "api-keys", "zendesk", "rate-limits", "account"]),
+    [],
+  );
+  const paramTab = allowedTabs.has(settingsParam) ? settingsParam : null;
+  const defaultTab = (paramTab ?? "general") as
+    | "general"
+    | "api-keys"
+    | "zendesk"
+    | "rate-limits"
+    | "account";
+  const isOpen = manualOpen || Boolean(paramTab);
 
   const handleClose = () => {
-    setManualOpen(false)
+    setManualOpen(false);
     try {
-      const sp = new URLSearchParams(Array.from(searchParams?.entries?.() || []))
-      sp.delete('settings')
-      const q = sp.toString()
-      const url = `${typeof window !== 'undefined' ? window.location.pathname : '/'}${q ? `?${q}` : ''}`
-      router.replace(url)
+      const sp = new URLSearchParams(
+        Array.from(searchParams?.entries?.() || []),
+      );
+      sp.delete("settings");
+      const q = sp.toString();
+      const url = `${typeof window !== "undefined" ? window.location.pathname : "/"}${q ? `?${q}` : ""}`;
+      router.replace(url);
     } catch {
       /* no-op */
     }
-  }
+  };
 
   return (
     <>
@@ -61,5 +77,5 @@ export function SettingsButtonV2() {
         defaultTab={defaultTab}
       />
     </>
-  )
+  );
 }

@@ -4,12 +4,14 @@ from typing import Any, Dict
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
+
 try:  # pragma: no cover - version compatibility
     from langgraph.prebuilt import ToolRuntime
 except Exception:  # pragma: no cover
     try:
         from langgraph.prebuilt.tool_node import ToolRuntime
     except Exception:  # pragma: no cover
+
         class ToolRuntime:  # type: ignore[override]
             def __init__(
                 self,
@@ -28,14 +30,24 @@ except Exception:  # pragma: no cover
                 self.store = store
                 self.stream_writer = stream_writer
 
-from app.agents.harness.store.workspace_store import SparrowWorkspaceStore, _IMPORT_FAILED
+
+from app.agents.harness.store.workspace_store import (
+    SparrowWorkspaceStore,
+    _IMPORT_FAILED,
+)
 from app.agents.unified.subagent_workspace_bridge_middleware import (
     SubagentWorkspaceBridgeMiddleware,
 )
 
 
 class _FakeRequest:
-    def __init__(self, *, tool_call: Dict[str, Any] | None = None, state: Any = None, runtime: Any = None):
+    def __init__(
+        self,
+        *,
+        tool_call: Dict[str, Any] | None = None,
+        state: Any = None,
+        runtime: Any = None,
+    ):
         self.tool_call = tool_call
         self.state = state
         self.runtime = runtime
@@ -55,7 +67,9 @@ def test_awrap_tool_call_persists_report_and_replaces_tool_message() -> None:
             user_id="user-1",
             supabase_client=_IMPORT_FAILED,  # cache-only
         )
-        middleware = SubagentWorkspaceBridgeMiddleware(workspace_store=store, report_read_limit_chars=5000, capsule_max_chars=4000)
+        middleware = SubagentWorkspaceBridgeMiddleware(
+            workspace_store=store, report_read_limit_chars=5000, capsule_max_chars=4000
+        )
 
         tool_call_id = "call_123"
         subagent_type = "research"
@@ -106,7 +120,13 @@ def test_awrap_tool_call_persists_report_and_replaces_tool_message() -> None:
             assert isinstance(req.runtime.state, dict)
             assert "attachments" not in req.runtime.state
             assert req.runtime.state.get("subagent_context", {}).get("run_dir")
-            return Command(update={"messages": [ToolMessage(content=full_report, tool_call_id=tool_call_id)]})
+            return Command(
+                update={
+                    "messages": [
+                        ToolMessage(content=full_report, tool_call_id=tool_call_id)
+                    ]
+                }
+            )
 
         result = await middleware.awrap_tool_call(request, handler)  # type: ignore[arg-type]
 
@@ -124,7 +144,10 @@ def test_awrap_tool_call_persists_report_and_replaces_tool_message() -> None:
 
         scratchpad = (result.update or {}).get("scratchpad") or {}
         assert scratchpad["_system"]["subagent_reports"][tool_call_id]["read"] is False
-        assert scratchpad["_system"]["subagent_reports"][tool_call_id]["path"] == report_path
+        assert (
+            scratchpad["_system"]["subagent_reports"][tool_call_id]["path"]
+            == report_path
+        )
 
         spawn = next((e for e in events if e.get("name") == "subagent_spawn"), None)
         end = next((e for e in events if e.get("name") == "subagent_end"), None)
@@ -145,7 +168,9 @@ def test_awrap_model_call_forces_ingest_of_unread_reports() -> None:
             user_id="user-1",
             supabase_client=_IMPORT_FAILED,  # cache-only
         )
-        middleware = SubagentWorkspaceBridgeMiddleware(workspace_store=store, report_read_limit_chars=1234, capsule_max_chars=4000)
+        middleware = SubagentWorkspaceBridgeMiddleware(
+            workspace_store=store, report_read_limit_chars=1234, capsule_max_chars=4000
+        )
 
         state = SimpleNamespace(
             scratchpad={

@@ -21,7 +21,7 @@ import os
 import re
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union
+from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union, cast
 
 from langchain_core.messages import ToolMessage
 from loguru import logger
@@ -34,13 +34,23 @@ try:
     from langchain.agents.middleware import AgentMiddleware, AgentState
     from langchain.agents.middleware.types import ToolCallRequest
     from langgraph.types import Command
+
     AGENT_MIDDLEWARE_AVAILABLE = True
 except ImportError:
     AGENT_MIDDLEWARE_AVAILABLE = False
-    AgentMiddleware = object  # Fallback for type hints
-    AgentState = Dict[str, Any]
-    ToolCallRequest = Any
-    Command = Any
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class AgentState(dict):  # type: ignore[no-redef]
+        pass
+
+    class ToolCallRequest:  # type: ignore[no-redef]
+        pass
+
+    class Command:  # type: ignore[no-redef]
+        pass
+
 
 if TYPE_CHECKING:
     from app.agents.harness.store.workspace_store import SparrowWorkspaceStore
@@ -56,7 +66,7 @@ PREVIEW_LENGTH = 500  # characters for the preview in pointer message
 TIMESTAMP_PATTERN = re.compile(r"_\d{14}$")
 
 
-class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE else object):
+class ToolResultEvictionMiddleware(AgentMiddleware):
     """Middleware for evicting large tool results to prevent context overflow.
 
     When a tool result exceeds the configured threshold:
@@ -126,18 +136,23 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
 
     def _build_backend(self) -> Any:
         """Build an eviction backend, preferring Supabase when enabled."""
-        if os.getenv("SPARROW_EVICTION_USE_SUPABASE", "").lower() in {"1", "true", "yes"}:
+        if os.getenv("SPARROW_EVICTION_USE_SUPABASE", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }:
             try:
                 from app.agents.harness.backends import SupabaseStoreBackend
                 from app.db.supabase.client import get_supabase_client
 
                 client = get_supabase_client()
                 logger.info("eviction_backend_supabase_enabled")
-                return SupabaseStoreBackend(client)
+                return SupabaseStoreBackend(cast(Any, client))
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("eviction_backend_supabase_failed", error=str(exc))
         # Use InMemoryBackend from protocol (eliminates EvictionBackend duplication)
         from app.agents.harness.backends import InMemoryBackend
+
         return InMemoryBackend()
 
     # -------------------------------------------------------------------------
@@ -394,7 +409,9 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
             )
             return result
 
-        return await self._evict_and_pointer_async(result, tool_call_id, tool_name, content)
+        return await self._evict_and_pointer_async(
+            result, tool_call_id, tool_name, content
+        )
 
     # -------------------------------------------------------------------------
     # Legacy Interface (for direct usage without AgentMiddleware)
@@ -447,7 +464,9 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
                 return result
 
             # Evict and create pointer (also needs thread-safe stat updates)
-            return await self._evict_and_pointer_async(result, tool_call_id, tool_name, content)
+            return await self._evict_and_pointer_async(
+                result, tool_call_id, tool_name, content
+            )
 
         return wrapped
 
@@ -514,9 +533,7 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         self._stats.total_chars_evicted += len(content)
         self._stats.add_evicted_path(path)
 
-        return self._create_pointer_message(
-            tool_call_id, tool_name, content, path
-        )
+        return self._create_pointer_message(tool_call_id, tool_name, content, path)
 
     async def _evict_and_pointer_async(
         self,
@@ -693,9 +710,13 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
             tool_name = getattr(runtime, "tool_name", None)
 
         if not tool_call_id:
-            tool_call_id = getattr(request, "tool_call_id", None) or getattr(request, "id", None)
+            tool_call_id = getattr(request, "tool_call_id", None) or getattr(
+                request, "id", None
+            )
         if not tool_name:
-            tool_name = getattr(request, "name", None) or getattr(request, "tool_name", None)
+            tool_name = getattr(request, "name", None) or getattr(
+                request, "tool_name", None
+            )
 
         if isinstance(tool_call_id, str):
             tool_call_id = tool_call_id.strip() or None
@@ -814,7 +835,9 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
                     continue
                 try:
                     timestamp_part = suffix.split("_")[-1]
-                    ts = datetime.strptime(timestamp_part, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                    ts = datetime.strptime(timestamp_part, "%Y%m%d%H%M%S").replace(
+                        tzinfo=timezone.utc
+                    )
                     age = (datetime.now(timezone.utc) - ts).total_seconds()
                     if age < max_age_seconds:
                         continue

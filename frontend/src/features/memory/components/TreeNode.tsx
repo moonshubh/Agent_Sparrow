@@ -1,13 +1,13 @@
-'use client';
+"use client";
 
-import { useMemo, type RefObject } from 'react';
-import { Html } from '@react-three/drei';
-import * as THREE from 'three';
-import type { GraphNode, TreeViewMode } from '../types';
-import type { LODLevel } from '../hooks/useLOD';
-import type { TreeNode3D } from '../hooks/useTree3DLayout';
-import { ENTITY_COLORS } from '../types';
-import { FoliageCluster } from './FoliageCluster';
+import { useMemo, type RefObject } from "react";
+import { Html } from "@react-three/drei";
+import * as THREE from "three";
+import type { GraphNode, TreeViewMode } from "../types";
+import type { LODLevel } from "../hooks/useLOD";
+import type { TreeNode3D } from "../hooks/useTree3DLayout";
+import { ENTITY_COLORS } from "../types";
+import { FoliageCluster } from "./FoliageCluster";
 
 export function TreeNode({
   node,
@@ -42,10 +42,10 @@ export function TreeNode({
   onShowChildren?: (nodeId: string) => void;
   onControlsHoverChange?: (hovered: boolean) => void;
 }) {
-  const coreColor = ENTITY_COLORS[node.data.node.entityType] ?? '#6B7280';
-  const baseColor = ghosted ? '#9CA3AF' : coreColor;
+  const coreColor = ENTITY_COLORS[node.data.node.entityType] ?? "#6B7280";
+  const baseColor = ghosted ? "#9CA3AF" : coreColor;
   const reviewedOpacity = ghosted ? 0.08 : dimmed ? 0.14 : hovered ? 0.6 : 0.38;
-  const reviewedColor = '#34d399';
+  const reviewedColor = "#34d399";
 
   const materialProps = useMemo(
     () => ({
@@ -53,7 +53,15 @@ export function TreeNode({
       roughness: 0.3,
       metalness: 0.1,
       transparent: true,
-      opacity: ghosted ? (dimmed ? 0.06 : 0.1) : dimmed ? 0.18 : hovered ? 0.95 : 0.9,
+      opacity: ghosted
+        ? dimmed
+          ? 0.06
+          : 0.1
+        : dimmed
+          ? 0.18
+          : hovered
+            ? 0.95
+            : 0.9,
       emissive: new THREE.Color(baseColor),
       emissiveIntensity: ghosted
         ? 0.015
@@ -63,21 +71,21 @@ export function TreeNode({
             ? 0.18
             : 0.08,
     }),
-    [baseColor, dimmed, ghosted, hovered, selected]
+    [baseColor, dimmed, ghosted, hovered, selected],
   );
 
   const showControls =
     (selected || hovered) && (node.childCount > 0 || node.overflowCount > 0);
 
   const foliageCount = useMemo(() => {
-    const multiplier = viewMode === 'celebrate_strengths' ? 1.2 : 0.6;
-    const lodMultiplier = lod === 'high' ? 1 : lod === 'medium' ? 0.5 : 0;
+    const multiplier = viewMode === "celebrate_strengths" ? 1.2 : 0.6;
+    const lodMultiplier = lod === "high" ? 1 : lod === "medium" ? 0.5 : 0;
     const raw = Math.round(node.foliageCount * multiplier * lodMultiplier);
     return Math.min(240, Math.max(18, raw));
   }, [lod, node.foliageCount, viewMode]);
 
-  const showDetail = lod !== 'low';
-  const sphereDetail = lod === 'high' ? 14 : 10;
+  const showDetail = lod !== "low";
+  const sphereDetail = lod === "high" ? 14 : 10;
 
   return (
     <group
@@ -114,7 +122,11 @@ export function TreeNode({
       {reviewed && showDetail && (
         <mesh position={[node.position.x, node.position.y, node.position.z]}>
           <torusGeometry args={[0.72, 0.045, 10, 36]} />
-          <meshBasicMaterial color={reviewedColor} transparent opacity={reviewedOpacity} />
+          <meshBasicMaterial
+            color={reviewedColor}
+            transparent
+            opacity={reviewedOpacity}
+          />
         </mesh>
       )}
 
@@ -124,7 +136,9 @@ export function TreeNode({
           center
           portal={htmlPortal}
         >
-          <div className="particle-tree-label">{node.data.node.displayLabel}</div>
+          <div className="particle-tree-label">
+            {node.data.node.displayLabel}
+          </div>
         </Html>
       )}
 
@@ -157,9 +171,9 @@ export function TreeNode({
                 type="button"
                 className="particle-tree-node-control particle-tree-node-control--expand"
                 onClick={() => onToggleExpanded(node.id)}
-                title={node.isExpanded ? 'Collapse' : 'Expand'}
+                title={node.isExpanded ? "Collapse" : "Expand"}
               >
-                {node.isExpanded ? '−' : '+'}
+                {node.isExpanded ? "−" : "+"}
               </button>
             )}
             {node.overflowCount > 0 && onShowChildren && (

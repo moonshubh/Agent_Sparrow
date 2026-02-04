@@ -10,16 +10,21 @@ This patch adds a seen-object tracking mechanism to prevent infinite recursion.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 from typing import Any, Set
 
 _PATCH_FLAG = "_agui_json_safe_patch_applied"
 _PATCH_LOCK = threading.Lock()
+_COROUTINE_TRACE_LOCK = threading.Lock()
+_COROUTINE_TRACE_SEEN: set[tuple[str | None, int | None, str | None]] = set()
 logger = logging.getLogger(__name__)
 
 
-def make_json_safe_with_cycle_detection(value: Any, _seen: Set[int] | None = None) -> Any:
+def make_json_safe_with_cycle_detection(
+    value: Any, _seen: Set[int] | None = None
+) -> Any:
     """
     Recursively convert a value into a JSON-serializable structure with circular reference detection.
 
@@ -31,6 +36,37 @@ def make_json_safe_with_cycle_detection(value: Any, _seen: Set[int] | None = Non
     """
     if _seen is None:
         _seen = set()
+
+    # Avoid leaking un-awaited coroutines into JSON output.
+    if asyncio.iscoroutine(value):
+        try:
+            frame = getattr(value, "cr_frame", None)
+            location = (
+                getattr(frame.f_code, "co_filename", None) if frame else None,
+                getattr(frame, "f_lineno", None) if frame else None,
+                getattr(frame.f_code, "co_name", None) if frame else None,
+            )
+            with _COROUTINE_TRACE_LOCK:
+                should_log = location not in _COROUTINE_TRACE_SEEN
+                if should_log:
+                    _COROUTINE_TRACE_SEEN.add(location)
+            if should_log:
+                logger.warning(
+                    "unawaited_coroutine_in_json_safe",
+                    extra={
+                        "coroutine": repr(value),
+                        "file": location[0],
+                        "line": location[1],
+                        "function": location[2],
+                    },
+                )
+        except Exception:
+            logger.exception("Failed to inspect unawaited coroutine")
+        try:
+            value.close()
+        except Exception:
+            pass
+        return f"<coroutine {type(value).__name__}>"
 
     # Check for circular reference using object id
     obj_id = id(value)
@@ -47,8 +83,7 @@ def make_json_safe_with_cycle_detection(value: Any, _seen: Set[int] | None = Non
     if hasattr(value, "model_dump"):
         try:
             return make_json_safe_with_cycle_detection(
-                value.model_dump(by_alias=True, exclude_none=True),
-                _seen
+                value.model_dump(by_alias=True, exclude_none=True), _seen
             )
         except Exception:
             pass
@@ -56,17 +91,21 @@ def make_json_safe_with_cycle_detection(value: Any, _seen: Set[int] | None = Non
     # LangChain messages or other chat message types
     try:
         from langchain_core.messages import BaseMessage  # type: ignore
+
         if isinstance(value, BaseMessage):
             try:
-                return make_json_safe_with_cycle_detection(value.to_dict(), _seen)
+                to_dict = getattr(value, "to_dict", None)
+                if callable(to_dict):
+                    return make_json_safe_with_cycle_detection(to_dict(), _seen)
             except Exception:
-                # Fallback: serialize minimal shape
-                return {
-                    "__type__": type(value).__name__,
-                    "role": getattr(value, "role", None),
-                    "content": getattr(value, "content", None),
-                    "additional_kwargs": getattr(value, "additional_kwargs", None),
-                }
+                pass
+            # Fallback: serialize minimal shape
+            return {
+                "__type__": type(value).__name__,
+                "role": getattr(value, "role", None),
+                "content": getattr(value, "content", None),
+                "additional_kwargs": getattr(value, "additional_kwargs", None),
+            }
     except Exception:
         # If langchain_core not available, continue with other handlers
         pass
@@ -104,7 +143,9 @@ def make_json_safe_with_cycle_detection(value: Any, _seen: Set[int] | None = Non
 
     # List / tuple
     if isinstance(value, (list, tuple)):
-        return [make_json_safe_with_cycle_detection(sub_value, _seen) for sub_value in value]
+        return [
+            make_json_safe_with_cycle_detection(sub_value, _seen) for sub_value in value
+        ]
 
     # Already JSON safe
     if is_primitive:
@@ -128,9 +169,11 @@ def make_json_safe_with_cycle_detection(value: Any, _seen: Set[int] | None = Non
 def apply_patch() -> None:
     """Idempotent patch application for make_json_safe."""
     try:
-        import ag_ui_langgraph.utils as agui_utils
+        import ag_ui_langgraph.utils as agui_utils  # type: ignore[import-untyped]
     except ImportError:
-        logger.warning("ag_ui_langgraph.utils not found - skipping make_json_safe patch")
+        logger.warning(
+            "ag_ui_langgraph.utils not found - skipping make_json_safe patch"
+        )
         return
 
     if getattr(agui_utils, _PATCH_FLAG, False):

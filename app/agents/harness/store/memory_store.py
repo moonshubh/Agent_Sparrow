@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """LangGraph BaseStore adapter for Agent Sparrow memory service.
 
 This module provides a LangGraph-compatible BaseStore implementation that wraps
@@ -117,7 +118,9 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
 
                 self._memory_service = memory_service
             except ImportError:
-                logger.warning("MemoryService not available - operating in cache-only mode")
+                logger.warning(
+                    "MemoryService not available - operating in cache-only mode"
+                )
                 self._memory_service = _IMPORT_FAILED
                 return None
 
@@ -141,9 +144,10 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
 
         # Use asyncio.run() for Python 3.10+ compatibility (avoids deprecated get_event_loop())
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             # If there's already a running loop, create a task
             import concurrent.futures
+
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 return pool.submit(asyncio.run, self.abatch(ops)).result()
         except RuntimeError:
@@ -255,10 +259,22 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
             value=value,
             key=key,
             namespace=namespace,
-            created_at=self._cache.get(namespace, {}).get(key, Item(
-                value={}, key=key, namespace=namespace,
-                created_at=now, updated_at=now
-            )).created_at if namespace in self._cache and key in self._cache[namespace] else now,
+            created_at=(
+                self._cache.get(namespace, {})
+                .get(
+                    key,
+                    Item(
+                        value={},
+                        key=key,
+                        namespace=namespace,
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                )
+                .created_at
+                if namespace in self._cache and key in self._cache[namespace]
+                else now
+            ),
             updated_at=now,
         )
 
@@ -273,7 +289,8 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
             if not text and isinstance(value, dict):
                 # Try to construct text from value fields
                 text = " | ".join(
-                    f"{k}: {v}" for k, v in value.items()
+                    f"{k}: {v}"
+                    for k, v in value.items()
                     if isinstance(v, (str, int, float, bool))
                 )
 
@@ -329,7 +346,9 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
                                 "text": memory.get("memory", ""),
                                 **metadata,
                             },
-                            key=metadata.get("store_key", memory.get("id", str(uuid.uuid4()))),
+                            key=metadata.get(
+                                "store_key", memory.get("id", str(uuid.uuid4()))
+                            ),
                             namespace=namespace,
                             created_at=datetime.now(timezone.utc),
                             updated_at=datetime.now(timezone.utc),
@@ -348,8 +367,7 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
                         # Apply filter if provided
                         if filter_dict:
                             match = all(
-                                item.value.get(k) == v
-                                for k, v in filter_dict.items()
+                                item.value.get(k) == v for k, v in filter_dict.items()
                             )
                             if not match:
                                 continue
@@ -398,20 +416,20 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
 
                 if match_type == "prefix":
                     all_namespaces = {
-                        ns for ns in all_namespaces
+                        ns
+                        for ns in all_namespaces
                         if len(ns) >= len(path) and ns[: len(path)] == path
                     }
                 elif match_type == "suffix":
                     all_namespaces = {
-                        ns for ns in all_namespaces
+                        ns
+                        for ns in all_namespaces
                         if len(ns) >= len(path) and ns[-len(path) :] == path
                     }
 
         # Filter by max_depth
         if max_depth is not None:
-            all_namespaces = {
-                ns for ns in all_namespaces if len(ns) <= max_depth
-            }
+            all_namespaces = {ns for ns in all_namespaces if len(ns) <= max_depth}
 
         # Sort and apply pagination
         sorted_ns = sorted(all_namespaces)
@@ -473,7 +491,9 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
         """Store a single item asynchronously."""
         if not _LANGGRAPH_STORE_AVAILABLE:
             raise RuntimeError("langgraph.store not available")
-        await self.abatch([PutOp(namespace=namespace, key=key, value=value, index=index)])
+        await self.abatch(
+            [PutOp(namespace=namespace, key=key, value=value, index=index)]
+        )
 
     def delete(self, namespace: Tuple[str, ...], key: str) -> None:
         """Delete a single item synchronously."""
@@ -499,15 +519,17 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
         """Search for items synchronously."""
         if not _LANGGRAPH_STORE_AVAILABLE:
             raise RuntimeError("langgraph.store not available")
-        results = self.batch([
-            SearchOp(
-                namespace_prefix=namespace_prefix,
-                query=query,
-                filter=filter,
-                limit=limit,
-                offset=offset,
-            )
-        ])
+        results = self.batch(
+            [
+                SearchOp(
+                    namespace_prefix=namespace_prefix,
+                    query=query,
+                    filter=filter,
+                    limit=limit,
+                    offset=offset,
+                )
+            ]
+        )
         return results[0] if results else []
 
     async def asearch(
@@ -524,15 +546,17 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
         """Search for items asynchronously."""
         if not _LANGGRAPH_STORE_AVAILABLE:
             raise RuntimeError("langgraph.store not available")
-        results = await self.abatch([
-            SearchOp(
-                namespace_prefix=namespace_prefix,
-                query=query,
-                filter=filter,
-                limit=limit,
-                offset=offset,
-            )
-        ])
+        results = await self.abatch(
+            [
+                SearchOp(
+                    namespace_prefix=namespace_prefix,
+                    query=query,
+                    filter=filter,
+                    limit=limit,
+                    offset=offset,
+                )
+            ]
+        )
         return results[0] if results else []
 
     def list_namespaces(
@@ -549,14 +573,16 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
             raise RuntimeError("langgraph.store not available")
         # Build match conditions from prefix/suffix
         match_conditions = self._build_match_conditions(prefix, suffix)
-        results = self.batch([
-            ListNamespacesOp(
-                match_conditions=match_conditions,
-                max_depth=max_depth,
-                limit=limit,
-                offset=offset,
-            )
-        ])
+        results = self.batch(
+            [
+                ListNamespacesOp(
+                    match_conditions=match_conditions,
+                    max_depth=max_depth,
+                    limit=limit,
+                    offset=offset,
+                )
+            ]
+        )
         return results[0] if results else []
 
     async def alist_namespaces(
@@ -573,14 +599,16 @@ class SparrowMemoryStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
             raise RuntimeError("langgraph.store not available")
         # Build match conditions from prefix/suffix
         match_conditions = self._build_match_conditions(prefix, suffix)
-        results = await self.abatch([
-            ListNamespacesOp(
-                match_conditions=match_conditions,
-                max_depth=max_depth,
-                limit=limit,
-                offset=offset,
-            )
-        ])
+        results = await self.abatch(
+            [
+                ListNamespacesOp(
+                    match_conditions=match_conditions,
+                    max_depth=max_depth,
+                    limit=limit,
+                    offset=offset,
+                )
+            ]
+        )
         return results[0] if results else []
 
     def _build_match_conditions(

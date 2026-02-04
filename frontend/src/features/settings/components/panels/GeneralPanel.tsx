@@ -1,25 +1,30 @@
-"use client"
+"use client";
 
-import React, { useCallback } from "react"
-import { useTheme } from "next-themes"
-import { Separator } from "@/shared/ui/separator"
-import { Switch } from "@/shared/ui/switch"
-import { Label } from "@/shared/ui/label"
+import React, { useCallback } from "react";
+import { useTheme } from "next-themes";
+import { Separator } from "@/shared/ui/separator";
+import { Switch } from "@/shared/ui/switch";
+import { Label } from "@/shared/ui/label";
 
 export function GeneralPanel() {
-  const { theme, setTheme, resolvedTheme } = useTheme()
-  const selected = theme === "system" ? resolvedTheme : theme
+  const { theme, setTheme, resolvedTheme } = useTheme();
+  const selected = theme === "system" ? resolvedTheme : theme;
 
-  const isDark = selected === "dark"
-  const onToggleDark = useCallback((next: boolean) => {
-    setTheme(next ? "dark" : "light")
-  }, [setTheme])
+  const isDark = selected === "dark";
+  const onToggleDark = useCallback(
+    (next: boolean) => {
+      setTheme(next ? "dark" : "light");
+    },
+    [setTheme],
+  );
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold">General</h2>
-        <p className="text-sm text-muted-foreground">Basic preferences for appearance.</p>
+        <p className="text-sm text-muted-foreground">
+          Basic preferences for appearance.
+        </p>
       </div>
 
       <Separator />
@@ -29,7 +34,9 @@ export function GeneralPanel() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <div className="text-sm font-medium">Dark Mode</div>
-            <div className="text-xs text-muted-foreground">Toggle application theme</div>
+            <div className="text-xs text-muted-foreground">
+              Toggle application theme
+            </div>
           </div>
           <Switch
             checked={isDark}
@@ -39,5 +46,5 @@ export function GeneralPanel() {
         </div>
       </div>
     </div>
-  )
+  );
 }

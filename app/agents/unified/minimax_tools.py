@@ -22,7 +22,7 @@ import shutil
 import shlex
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Annotated
+from typing import Any, Dict, List, Optional, Annotated, cast
 
 import httpx
 from langgraph.prebuilt import InjectedState
@@ -185,7 +185,9 @@ class MinimaxAPIClient:
             return self._parse_search_response(result, query, max_results)
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"minimax_web_search_http_error status={e.response.status_code} body={e.response.text[:500]}")
+            logger.error(
+                f"minimax_web_search_http_error status={e.response.status_code} body={e.response.text[:500]}"
+            )
             return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
         except Exception as e:
             logger.error(f"minimax_web_search_error error='{str(e)}'")
@@ -279,7 +281,9 @@ class MinimaxAPIClient:
             return self._parse_image_response(result, prompt, image_url)
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"minimax_understand_image_http_error status={e.response.status_code}")
+            logger.error(
+                f"minimax_understand_image_http_error status={e.response.status_code}"
+            )
             return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
         except Exception as e:
             logger.error(f"minimax_understand_image_error error='{str(e)}'")
@@ -438,10 +442,14 @@ async def _get_minimax_mcp_client() -> Optional[MultiServerMCPClient]:
     global _minimax_mcp_client
     async with _mcp_client_lock:
         if _minimax_mcp_client is None:
-            config = {MINIMAX_MCP_SERVER_NAME: _build_minimax_mcp_connection(api_key)}
-            _minimax_mcp_client = MultiServerMCPClient(config)
+            config: Dict[str, Any] = {
+                MINIMAX_MCP_SERVER_NAME: _build_minimax_mcp_connection(api_key)
+            }
+            _minimax_mcp_client = MultiServerMCPClient(cast(Any, config))
             _minimax_mcp_tools.clear()
-            logger.info("minimax_mcp_client_initialized", server=MINIMAX_MCP_SERVER_NAME)
+            logger.info(
+                "minimax_mcp_client_initialized", server=MINIMAX_MCP_SERVER_NAME
+            )
 
     return _minimax_mcp_client
 
@@ -461,8 +469,8 @@ async def _get_minimax_mcp_tool(tool_name: str) -> Optional[BaseTool]:
         logger.warning("minimax_mcp_tools_load_failed", error=str(exc))
         return None
 
-    for tool in tools:
-        _minimax_mcp_tools[tool.name] = tool
+    for tool_item in tools:
+        _minimax_mcp_tools[tool_item.name] = tool_item
     return _minimax_mcp_tools.get(tool_name)
 
 
@@ -588,7 +596,9 @@ def _normalize_mcp_web_search_result(
             {
                 "title": item.get("title") or item.get("name"),
                 "link": item.get("link") or item.get("url"),
-                "snippet": item.get("snippet") or item.get("content") or item.get("summary"),
+                "snippet": item.get("snippet")
+                or item.get("content")
+                or item.get("summary"),
             }
         )
 
@@ -666,7 +676,9 @@ async def minimax_web_search_tool(
     if not query:
         return {"error": "Query is required"}
 
-    logger.info(f"minimax_web_search_invoked query='{query[:100]}' max_results={max_results}")
+    logger.info(
+        f"minimax_web_search_invoked query='{query[:100]}' max_results={max_results}"
+    )
 
     mcp_result = await _invoke_minimax_mcp_tool(
         MINIMAX_MCP_TOOL_WEB_SEARCH,
@@ -692,13 +704,17 @@ async def minimax_web_search_tool(
     client = await get_minimax_api_client()
     if not client:
         logger.warning("minimax_web_search_unavailable reason='api_key_not_configured'")
-        return {"error": "Minimax API key not configured. Set MINIMAX_API_KEY in environment."}
+        return {
+            "error": "Minimax API key not configured. Set MINIMAX_API_KEY in environment."
+        }
 
     result = await client.web_search(query, max_results)
 
     if "error" not in result:
         result_count = len(result.get("results", []))
-        logger.info(f"minimax_web_search_success query='{query[:50]}' results={result_count}")
+        logger.info(
+            f"minimax_web_search_success query='{query[:50]}' results={result_count}"
+        )
     else:
         logger.warning(
             f"minimax_web_search_failed query='{query[:50]}' error='{result.get('error', 'unknown')}'"
@@ -742,7 +758,9 @@ async def minimax_understand_image_tool(
     if not image_url:
         return {"error": "Image URL is required"}
 
-    logger.info(f"minimax_understand_image_invoked prompt='{prompt[:100]}' image='{image_url[:100]}'")
+    logger.info(
+        f"minimax_understand_image_invoked prompt='{prompt[:100]}' image='{image_url[:100]}'"
+    )
 
     mcp_result = await _invoke_minimax_mcp_tool(
         MINIMAX_MCP_TOOL_UNDERSTAND_IMAGE,
@@ -764,8 +782,12 @@ async def minimax_understand_image_tool(
 
     client = await get_minimax_api_client()
     if not client:
-        logger.warning("minimax_understand_image_unavailable reason='api_key_not_configured'")
-        return {"error": "Minimax API key not configured. Set MINIMAX_API_KEY in environment."}
+        logger.warning(
+            "minimax_understand_image_unavailable reason='api_key_not_configured'"
+        )
+        return {
+            "error": "Minimax API key not configured. Set MINIMAX_API_KEY in environment."
+        }
 
     result = await client.understand_image(prompt, image_url)
 

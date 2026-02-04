@@ -1,4 +1,5 @@
 """Simple Redis caching layer for agent responses."""
+
 from __future__ import annotations
 
 import hashlib
@@ -14,6 +15,7 @@ REDIS_URL = settings.redis_url
 CACHE_TTL_SEC = settings.cache_ttl_sec
 
 _redis_client: redis.Redis | None = None
+
 
 def _get_client() -> redis.Redis:
     global _redis_client
@@ -47,6 +49,10 @@ class RedisCache:
         if value is None:
             return None
         try:
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="ignore")
+            if not isinstance(value, str):
+                return None
             return json.loads(value)
         except json.JSONDecodeError:
             return None

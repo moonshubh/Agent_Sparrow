@@ -1,4 +1,4 @@
-import { ArtifactImage } from './artifact-image';
+import { ArtifactImage } from "./artifact-image";
 
 export const createImageExtension = () =>
   ArtifactImage.configure({

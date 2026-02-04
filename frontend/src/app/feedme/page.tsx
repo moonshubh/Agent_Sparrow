@@ -1,83 +1,83 @@
-'use client'
+"use client";
 
-import React, { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import Dock, { Card, DockCard } from '@/features/feedme/components/Dock'
-import EnhancedAnimatedLogo from '@/features/feedme/components/EnhancedAnimatedLogo'
-import FoldersDialog from '@/features/feedme/components/FoldersDialog'
-import UploadDialog from '@/features/feedme/components/UploadDialog'
-import UnassignedDialog from '@/features/feedme/components/UnassignedDialog'
-import { StatsPopover } from '@/features/feedme/components/StatsPopover'
-import { ErrorBoundary } from '@/features/feedme/components/ErrorBoundary'
-import BackendHealthAlert from '@/shared/components/BackendHealthAlert'
-import { LampContainer } from '@/components/ui/lamp'
+import React, { useState } from "react";
+import { useRouter } from "next/navigation";
+import Dock, { Card, DockCard } from "@/features/feedme/components/Dock";
+import EnhancedAnimatedLogo from "@/features/feedme/components/EnhancedAnimatedLogo";
+import FoldersDialog from "@/features/feedme/components/FoldersDialog";
+import UploadDialog from "@/features/feedme/components/UploadDialog";
+import UnassignedDialog from "@/features/feedme/components/UnassignedDialog";
+import { StatsPopover } from "@/features/feedme/components/StatsPopover";
+import { ErrorBoundary } from "@/features/feedme/components/ErrorBoundary";
+import BackendHealthAlert from "@/shared/components/BackendHealthAlert";
+import { LampContainer } from "@/components/ui/lamp";
 
 export default function FeedMeRevampedPage() {
-  const [showCenter, setShowCenter] = useState(true)
-  const [foldersOpen, setFoldersOpen] = useState(false)
-  const [uploadOpen, setUploadOpen] = useState(false)
-  const [unassignedOpen, setUnassignedOpen] = useState(false)
-  const [statsOpen, setStatsOpen] = useState(false)
-  const [frameAdvanceTrigger, setFrameAdvanceTrigger] = useState(0)
-  const router = useRouter()
+  const [showCenter, setShowCenter] = useState(true);
+  const [foldersOpen, setFoldersOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [unassignedOpen, setUnassignedOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [frameAdvanceTrigger, setFrameAdvanceTrigger] = useState(0);
+  const router = useRouter();
 
   // Function to advance logo frame on user actions
   const advanceLogoFrame = () => {
-    setFrameAdvanceTrigger(prev => prev + 1)
-  }
+    setFrameAdvanceTrigger((prev) => prev + 1);
+  };
 
   const dockItems = [
     {
-      id: 'home',
-      label: 'Home',
-      iconSrc: '/feedme-dock/Home.png',
+      id: "home",
+      label: "Home",
+      iconSrc: "/feedme-dock/Home.png",
       onClick: () => {
-        setShowCenter(false)
-        advanceLogoFrame() // Trigger keyframe change on navigation
-        router.push('/chat')
+        setShowCenter(false);
+        advanceLogoFrame(); // Trigger keyframe change on navigation
+        router.push("/chat");
       },
     },
     {
-      id: 'upload',
-      label: 'Upload',
-      iconSrc: '/feedme-dock/Upload.png',
+      id: "upload",
+      label: "Upload",
+      iconSrc: "/feedme-dock/Upload.png",
       onClick: () => {
-        setShowCenter(false)
-        advanceLogoFrame() // Trigger keyframe change when opening upload
-        setUploadOpen(true)
+        setShowCenter(false);
+        advanceLogoFrame(); // Trigger keyframe change when opening upload
+        setUploadOpen(true);
       },
     },
     {
-      id: 'unassigned',
-      label: 'Unassigned',
-      iconSrc: '/feedme-dock/Unassigned Conversations.png',
+      id: "unassigned",
+      label: "Unassigned",
+      iconSrc: "/feedme-dock/Unassigned Conversations.png",
       onClick: () => {
-        setShowCenter(false)
-        advanceLogoFrame() // Trigger keyframe change when opening unassigned
-        setUnassignedOpen(true)
+        setShowCenter(false);
+        advanceLogoFrame(); // Trigger keyframe change when opening unassigned
+        setUnassignedOpen(true);
       },
     },
     {
-      id: 'folders',
-      label: 'Folders',
-      iconSrc: '/feedme-dock/Folders.png',
+      id: "folders",
+      label: "Folders",
+      iconSrc: "/feedme-dock/Folders.png",
       onClick: () => {
-        setShowCenter(false)
-        advanceLogoFrame() // Trigger keyframe change when opening folders
-        setFoldersOpen(true)
+        setShowCenter(false);
+        advanceLogoFrame(); // Trigger keyframe change when opening folders
+        setFoldersOpen(true);
       },
     },
     {
-      id: 'stats',
-      label: 'Stats',
-      iconSrc: '/feedme-dock/Stats.png',
+      id: "stats",
+      label: "Stats",
+      iconSrc: "/feedme-dock/Stats.png",
       onClick: () => {
-        setShowCenter(false)
-        advanceLogoFrame() // Trigger keyframe change when opening stats
-        setStatsOpen(true)
+        setShowCenter(false);
+        advanceLogoFrame(); // Trigger keyframe change when opening stats
+        setStatsOpen(true);
       },
     },
-  ]
+  ];
 
   return (
     <ErrorBoundary>
@@ -92,7 +92,10 @@ export default function FeedMeRevampedPage() {
           <div className="absolute inset-0 z-5 -mt-20 flex items-center justify-center pointer-events-none">
             <LampContainer>
               <div className="relative h-[440px] w-[440px]">
-                <EnhancedAnimatedLogo className="h-full w-full" triggerAdvance={frameAdvanceTrigger} />
+                <EnhancedAnimatedLogo
+                  className="h-full w-full"
+                  triggerAdvance={frameAdvanceTrigger}
+                />
               </div>
             </LampContainer>
           </div>
@@ -100,9 +103,19 @@ export default function FeedMeRevampedPage() {
 
         {/* Bottom-centered Dock with safe bottom space */}
         <div className="absolute inset-x-0 bottom-0 z-10 flex items-end justify-center px-4 pb-12">
-          <Dock className="max-w-[1024px]" baseSize={82} magnification={1.3} distance={190}>
+          <Dock
+            className="max-w-[1024px]"
+            baseSize={82}
+            magnification={1.3}
+            distance={190}
+          >
             {dockItems.map((item) => (
-              <DockCard key={item.id} id={item.id} label={item.label} onClick={item.onClick}>
+              <DockCard
+                key={item.id}
+                id={item.id}
+                label={item.label}
+                onClick={item.onClick}
+              >
                 <Card src={item.iconSrc} alt={`${item.label} icon`} />
               </DockCard>
             ))}
@@ -113,39 +126,39 @@ export default function FeedMeRevampedPage() {
         <FoldersDialog
           isOpen={foldersOpen}
           onClose={() => {
-            setFoldersOpen(false)
-            setShowCenter(true)
-            advanceLogoFrame() // Trigger keyframe when folders dialog closes
+            setFoldersOpen(false);
+            setShowCenter(true);
+            advanceLogoFrame(); // Trigger keyframe when folders dialog closes
           }}
           onFrameAdvance={advanceLogoFrame} // Trigger keyframe when folder is opened/closed
         />
         <UploadDialog
           isOpen={uploadOpen}
           onClose={() => {
-            setUploadOpen(false)
-            setShowCenter(true)
-            advanceLogoFrame()
+            setUploadOpen(false);
+            setShowCenter(true);
+            advanceLogoFrame();
           }}
         />
         <UnassignedDialog
           isOpen={unassignedOpen}
           onClose={() => {
-            setUnassignedOpen(false)
-            setShowCenter(true)
-            advanceLogoFrame()
+            setUnassignedOpen(false);
+            setShowCenter(true);
+            advanceLogoFrame();
           }}
         />
         <StatsPopover
           open={statsOpen}
           onOpenChange={(open) => {
-            setStatsOpen(open)
+            setStatsOpen(open);
             if (!open) {
-              setShowCenter(true)
-              advanceLogoFrame()
+              setShowCenter(true);
+              advanceLogoFrame();
             }
           }}
         />
       </section>
     </ErrorBoundary>
-  )
+  );
 }

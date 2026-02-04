@@ -1,4 +1,4 @@
-@import './tiptap-editor.css';
+@import "./tiptap-editor.css";
 
 /* LibreChat/ChatGPT-style theme */
 
@@ -32,7 +32,7 @@
 }
 
 /* Light mode overrides */
-[data-theme='light'] {
+[data-theme="light"] {
   --lc-surface-primary: #ffffff;
   --lc-surface-secondary: #f7f7f8;
   --lc-surface-tertiary: #f7f7f8;
@@ -185,7 +185,9 @@
   background: transparent;
   color: var(--lc-text-tertiary);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .lc-conversation-menu-btn:hover {
@@ -302,7 +304,9 @@
   object-position: 35% 70%;
   border: 1px solid var(--lc-border-light);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .lc-toggle-sidebar-btn:hover .lc-feedme-icon {
@@ -520,12 +524,12 @@
   margin-top: 0;
 }
 
-.lc-message-body h1+p,
-.lc-message-body h2+p,
-.lc-message-body h3+p,
-.lc-message-body h4+p,
-.lc-message-body h5+p,
-.lc-message-body h6+p {
+.lc-message-body h1 + p,
+.lc-message-body h2 + p,
+.lc-message-body h3 + p,
+.lc-message-body h4 + p,
+.lc-message-body h5 + p,
+.lc-message-body h6 + p {
   margin-top: 6px;
 }
 
@@ -550,13 +554,13 @@
   /* Tighter nested items */
 }
 
-.lc-message-body p+ul,
-.lc-message-body p+ol {
+.lc-message-body p + ul,
+.lc-message-body p + ol {
   margin-top: 6px;
 }
 
-.lc-message-body ul+p,
-.lc-message-body ol+p {
+.lc-message-body ul + p,
+.lc-message-body ol + p {
   margin-top: 12px;
 }
 
@@ -656,7 +660,9 @@
 
 .lc-generated-image {
   cursor: pointer;
-  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  transition:
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .lc-generated-image:hover {
@@ -675,7 +681,10 @@
   color: var(--lc-text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .lc-artifact-badge:hover {
@@ -714,7 +723,9 @@
   background-color: var(--lc-surface-secondary);
   color: var(--lc-text-primary);
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .lc-artifact-button:hover {
@@ -895,7 +906,9 @@
   background: transparent;
   color: var(--lc-text-tertiary);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .lc-action-btn:hover {
@@ -906,7 +919,11 @@
 /* Input area */
 .lc-input-container {
   padding: 16px 24px 24px;
-  background: linear-gradient(to top, var(--lc-surface-primary) 85%, transparent);
+  background: linear-gradient(
+    to top,
+    var(--lc-surface-primary) 85%,
+    transparent
+  );
   flex-shrink: 0;
 }
 
@@ -926,7 +943,9 @@
   border-radius: 16px;
   border: 1px solid var(--lc-border);
   background-color: var(--lc-surface-secondary);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
   position: relative;
   /* overflow: hidden removed - was preventing textarea text wrapping */
 }
@@ -980,7 +999,9 @@
   background-color: var(--lc-accent);
   color: white;
   cursor: pointer;
-  transition: background-color 0.15s ease, opacity 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .lc-send-btn:hover {
@@ -1597,7 +1618,6 @@
 }
 
 @keyframes lc-pulse {
-
   0%,
   100% {
     opacity: 0.3;
@@ -1713,18 +1733,18 @@
   white-space: nowrap;
 }
 
-.lc-research-progress[data-status='stuck'] .lc-research-fill,
-.lc-research-progress[data-status='failed'] .lc-research-fill {
+.lc-research-progress[data-status="stuck"] .lc-research-fill,
+.lc-research-progress[data-status="failed"] .lc-research-fill {
   background-color: var(--lc-error);
 }
 
-.lc-research-progress[data-status='stuck'] .lc-research-label,
-.lc-research-progress[data-status='failed'] .lc-research-label {
+.lc-research-progress[data-status="stuck"] .lc-research-label,
+.lc-research-progress[data-status="failed"] .lc-research-label {
   color: var(--lc-error);
 }
 
-.lc-research-progress[data-status='stuck'] .lc-research-pulse,
-.lc-research-progress[data-status='failed'] .lc-research-pulse {
+.lc-research-progress[data-status="stuck"] .lc-research-pulse,
+.lc-research-progress[data-status="failed"] .lc-research-pulse {
   background-color: var(--lc-error);
 }
 
@@ -1788,7 +1808,7 @@
 }
 
 .lc-input-box.drag-over::after {
-  content: 'Drop files here';
+  content: "Drop files here";
   position: absolute;
   inset: 0;
   display: flex;
@@ -2004,7 +2024,9 @@
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.15s ease, opacity 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .lc-edit-btn-cancel {
@@ -2119,7 +2141,9 @@
   color: var(--lc-text-primary);
   font-size: 13px;
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
   text-align: left;
 }
 

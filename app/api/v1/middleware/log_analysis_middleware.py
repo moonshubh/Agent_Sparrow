@@ -10,8 +10,6 @@ This module provides middleware for:
 
 import asyncio
 import hashlib
-import json
-import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
@@ -28,11 +26,12 @@ LOG_ANALYSIS_RATE_LIMITS = {
     "requests_per_hour": 100,
     "requests_per_day": 500,
     "max_file_size_mb": 50,  # Maximum log file size in MB
-    "max_concurrent_analyses": 3  # Max concurrent analyses per user
+    "max_concurrent_analyses": 3,  # Max concurrent analyses per user
 }
 
-TIMESTAMP_PATTERN = re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}')
+TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
 UTC_MIN = datetime.min.replace(tzinfo=timezone.utc)
+
 
 class LogAnalysisRateLimiter:
     """Rate limiter specifically for log analysis requests."""
@@ -78,12 +77,14 @@ class LogAnalysisRateLimiter:
                 return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
 
             self._user_requests[user_id] = [
-                req_time for req_time in self._user_requests[user_id]
+                req_time
+                for req_time in self._user_requests[user_id]
                 if now - _aware(req_time) < timedelta(days=1)
             ]
 
             recent_minute = [
-                req for req in self._user_requests[user_id]
+                req
+                for req in self._user_requests[user_id]
                 if now - _aware(req) < timedelta(minutes=1)
             ]
             if len(recent_minute) >= LOG_ANALYSIS_RATE_LIMITS["requests_per_minute"]:
@@ -92,12 +93,13 @@ class LogAnalysisRateLimiter:
                     detail={
                         "error": "rate_limit_exceeded",
                         "message": f"Exceeded {LOG_ANALYSIS_RATE_LIMITS['requests_per_minute']} requests per minute for log analysis",
-                        "retry_after": 60
-                    }
+                        "retry_after": 60,
+                    },
                 )
 
             recent_hour = [
-                req for req in self._user_requests[user_id]
+                req
+                for req in self._user_requests[user_id]
                 if now - _aware(req) < timedelta(hours=1)
             ]
             if len(recent_hour) >= LOG_ANALYSIS_RATE_LIMITS["requests_per_hour"]:
@@ -106,28 +108,34 @@ class LogAnalysisRateLimiter:
                     detail={
                         "error": "rate_limit_exceeded",
                         "message": f"Exceeded {LOG_ANALYSIS_RATE_LIMITS['requests_per_hour']} requests per hour for log analysis",
-                        "retry_after": 3600
-                    }
+                        "retry_after": 3600,
+                    },
                 )
 
-            if len(self._user_requests[user_id]) >= LOG_ANALYSIS_RATE_LIMITS["requests_per_day"]:
+            if (
+                len(self._user_requests[user_id])
+                >= LOG_ANALYSIS_RATE_LIMITS["requests_per_day"]
+            ):
                 raise HTTPException(
                     status_code=429,
                     detail={
                         "error": "rate_limit_exceeded",
                         "message": f"Exceeded {LOG_ANALYSIS_RATE_LIMITS['requests_per_day']} requests per day for log analysis",
-                        "retry_after": 86400
-                    }
+                        "retry_after": 86400,
+                    },
                 )
 
-            if self._concurrent_analyses[user_id] >= LOG_ANALYSIS_RATE_LIMITS["max_concurrent_analyses"]:
+            if (
+                self._concurrent_analyses[user_id]
+                >= LOG_ANALYSIS_RATE_LIMITS["max_concurrent_analyses"]
+            ):
                 raise HTTPException(
                     status_code=429,
                     detail={
                         "error": "concurrent_limit_exceeded",
                         "message": f"Maximum {LOG_ANALYSIS_RATE_LIMITS['max_concurrent_analyses']} concurrent log analyses allowed",
-                        "retry_after": 30
-                    }
+                        "retry_after": 30,
+                    },
                 )
 
             self._user_requests[user_id].append(now)
@@ -137,7 +145,7 @@ class LogAnalysisRateLimiter:
                 "allowed": True,
                 "requests_today": len(self._user_requests[user_id]),
                 "concurrent_analyses": self._concurrent_analyses[user_id],
-                "limits": LOG_ANALYSIS_RATE_LIMITS
+                "limits": LOG_ANALYSIS_RATE_LIMITS,
             }
 
     async def release_concurrent_slot(self, user_id: str):
@@ -145,7 +153,9 @@ class LogAnalysisRateLimiter:
         user_lock = await self._get_user_lock(user_id)
         async with user_lock:
             if user_id in self._concurrent_analyses:
-                self._concurrent_analyses[user_id] = max(0, self._concurrent_analyses[user_id] - 1)
+                self._concurrent_analyses[user_id] = max(
+                    0, self._concurrent_analyses[user_id] - 1
+                )
 
     async def get_user_usage(self, user_id: str) -> Dict[str, Any]:
         """Return a snapshot of rate limit usage for a user."""
@@ -157,6 +167,7 @@ class LogAnalysisRateLimiter:
             "requests": request_history,
             "concurrent": concurrent,
         }
+
 
 # Global rate limiter instance
 log_analysis_rate_limiter = LogAnalysisRateLimiter()
@@ -179,10 +190,7 @@ class LogAnalysisSessionManager:
         return self._lock
 
     async def create_session(
-        self,
-        user_id: str,
-        session_id: str,
-        metadata: Dict[str, Any]
+        self, user_id: str, session_id: str, metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Create a new log analysis session.
@@ -206,10 +214,12 @@ class LogAnalysisSessionManager:
             if len(user_sessions) >= self._session_limit:
                 oldest_session_id = min(
                     user_sessions.keys(),
-                    key=lambda k: user_sessions[k].get("created_at", UTC_MIN)
+                    key=lambda k: user_sessions[k].get("created_at", UTC_MIN),
                 )
                 del user_sessions[oldest_session_id]
-                logger.info(f"Evicted oldest log analysis session {oldest_session_id} for user {user_id}")
+                logger.info(
+                    f"Evicted oldest log analysis session {oldest_session_id} for user {user_id}"
+                )
 
             now = datetime.now(timezone.utc)
             session_data = {
@@ -224,10 +234,10 @@ class LogAnalysisSessionManager:
                     "log_format": metadata.get("log_format", "unknown"),
                     "line_count": metadata.get("line_count", 0),
                     "time_range": metadata.get("time_range", {}),
-                    "analysis_type": metadata.get("analysis_type", "general")
+                    "analysis_type": metadata.get("analysis_type", "general"),
                 },
                 "insights": [],
-                "conversation": []
+                "conversation": [],
             }
 
             self._sessions[user_key][session_id] = session_data
@@ -236,10 +246,7 @@ class LogAnalysisSessionManager:
             return session_data
 
     async def add_insight(
-        self,
-        user_id: str,
-        session_id: str,
-        insight: Dict[str, Any]
+        self, user_id: str, session_id: str, insight: Dict[str, Any]
     ) -> bool:
         """
         Add an analysis insight to a session.
@@ -256,7 +263,10 @@ class LogAnalysisSessionManager:
         async with lock:
             user_key = f"{user_id}:log_analysis"
 
-            if user_key not in self._sessions or session_id not in self._sessions[user_key]:
+            if (
+                user_key not in self._sessions
+                or session_id not in self._sessions[user_key]
+            ):
                 logger.warning(f"Session {session_id} not found for user {user_id}")
                 return False
 
@@ -268,7 +278,7 @@ class LogAnalysisSessionManager:
                 "details": insight.get("details", ""),
                 "recommendations": insight.get("recommendations", []),
                 "affected_components": insight.get("affected_components", []),
-                "pattern_detected": insight.get("pattern_detected", False)
+                "pattern_detected": insight.get("pattern_detected", False),
             }
 
             session = self._sessions[user_key][session_id]
@@ -280,7 +290,9 @@ class LogAnalysisSessionManager:
 
             return True
 
-    async def get_session(self, user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_session(
+        self, user_id: str, session_id: str
+    ) -> Optional[Dict[str, Any]]:
         """Retrieve a session by ID."""
         lock = await self._get_lock()
         async with lock:
@@ -318,6 +330,7 @@ class LogAnalysisSessionManager:
                 if not sessions:
                     del self._sessions[user_key]
 
+
 # Global session manager instance
 log_analysis_session_manager = LogAnalysisSessionManager()
 
@@ -327,8 +340,7 @@ class LogAnalysisRequestValidator:
 
     @staticmethod
     async def validate_log_content(
-        log_content: str,
-        file_name: Optional[str] = None
+        log_content: str, file_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Validate log content before analysis.
@@ -344,15 +356,15 @@ class LogAnalysisRequestValidator:
             HTTPException: If validation fails
         """
         # Check content size
-        content_size_mb = len(log_content.encode('utf-8')) / (1024 * 1024)
+        content_size_mb = len(log_content.encode("utf-8")) / (1024 * 1024)
         if content_size_mb > LOG_ANALYSIS_RATE_LIMITS["max_file_size_mb"]:
             raise HTTPException(
                 status_code=413,
                 detail={
                     "error": "file_too_large",
                     "message": f"Log file exceeds {LOG_ANALYSIS_RATE_LIMITS['max_file_size_mb']}MB limit",
-                    "actual_size_mb": round(content_size_mb, 2)
-                }
+                    "actual_size_mb": round(content_size_mb, 2),
+                },
             )
 
         # Check if content is empty
@@ -361,19 +373,19 @@ class LogAnalysisRequestValidator:
                 status_code=400,
                 detail={
                     "error": "empty_content",
-                    "message": "Log content cannot be empty"
-                }
+                    "message": "Log content cannot be empty",
+                },
             )
 
         # Detect log format
         log_format = LogAnalysisRequestValidator._detect_log_format(log_content)
 
         # Count lines
-        lines = log_content.strip().split('\n')
+        lines = log_content.strip().split("\n")
         line_count = len(lines)
 
         # Calculate content hash for deduplication
-        content_hash = hashlib.sha256(log_content.encode('utf-8')).hexdigest()
+        content_hash = hashlib.sha256(log_content.encode("utf-8")).hexdigest()
 
         # Extract time range if possible
         time_range = LogAnalysisRequestValidator._extract_time_range(lines, log_format)
@@ -386,7 +398,7 @@ class LogAnalysisRequestValidator:
             "file_hash": content_hash,
             "log_format": log_format,
             "line_count": line_count,
-            "time_range": time_range
+            "time_range": time_range,
         }
 
     @staticmethod
@@ -395,17 +407,19 @@ class LogAnalysisRequestValidator:
         # Simple format detection based on patterns
         sample = content[:1000]  # Check first 1000 chars
 
-        if '"timestamp"' in sample and '{' in sample:
+        if '"timestamp"' in sample and "{" in sample:
             return "json"
-        elif any(pattern in sample for pattern in ['ERROR', 'WARN', 'INFO', 'DEBUG']):
+        elif any(pattern in sample for pattern in ["ERROR", "WARN", "INFO", "DEBUG"]):
             return "structured"
-        elif any(char in sample for char in ['[', ']']) and ':' in sample:
+        elif any(char in sample for char in ["[", "]"]) and ":" in sample:
             return "syslog"
         else:
             return "plain"
 
     @staticmethod
-    def _extract_time_range(lines: List[str], log_format: str) -> Dict[str, Optional[str]]:
+    def _extract_time_range(
+        lines: List[str], log_format: str
+    ) -> Dict[str, Optional[str]]:
         """Extract time range from log lines."""
         # This is a simplified implementation
         # In production, you'd want more sophisticated timestamp parsing
@@ -425,17 +439,11 @@ class LogAnalysisRequestValidator:
                 last_timestamp = match.group()
                 break
 
-        return {
-            "start": first_timestamp,
-            "end": last_timestamp
-        }
+        return {"start": first_timestamp, "end": last_timestamp}
 
 
 async def log_analysis_request_middleware(
-    request: Request,
-    user_id: str,
-    log_content: str,
-    file_name: Optional[str] = None
+    request: Request, user_id: str, log_content: str, file_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Middleware to validate and prepare log analysis requests.
@@ -467,7 +475,7 @@ async def log_analysis_request_middleware(
             **rate_limit_result,
             "user_id": user_id,
             "request_id": request.headers.get("X-Request-ID", ""),
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     except HTTPException:
@@ -479,6 +487,6 @@ async def log_analysis_request_middleware(
             status_code=500,
             detail={
                 "error": "middleware_error",
-                "message": "Failed to process log analysis request"
-            }
+                "message": "Failed to process log analysis request",
+            },
         )

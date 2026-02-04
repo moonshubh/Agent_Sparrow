@@ -6,239 +6,252 @@
  */
 
 :root {
-   /* =================================
+  /* =================================
      Primary Color System - Clean Slate
      ================================= */
-   --crystal-primary-900: hsl(220, 15%, 10%);
-   /* #16181D - Main bg */
-   --crystal-primary-800: hsl(220, 15%, 14%);
-   /* #1E2128 - Secondary bg */
-   --crystal-primary-700: hsl(220, 14%, 18%);
-   /* #272B33 - Tertiary bg */
-   --crystal-primary-600: hsl(220, 13%, 24%);
-   /* #353A45 - Component bg */
-   --crystal-primary-500: hsl(220, 12%, 32%);
-   /* Borders */
-   --crystal-primary-400: hsl(220, 10%, 45%);
-   /* Muted text */
+  --crystal-primary-900: hsl(220, 15%, 10%);
+  /* #16181D - Main bg */
+  --crystal-primary-800: hsl(220, 15%, 14%);
+  /* #1E2128 - Secondary bg */
+  --crystal-primary-700: hsl(220, 14%, 18%);
+  /* #272B33 - Tertiary bg */
+  --crystal-primary-600: hsl(220, 13%, 24%);
+  /* #353A45 - Component bg */
+  --crystal-primary-500: hsl(220, 12%, 32%);
+  /* Borders */
+  --crystal-primary-400: hsl(220, 10%, 45%);
+  /* Muted text */
 
-   /* =================================
+  /* =================================
      Mailbird Blue - Professional & Crisp
      ================================= */
-   --crystal-cyan-600: hsl(212, 96%, 45%);
-   --crystal-cyan-500: hsl(212, 96%, 55%);
-   /* Mailbird Blue Primary */
-   --crystal-cyan-400: hsl(212, 96%, 68%);
-   /* Mailbird Blue Light */
-   --crystal-cyan-300: hsl(212, 96%, 78%);
-   /* Mailbird Blue Pale */
-   --crystal-cyan-200: hsl(212, 96%, 88%);
-   --crystal-cyan-100: hsl(212, 96%, 95%);
+  --crystal-cyan-600: hsl(212, 96%, 45%);
+  --crystal-cyan-500: hsl(212, 96%, 55%);
+  /* Mailbird Blue Primary */
+  --crystal-cyan-400: hsl(212, 96%, 68%);
+  /* Mailbird Blue Light */
+  --crystal-cyan-300: hsl(212, 96%, 78%);
+  /* Mailbird Blue Pale */
+  --crystal-cyan-200: hsl(212, 96%, 88%);
+  --crystal-cyan-100: hsl(212, 96%, 95%);
 
-   /* =================================
+  /* =================================
      Warm Accents - Soft Gold (Status/Highlights)
      ================================= */
-   --accent-gold-600: hsl(42, 90%, 40%);
-   --accent-gold-500: hsl(42, 90%, 50%);
-   /* Focus/Active */
-   --accent-gold-400: hsl(42, 90%, 60%);
-   --accent-amber-600: hsl(35, 95%, 45%);
-   --accent-amber-500: hsl(35, 95%, 50%);
-   /* Warning */
-   --accent-amber-400: hsl(35, 95%, 60%);
-   --accent-honey: hsl(40, 90%, 65%);
-   --accent-coral: hsl(0, 85%, 65%);
-   /* Error/Destructive */
-   --accent-sunrise: hsl(20, 90%, 60%);
+  --accent-gold-600: hsl(42, 90%, 40%);
+  --accent-gold-500: hsl(42, 90%, 50%);
+  /* Focus/Active */
+  --accent-gold-400: hsl(42, 90%, 60%);
+  --accent-amber-600: hsl(35, 95%, 45%);
+  --accent-amber-500: hsl(35, 95%, 50%);
+  /* Warning */
+  --accent-amber-400: hsl(35, 95%, 60%);
+  --accent-honey: hsl(40, 90%, 65%);
+  --accent-coral: hsl(0, 85%, 65%);
+  /* Error/Destructive */
+  --accent-sunrise: hsl(20, 90%, 60%);
 
-   /* =================================
+  /* =================================
      Semantic Status Colors
      ================================= */
-   --status-success: hsl(150, 60%, 45%);
-   /* Crisp Green */
-   --status-warning: var(--accent-amber-500);
-   --status-error: hsl(350, 80%, 60%);
-   /* Soft Red */
-   --status-info: var(--crystal-cyan-500);
+  --status-success: hsl(150, 60%, 45%);
+  /* Crisp Green */
+  --status-warning: var(--accent-amber-500);
+  --status-error: hsl(350, 80%, 60%);
+  /* Soft Red */
+  --status-info: var(--crystal-cyan-500);
 
-   /* =================================
+  /* =================================
      Neutral Grays (Inter-compatible)
      ================================= */
-   --neutral-900: hsl(220, 20%, 10%);
-   --neutral-800: hsl(220, 15%, 20%);
-   --neutral-700: hsl(220, 12%, 30%);
-   --neutral-600: hsl(220, 10%, 40%);
-   --neutral-500: hsl(220, 8%, 50%);
-   --neutral-400: hsl(220, 8%, 60%);
-   --neutral-300: hsl(220, 8%, 70%);
-   --neutral-200: hsl(220, 8%, 85%);
-   --neutral-100: hsl(220, 8%, 95%);
-   --neutral-50: hsl(220, 8%, 98%);
+  --neutral-900: hsl(220, 20%, 10%);
+  --neutral-800: hsl(220, 15%, 20%);
+  --neutral-700: hsl(220, 12%, 30%);
+  --neutral-600: hsl(220, 10%, 40%);
+  --neutral-500: hsl(220, 8%, 50%);
+  --neutral-400: hsl(220, 8%, 60%);
+  --neutral-300: hsl(220, 8%, 70%);
+  --neutral-200: hsl(220, 8%, 85%);
+  --neutral-100: hsl(220, 8%, 95%);
+  --neutral-50: hsl(220, 8%, 98%);
 
-   /* =================================
+  /* =================================
      Glass Morphism - Flat & Modern
      ================================= */
-   --glass-bg: hsla(220, 15%, 14%, 0.7);
-   /* Darker, less transparent */
-   --glass-bg-light: hsla(220, 8%, 95%, 0.8);
-   --glass-border: hsla(220, 10%, 90%, 0.08);
-   /* Very subtle border */
-   --glass-border-hover: hsla(212, 96%, 68%, 0.3);
-   /* Blue hint on hover */
-   --glass-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-   --glass-blur: blur(20px);
-   /* Stronger blur for depth */
+  --glass-bg: hsla(220, 15%, 14%, 0.7);
+  /* Darker, less transparent */
+  --glass-bg-light: hsla(220, 8%, 95%, 0.8);
+  --glass-border: hsla(220, 10%, 90%, 0.08);
+  /* Very subtle border */
+  --glass-border-hover: hsla(212, 96%, 68%, 0.3);
+  /* Blue hint on hover */
+  --glass-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  --glass-blur: blur(20px);
+  /* Stronger blur for depth */
 
-   /* =================================
+  /* =================================
      Gradients - Subtle & Professional
      ================================= */
-   --aurora-gradient: linear-gradient(180deg,
-         hsla(220, 15%, 16%, 1) 0%,
-         hsla(220, 15%, 12%, 1) 100%);
+  --aurora-gradient: linear-gradient(
+    180deg,
+    hsla(220, 15%, 16%, 1) 0%,
+    hsla(220, 15%, 12%, 1) 100%
+  );
 
-   --crystal-gradient: linear-gradient(180deg,
-         hsla(212, 96%, 55%, 0.1) 0%,
-         transparent 100%);
+  --crystal-gradient: linear-gradient(
+    180deg,
+    hsla(212, 96%, 55%, 0.1) 0%,
+    transparent 100%
+  );
 
-   --glow-gradient-cyan: radial-gradient(circle,
-         hsla(212, 96%, 55%, 0.15) 0%,
-         transparent 70%);
+  --glow-gradient-cyan: radial-gradient(
+    circle,
+    hsla(212, 96%, 55%, 0.15) 0%,
+    transparent 70%
+  );
 
-   --glow-gradient-amber: radial-gradient(circle,
-         hsla(42, 90%, 50%, 0.15) 0%,
-         transparent 70%);
-   --surface-card-gradient: linear-gradient(135deg, hsla(222, 44%, 16%, 0.9), hsla(240, 30%, 12%, 0.85));
+  --glow-gradient-amber: radial-gradient(
+    circle,
+    hsla(42, 90%, 50%, 0.15) 0%,
+    transparent 70%
+  );
+  --surface-card-gradient: linear-gradient(
+    135deg,
+    hsla(222, 44%, 16%, 0.9),
+    hsla(240, 30%, 12%, 0.85)
+  );
 
-   /* =================================
+  /* =================================
      Spatial System
      ================================= */
-   --space-quantum: 4px;
-   --space-xs: 4px;
-   --space-sm: 8px;
-   --space-md: 16px;
-   --space-lg: 24px;
-   --space-xl: 32px;
-   --space-2xl: 48px;
-   --space-3xl: 64px;
-   --space-breathe: 32px;
+  --space-quantum: 4px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+  --space-breathe: 32px;
 
-   /* =================================
+  /* =================================
      Typography Scale - App-like
      ================================= */
-   --font-family-sans-serif-alt: 'Poppins', -apple-system, sans-serif;
-   /* Removed serif for cleaner look */
-   --font-family-sans: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
-   --font-family-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-family-sans-serif-alt: "Poppins", -apple-system, sans-serif;
+  /* Removed serif for cleaner look */
+  --font-family-sans: "Poppins", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-family-mono: "JetBrains Mono", "Fira Code", monospace;
 
-   --font-size-xs: 0.75rem;
-   /* 12px */
-   --font-size-sm: 0.875rem;
-   /* 14px */
-   --font-size-base: 1rem;
-   /* 16px */
-   --font-size-lg: 1.125rem;
-   /* 18px */
-   --font-size-xl: 1.25rem;
-   /* 20px */
-   --font-size-2xl: 1.5rem;
-   /* 24px */
-   --font-size-3xl: 1.875rem;
-   /* 30px */
+  --font-size-xs: 0.75rem;
+  /* 12px */
+  --font-size-sm: 0.875rem;
+  /* 14px */
+  --font-size-base: 1rem;
+  /* 16px */
+  --font-size-lg: 1.125rem;
+  /* 18px */
+  --font-size-xl: 1.25rem;
+  /* 20px */
+  --font-size-2xl: 1.5rem;
+  /* 24px */
+  --font-size-3xl: 1.875rem;
+  /* 30px */
 
-   --font-weight-light: 300;
-   --font-weight-normal: 400;
-   --font-weight-medium: 500;
-   --font-weight-semibold: 600;
-   --font-weight-bold: 700;
+  --font-weight-light: 300;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
 
-   --line-height-tight: 1.2;
-   --line-height-normal: 1.5;
-   --line-height-relaxed: 1.6;
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.6;
 
-   /* =================================
+  /* =================================
      Animation - Snappy & Smooth
      ================================= */
-   --ease-crystal-form: cubic-bezier(0.2, 0.0, 0.2, 1);
-   --ease-neural-pulse: cubic-bezier(0.4, 0.0, 0.2, 1);
-   --ease-smooth: cubic-bezier(0.2, 0.0, 0.2, 1);
-   --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-crystal-form: cubic-bezier(0.2, 0, 0.2, 1);
+  --ease-neural-pulse: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-smooth: cubic-bezier(0.2, 0, 0.2, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-   --duration-instant: 100ms;
-   --duration-fast: 150ms;
-   --duration-normal: 250ms;
-   --duration-slow: 400ms;
+  --duration-instant: 100ms;
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
 
-   /* =================================
+  /* =================================
      Border Radius - Modern
      ================================= */
-   --radius-sm: 6px;
-   --radius-md: 10px;
-   --radius-lg: 14px;
-   --radius-xl: 18px;
-   --radius-2xl: 24px;
-   --radius-full: 9999px;
-   --radius-crystal: 12px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+  --radius-crystal: 12px;
 
-   /* =================================
+  /* =================================
      Shadows - Soft & Deep
      ================================= */
-   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
-   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.15);
-   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
-   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.25);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.25);
 
-   --shadow-glow-cyan: 0 0 0 1px hsla(212, 96%, 55%, 0.3);
-   --shadow-glow-amber: 0 0 0 1px hsla(42, 90%, 50%, 0.3);
-   --shadow-crystal: 0 4px 20px rgba(0, 0, 0, 0.3);
+  --shadow-glow-cyan: 0 0 0 1px hsla(212, 96%, 55%, 0.3);
+  --shadow-glow-amber: 0 0 0 1px hsla(42, 90%, 50%, 0.3);
+  --shadow-crystal: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
 /* =================================
    Dark Mode Overrides (Default)
    ================================= */
 [data-theme="dark"] {
-   --glass-bg: hsla(220, 15%, 14%, 0.8);
-   --glass-border: hsla(220, 10%, 90%, 0.08);
-   --glass-border-hover: hsla(212, 96%, 68%, 0.2);
+  --glass-bg: hsla(220, 15%, 14%, 0.8);
+  --glass-border: hsla(220, 10%, 90%, 0.08);
+  --glass-border-hover: hsla(212, 96%, 68%, 0.2);
 }
 
 /* =================================
    Utility Classes
    ================================= */
 .crystalline-glow {
-   box-shadow: var(--shadow-glow-cyan);
-   transition: box-shadow var(--duration-fast) var(--ease-smooth);
+  box-shadow: var(--shadow-glow-cyan);
+  transition: box-shadow var(--duration-fast) var(--ease-smooth);
 }
 
 .crystalline-glow:hover {
-   box-shadow: var(--shadow-glow-cyan), 0 0 15px hsla(212, 96%, 55%, 0.15);
+  box-shadow:
+    var(--shadow-glow-cyan),
+    0 0 15px hsla(212, 96%, 55%, 0.15);
 }
 
 .glass-panel {
-   background: var(--glass-bg);
-   backdrop-filter: var(--glass-blur);
-   -webkit-backdrop-filter: var(--glass-blur);
-   border: 1px solid var(--glass-border);
-   border-radius: var(--radius-crystal);
-   box-shadow: var(--shadow-sm);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-crystal);
+  box-shadow: var(--shadow-sm);
 }
 
 .aurora-bg {
-   background: var(--crystal-primary-900);
-   /* Removed animated gradient for cleaner look */
+  background: var(--crystal-primary-900);
+  /* Removed animated gradient for cleaner look */
 }
 
 .neural-pulse {
-   animation: neural-pulse 2s var(--ease-smooth) infinite;
+  animation: neural-pulse 2s var(--ease-smooth) infinite;
 }
 
 @keyframes neural-pulse {
+  0%,
+  100% {
+    opacity: 0.8;
+  }
 
-   0%,
-   100% {
-      opacity: 0.8;
-   }
-
-   50% {
-      opacity: 1;
-   }
+  50% {
+    opacity: 1;
+  }
 }

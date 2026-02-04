@@ -8,7 +8,7 @@ values in AIMessage.tool_calls and ToolMessage.tool_call_id fields before model 
 from __future__ import annotations
 
 import re
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict, cast
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -19,9 +19,16 @@ try:
 
     MIDDLEWARE_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
-    AgentMiddleware = object  # type: ignore[assignment]
-    ModelRequest = object  # type: ignore[assignment]
-    ModelResponse = object  # type: ignore[assignment]
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class ModelRequest:  # type: ignore[no-redef]
+        pass
+
+    class ModelResponse:  # type: ignore[no-redef]
+        pass
+
     MIDDLEWARE_AVAILABLE = False
 
 
@@ -79,7 +86,9 @@ def _sanitize_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
                 if not isinstance(call, dict):
                     updated_calls.append(call)
                     continue
-                raw_id = call.get("id") or call.get("tool_call_id") or call.get("toolCallId")
+                raw_id = (
+                    call.get("id") or call.get("tool_call_id") or call.get("toolCallId")
+                )
                 new_id = mapping.get(raw_id) if isinstance(raw_id, str) else None
                 if not new_id:
                     new_id = _sanitize_tool_call_id(raw_id)
@@ -96,7 +105,9 @@ def _sanitize_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
                     updated_calls.append(call)
 
             if changed:
-                sanitized.append(message.model_copy(update={"tool_calls": updated_calls}))
+                sanitized.append(
+                    message.model_copy(update={"tool_calls": updated_calls})
+                )
             else:
                 sanitized.append(message)
             continue
@@ -119,7 +130,7 @@ def _sanitize_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     return sanitized
 
 
-class ToolCallIdSanitizationMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object):
+class ToolCallIdSanitizationMiddleware(AgentMiddleware):
     """Normalize tool_call_id values before model calls."""
 
     @property
@@ -138,7 +149,9 @@ class ToolCallIdSanitizationMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE e
         if not messages:
             return handler(request)
 
-        return handler(request.override(messages=_sanitize_messages(messages)))
+        return handler(
+            request.override(messages=cast(Any, _sanitize_messages(messages)))
+        )
 
     async def awrap_model_call(  # type: ignore[override]
         self,
@@ -152,4 +165,6 @@ class ToolCallIdSanitizationMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE e
         if not messages:
             return await handler(request)
 
-        return await handler(request.override(messages=_sanitize_messages(messages)))
+        return await handler(
+            request.override(messages=cast(Any, _sanitize_messages(messages)))
+        )

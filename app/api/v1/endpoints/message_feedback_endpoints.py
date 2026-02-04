@@ -4,23 +4,31 @@ This module handles user feedback on AI-generated messages. When feedback is
 submitted, it's stored in the sparrow_feedback table AND propagated to any
 memories that were used to generate the response (for feedback attribution).
 """
+
 from __future__ import annotations
 
 import logging
-from typing import List, Literal, Optional
+from typing import Awaitable, Callable, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
+from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
-from app.core.settings import settings
+AuthFn = Callable[..., Awaitable[str]]
+_auth_get_current_user_id: Optional[AuthFn] = None
 
 try:
-    from app.api.v1.endpoints.auth import get_current_user_id
+    from app.api.v1.endpoints.auth import (
+        get_current_user_id as _imported_get_current_user_id,
+    )
+
+    _auth_get_current_user_id = _imported_get_current_user_id
 except ImportError:
     # Only allow fallback in development mode - fail loudly in production
     if settings.is_production_mode():
@@ -28,10 +36,21 @@ except ImportError:
             "Authentication module required in production. "
             "Cannot import get_current_user_id from app.api.v1.endpoints.auth"
         )
+    _auth_get_current_user_id = None
 
-    async def get_current_user_id() -> str:
-        """Development-only fallback for auth."""
-        return getattr(settings, "development_user_id", "dev-user-12345")
+
+async def _fallback_get_current_user_id(
+    credentials: HTTPAuthorizationCredentials | None = None,
+) -> str:
+    """Development-only fallback for auth."""
+    return getattr(settings, "development_user_id", "dev-user-12345")
+
+
+get_current_user_id: AuthFn
+if _auth_get_current_user_id is None:
+    get_current_user_id = _fallback_get_current_user_id
+else:
+    get_current_user_id = _auth_get_current_user_id
 
 
 router = APIRouter(prefix="/feedback", tags=["Message Feedback"])
@@ -39,6 +58,7 @@ router = APIRouter(prefix="/feedback", tags=["Message Feedback"])
 
 class MessageFeedbackRequest(BaseModel):
     """Request payload for message feedback."""
+
     message_id: str = Field(..., min_length=1)
     session_id: Optional[str] = Field(default=None)
     feedback_type: Literal["positive", "negative"] = Field(...)
@@ -47,12 +67,13 @@ class MessageFeedbackRequest(BaseModel):
     # If provided, feedback will be propagated to these memories
     used_memory_ids: Optional[List[str]] = Field(
         default=None,
-        description="Memory IDs used to generate this response for feedback attribution"
+        description="Memory IDs used to generate this response for feedback attribution",
     )
 
 
 class MessageFeedbackResponse(BaseModel):
     """Response for message feedback submission."""
+
     success: bool
     message: str = "Feedback received"
     memories_updated: int = 0
@@ -113,13 +134,16 @@ async def _propagate_feedback_to_memories(
                     "Propagated feedback to memory %s: type=%s, new_confidence=%s",
                     memory_id,
                     memory_feedback_type,
-                    result.data.get("new_confidence") if isinstance(result.data, dict) else None,
+                    (
+                        result.data.get("new_confidence")
+                        if isinstance(result.data, dict)
+                        else None
+                    ),
                 )
         except Exception as exc:
             # Log but don't fail - memory feedback propagation is best-effort
             logger.warning(
-                "Failed to propagate feedback to memory %s: %s",
-                memory_id, str(exc)
+                "Failed to propagate feedback to memory %s: %s", memory_id, str(exc)
             )
             continue
 
@@ -221,7 +245,7 @@ async def submit_message_feedback(
         if not result.data:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to save feedback"
+                detail="Failed to save feedback",
             )
 
         # Get memory IDs to propagate feedback to
@@ -246,12 +270,18 @@ async def submit_message_feedback(
             )
             logger.info(
                 "Propagated message feedback to %d memories: user=%s, message=%s",
-                memories_updated, user_id, payload.message_id
+                memories_updated,
+                user_id,
+                payload.message_id,
             )
 
         logger.info(
             "Message feedback submitted: user=%s, message=%s, type=%s, category=%s, memories_updated=%d",
-            user_id, payload.message_id, payload.feedback_type, payload.category, memories_updated
+            user_id,
+            payload.message_id,
+            payload.feedback_type,
+            payload.category,
+            memories_updated,
         )
 
         return MessageFeedbackResponse(
@@ -265,5 +295,5 @@ async def submit_message_feedback(
         logger.error("Failed to submit message feedback: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to submit feedback"
+            detail="Failed to submit feedback",
         ) from exc

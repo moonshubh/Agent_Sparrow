@@ -31,4 +31,3 @@ def configure_logging(*, production: bool) -> str:
     )
 
     return level_name
-

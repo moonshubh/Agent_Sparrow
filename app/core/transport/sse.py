@@ -3,6 +3,7 @@
 Minimal helpers to format Server-Sent Events consistently.
 Safe to adopt incrementally without behavior changes.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,6 +20,7 @@ def _sanitize_comment_text(comment: str) -> str:
     """Ensure heartbeat comments are single-line to avoid breaking SSE frames."""
     return comment.replace("\n", " ").strip() or "keep-alive"
 
+
 def _default_serializer(obj: Any):
     if isinstance(obj, datetime):
         return obj.isoformat()
@@ -27,6 +29,7 @@ def _default_serializer(obj: Any):
     if hasattr(obj, "dict"):
         return obj.dict()
     return str(obj)
+
 
 def format_sse_data(payload: Any) -> str:
     """Return a properly formatted SSE data line for a JSON-serializable payload."""
@@ -47,6 +50,7 @@ def build_sse_prelude(size: int = DEFAULT_SSE_PRELUDE_SIZE) -> str:
     # In test runs, skip the prelude to satisfy smoke tests expecting the first line to be data:
     try:
         import os
+
         if os.getenv("PYTEST_CURRENT_TEST"):
             return ""
     except Exception:

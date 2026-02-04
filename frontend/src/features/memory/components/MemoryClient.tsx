@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import React, { useMemo, useState, useCallback, Suspense } from 'react';
-import Link from 'next/link';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useMemo, useState, useCallback, Suspense } from "react";
+import Link from "next/link";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
   ArrowDownToLine,
@@ -23,73 +23,90 @@ import {
   AlertTriangle,
   Database,
   Sparkles,
-} from 'lucide-react';
-import { toast } from 'sonner';
-import { useMemoryMe, useMemoryStats, useDuplicateCandidates, useImportZendeskTagged } from '../hooks';
-import { MemorySearch } from './MemorySearch';
-import { MemoryForm } from './MemoryForm';
-import { GraphErrorBoundary } from './GraphErrorBoundary';
-import { ALL_ENTITY_TYPES, type EntityType, type MemoryFilters } from '../types';
-import '../styles/memory.css';
+} from "lucide-react";
+import { toast } from "sonner";
+import {
+  useMemoryMe,
+  useMemoryStats,
+  useDuplicateCandidates,
+  useImportZendeskTagged,
+} from "../hooks";
+import { MemorySearch } from "./MemorySearch";
+import { MemoryForm } from "./MemoryForm";
+import { GraphErrorBoundary } from "./GraphErrorBoundary";
+import {
+  ALL_ENTITY_TYPES,
+  type EntityType,
+  type MemoryFilters,
+} from "../types";
+import "../styles/memory.css";
 
 // Lazy load heavy components
-const MemoryGraph = React.lazy(() => import('./MemoryGraph'));
-const MemoryTable = React.lazy(() => import('./MemoryTable'));
-const DuplicateReview = React.lazy(() => import('./DuplicateReview'));
+const MemoryGraph = React.lazy(() => import("./MemoryGraph"));
+const MemoryTable = React.lazy(() => import("./MemoryTable"));
+const DuplicateReview = React.lazy(() => import("./DuplicateReview"));
 
-type ViewMode = 'graph' | 'table' | 'duplicates';
+type ViewMode = "graph" | "table" | "duplicates";
 
 const defaultFilters: MemoryFilters = {
-  searchQuery: '',
+  searchQuery: "",
   entityTypes: [...ALL_ENTITY_TYPES],
   minConfidence: 0,
   sourceType: null,
-  sortBy: 'created_at',
-  sortOrder: 'desc',
+  sortBy: "created_at",
+  sortOrder: "desc",
 };
 
 // Navigation items configuration
 const NAV_ITEMS = [
-  { id: 'graph' as ViewMode, label: 'Graph View', icon: Network },
-  { id: 'table' as ViewMode, label: 'Table View', icon: Table },
-  { id: 'duplicates' as ViewMode, label: 'Duplicates', icon: GitMerge },
+  { id: "graph" as ViewMode, label: "Graph View", icon: Network },
+  { id: "table" as ViewMode, label: "Table View", icon: Table },
+  { id: "duplicates" as ViewMode, label: "Duplicates", icon: GitMerge },
 ] as const;
 
 // Spring animation config for smooth interactions
 const springConfig = {
-  type: 'spring' as const,
+  type: "spring" as const,
   stiffness: 500,
   damping: 35,
 };
 
 // Faster config for sidebar collapse - snappy feel
 const sidebarSpring = {
-  type: 'spring' as const,
+  type: "spring" as const,
   stiffness: 700,
   damping: 40,
 };
 
 export default function MemoryClient() {
   // View state
-  const [viewMode, setViewMode] = useState<ViewMode>('graph');
+  const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [filters, setFilters] = useState<MemoryFilters>(defaultFilters);
   const [showAddForm, setShowAddForm] = useState(false);
   const [graphKey, setGraphKey] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [focusedMemoryId, setFocusedMemoryId] = useState<string | null>(null);
-  const [relationshipReturn, setRelationshipReturn] = useState<
-    { relationshipId: string; tab?: 'edit' | 'ai' | 'evidence' } | null
-  >(null);
-  const [pendingRelationshipOpen, setPendingRelationshipOpen] = useState<
-    { relationshipId: string; tab?: 'edit' | 'ai' | 'evidence' } | null
-  >(null);
+  const [relationshipReturn, setRelationshipReturn] = useState<{
+    relationshipId: string;
+    tab?: "edit" | "ai" | "evidence";
+  } | null>(null);
+  const [pendingRelationshipOpen, setPendingRelationshipOpen] = useState<{
+    relationshipId: string;
+    tab?: "edit" | "ai" | "evidence";
+  } | null>(null);
 
   // Data hooks
   const meQuery = useMemoryMe();
-  const { data: stats, isLoading: statsLoading, refetch: refetchStats } = useMemoryStats();
-  const isLocalBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true';
-  const isAdmin = isLocalBypass ? true : meQuery.data?.is_admin ?? false;
-  const { data: duplicates } = useDuplicateCandidates('pending', { enabled: isAdmin });
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    refetch: refetchStats,
+  } = useMemoryStats();
+  const isLocalBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === "true";
+  const isAdmin = isLocalBypass ? true : (meQuery.data?.is_admin ?? false);
+  const { data: duplicates } = useDuplicateCandidates("pending", {
+    enabled: isAdmin,
+  });
   const importZendesk = useImportZendeskTagged();
 
   const availableEntityTypes = useMemo(() => {
@@ -137,29 +154,29 @@ export default function MemoryClient() {
   const handleInspectMemoryFromRelationship = useCallback(
     (memoryId: string, relationshipId: string) => {
       setFocusedMemoryId(memoryId);
-      setRelationshipReturn({ relationshipId, tab: 'ai' });
-      setViewMode('table');
+      setRelationshipReturn({ relationshipId, tab: "ai" });
+      setViewMode("table");
     },
-    []
+    [],
   );
 
   const handleImportSources = useCallback(async () => {
     try {
       const result = await importZendesk.mutateAsync({
-        tag: 'mb_playbook',
+        tag: "mb_playbook",
         limit: 200,
       });
 
       if (!result.queued) {
-        toast.error(result.message || 'Import could not be queued');
+        toast.error(result.message || "Import could not be queued");
         return;
       }
-      const taskLabel = result.task_id ? ` (task ${result.task_id})` : '';
+      const taskLabel = result.task_id ? ` (task ${result.task_id})` : "";
       toast.success(result.message || `Import queued${taskLabel}`);
       refetchStats();
       setGraphKey((prev) => prev + 1);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Import failed';
+      const message = err instanceof Error ? err.message : "Import failed";
       toast.error(message);
     }
   }, [importZendesk, refetchStats]);
@@ -172,7 +189,7 @@ export default function MemoryClient() {
 
   const navItems = useMemo(() => {
     if (isAdmin) return NAV_ITEMS;
-    return NAV_ITEMS.filter((item) => item.id !== 'duplicates');
+    return NAV_ITEMS.filter((item) => item.id !== "duplicates");
   }, [isAdmin]);
 
   return (
@@ -181,7 +198,7 @@ export default function MemoryClient() {
       <div className="memory-layout">
         {/* Collapsible Sidebar */}
         <motion.aside
-          className={`memory-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}
+          className={`memory-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}
           initial={false}
           animate={{ width: sidebarCollapsed ? 72 : 280 }}
           transition={sidebarSpring}
@@ -205,9 +222,15 @@ export default function MemoryClient() {
               onClick={toggleSidebar}
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.95 }}
-              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-label={
+                sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
+              }
             >
-              {sidebarCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+              {sidebarCollapsed ? (
+                <ChevronRight size={18} />
+              ) : (
+                <ChevronLeft size={18} />
+              )}
             </motion.button>
           </div>
 
@@ -217,7 +240,7 @@ export default function MemoryClient() {
               <motion.div
                 className="sidebar-stats"
                 initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
+                animate={{ opacity: 1, height: "auto" }}
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.2 }}
               >
@@ -233,7 +256,9 @@ export default function MemoryClient() {
                     </div>
                     <div className="sidebar-stat-content">
                       <span className="sidebar-stat-value">
-                        {statsLoading ? '—' : stats?.total_memories.toLocaleString() || '0'}
+                        {statsLoading
+                          ? "—"
+                          : stats?.total_memories.toLocaleString() || "0"}
                       </span>
                       <span className="sidebar-stat-label">Memories</span>
                     </div>
@@ -250,7 +275,9 @@ export default function MemoryClient() {
                     </div>
                     <div className="sidebar-stat-content">
                       <span className="sidebar-stat-value">
-                        {statsLoading ? '—' : stats?.total_entities.toLocaleString() || '0'}
+                        {statsLoading
+                          ? "—"
+                          : stats?.total_entities.toLocaleString() || "0"}
                       </span>
                       <span className="sidebar-stat-label">Entities</span>
                     </div>
@@ -267,7 +294,9 @@ export default function MemoryClient() {
                     </div>
                     <div className="sidebar-stat-content">
                       <span className="sidebar-stat-value">
-                        {statsLoading ? '—' : stats?.total_relationships.toLocaleString() || '0'}
+                        {statsLoading
+                          ? "—"
+                          : stats?.total_relationships.toLocaleString() || "0"}
                       </span>
                       <span className="sidebar-stat-label">Relations</span>
                     </div>
@@ -275,16 +304,18 @@ export default function MemoryClient() {
 
                   {/* Pending Duplicates */}
                   <motion.div
-                    className={`sidebar-stat-card ${pendingDuplicatesCount > 0 ? 'has-alert' : ''}`}
+                    className={`sidebar-stat-card ${pendingDuplicatesCount > 0 ? "has-alert" : ""}`}
                     whileHover={{ scale: 1.02, y: -2 }}
                     transition={springConfig}
                   >
-                    <div className={`sidebar-stat-icon ${pendingDuplicatesCount > 0 ? 'sidebar-stat-icon-warning' : 'sidebar-stat-icon-gray'}`}>
+                    <div
+                      className={`sidebar-stat-icon ${pendingDuplicatesCount > 0 ? "sidebar-stat-icon-warning" : "sidebar-stat-icon-gray"}`}
+                    >
                       <AlertTriangle size={16} />
                     </div>
                     <div className="sidebar-stat-content">
                       <span className="sidebar-stat-value">
-                        {statsLoading ? '—' : pendingDuplicatesCount}
+                        {statsLoading ? "—" : pendingDuplicatesCount}
                       </span>
                       <span className="sidebar-stat-label">Duplicates</span>
                     </div>
@@ -299,12 +330,13 @@ export default function MemoryClient() {
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = viewMode === item.id;
-              const hasBadge = item.id === 'duplicates' && pendingDuplicatesCount > 0;
+              const hasBadge =
+                item.id === "duplicates" && pendingDuplicatesCount > 0;
 
               return (
                 <motion.button
                   key={item.id}
-                  className={`memory-nav-item ${isActive ? 'active' : ''}`}
+                  className={`memory-nav-item ${isActive ? "active" : ""}`}
                   onClick={() => setViewMode(item.id)}
                   whileHover={{ x: 4 }}
                   whileTap={{ scale: 0.98 }}
@@ -350,7 +382,6 @@ export default function MemoryClient() {
                 </motion.button>
               );
             })}
-
           </nav>
 
           {/* Confidence Distribution - Sidebar Section */}
@@ -359,7 +390,7 @@ export default function MemoryClient() {
               <motion.div
                 className="sidebar-confidence"
                 initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
+                animate={{ opacity: 1, height: "auto" }}
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.2 }}
               >
@@ -367,8 +398,11 @@ export default function MemoryClient() {
                   <span className="sidebar-confidence-title">Confidence</span>
                   <span className="sidebar-confidence-percent">
                     {stats.total_memories > 0
-                      ? Math.round((stats.high_confidence / stats.total_memories) * 100)
-                      : 0}% high
+                      ? Math.round(
+                          (stats.high_confidence / stats.total_memories) * 100,
+                        )
+                      : 0}
+                    % high
                   </span>
                 </div>
                 <div className="sidebar-confidence-bars">
@@ -383,14 +417,17 @@ export default function MemoryClient() {
                         className="sidebar-confidence-fill sidebar-fill-success"
                         initial={{ width: 0 }}
                         animate={{
-                          width: stats.total_memories > 0
-                            ? `${(stats.high_confidence / stats.total_memories) * 100}%`
-                            : '0%',
+                          width:
+                            stats.total_memories > 0
+                              ? `${(stats.high_confidence / stats.total_memories) * 100}%`
+                              : "0%",
                         }}
                         transition={{ delay: 0.2, duration: 0.6 }}
                       />
                     </div>
-                    <span className="sidebar-confidence-count">{stats.high_confidence}</span>
+                    <span className="sidebar-confidence-count">
+                      {stats.high_confidence}
+                    </span>
                   </div>
                   {/* Medium */}
                   <div className="sidebar-confidence-row">
@@ -403,14 +440,17 @@ export default function MemoryClient() {
                         className="sidebar-confidence-fill sidebar-fill-warning"
                         initial={{ width: 0 }}
                         animate={{
-                          width: stats.total_memories > 0
-                            ? `${(stats.medium_confidence / stats.total_memories) * 100}%`
-                            : '0%',
+                          width:
+                            stats.total_memories > 0
+                              ? `${(stats.medium_confidence / stats.total_memories) * 100}%`
+                              : "0%",
                         }}
                         transition={{ delay: 0.3, duration: 0.6 }}
                       />
                     </div>
-                    <span className="sidebar-confidence-count">{stats.medium_confidence}</span>
+                    <span className="sidebar-confidence-count">
+                      {stats.medium_confidence}
+                    </span>
                   </div>
                   {/* Low */}
                   <div className="sidebar-confidence-row">
@@ -423,14 +463,17 @@ export default function MemoryClient() {
                         className="sidebar-confidence-fill sidebar-fill-danger"
                         initial={{ width: 0 }}
                         animate={{
-                          width: stats.total_memories > 0
-                            ? `${(stats.low_confidence / stats.total_memories) * 100}%`
-                            : '0%',
+                          width:
+                            stats.total_memories > 0
+                              ? `${(stats.low_confidence / stats.total_memories) * 100}%`
+                              : "0%",
                         }}
                         transition={{ delay: 0.4, duration: 0.6 }}
                       />
                     </div>
-                    <span className="sidebar-confidence-count">{stats.low_confidence}</span>
+                    <span className="sidebar-confidence-count">
+                      {stats.low_confidence}
+                    </span>
                   </div>
                 </div>
               </motion.div>
@@ -478,7 +521,9 @@ export default function MemoryClient() {
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                     >
-                      {importZendesk.isPending ? 'Queueing…' : 'Import Knowledge'}
+                      {importZendesk.isPending
+                        ? "Queueing…"
+                        : "Import Knowledge"}
                     </motion.span>
                   )}
                 </AnimatePresence>
@@ -512,14 +557,14 @@ export default function MemoryClient() {
             <div className="memory-header-left">
               <div className="memory-title-group">
                 <h1 className="memory-title">
-                  {viewMode === 'graph' && 'Knowledge Graph'}
-                  {viewMode === 'table' && 'Memory Table'}
-                  {viewMode === 'duplicates' && 'Duplicate Review'}
+                  {viewMode === "graph" && "Knowledge Graph"}
+                  {viewMode === "table" && "Memory Table"}
+                  {viewMode === "duplicates" && "Duplicate Review"}
                 </h1>
                 <span className="memory-subtitle">
-                  {viewMode === 'graph' && 'Explore entity relationships'}
-                  {viewMode === 'table' && 'Browse and manage memories'}
-                  {viewMode === 'duplicates' && 'Resolve duplicate entries'}
+                  {viewMode === "graph" && "Explore entity relationships"}
+                  {viewMode === "table" && "Browse and manage memories"}
+                  {viewMode === "duplicates" && "Resolve duplicate entries"}
                 </span>
               </div>
             </div>
@@ -531,27 +576,33 @@ export default function MemoryClient() {
                 <MemorySearch
                   value={filters.searchQuery}
                   onChange={handleSearchChange}
-                  placeholder={viewMode === 'graph' ? 'Search entities...' : 'Search memories...'}
+                  placeholder={
+                    viewMode === "graph"
+                      ? "Search entities..."
+                      : "Search memories..."
+                  }
                 />
               </div>
 
-              {viewMode === 'table' && (
+              {viewMode === "table" && (
                 <div className="memory-header-sort">
                   <span className="memory-header-sort__label">Created</span>
                   <select
                     className="memory-header-sort__select"
-                    value={filters.sortBy === 'created_at' ? filters.sortOrder : ''}
+                    value={
+                      filters.sortBy === "created_at" ? filters.sortOrder : ""
+                    }
                     onChange={(e) => {
-                      const value = e.target.value as '' | 'asc' | 'desc';
+                      const value = e.target.value as "" | "asc" | "desc";
                       if (!value) return;
                       setFilters((prev) => ({
                         ...prev,
-                        sortBy: 'created_at',
+                        sortBy: "created_at",
                         sortOrder: value,
                       }));
                     }}
                   >
-                    {filters.sortBy !== 'created_at' ? (
+                    {filters.sortBy !== "created_at" ? (
                       <option value="">{`Current sort: ${filters.sortBy} (${filters.sortOrder})`}</option>
                     ) : null}
                     <option value="desc">Newest → Oldest</option>
@@ -590,13 +641,17 @@ export default function MemoryClient() {
                       <motion.div
                         className="memory-loading-spinner"
                         animate={{ rotate: 360 }}
-                        transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                        transition={{
+                          duration: 1,
+                          repeat: Infinity,
+                          ease: "linear",
+                        }}
                       />
                       <p>Loading...</p>
                     </div>
                   }
                 >
-                  {viewMode === 'graph' && (
+                  {viewMode === "graph" && (
                     <GraphErrorBoundary
                       key={graphKey}
                       onReset={handleGraphErrorReset}
@@ -608,13 +663,17 @@ export default function MemoryClient() {
                         onEntityFilterChange={handleEntityTypeToggle}
                         onSelectAllEntities={handleSelectAllEntities}
                         onDeselectAllEntities={handleDeselectAllEntities}
-                        onInspectMemoryFromRelationship={handleInspectMemoryFromRelationship}
+                        onInspectMemoryFromRelationship={
+                          handleInspectMemoryFromRelationship
+                        }
                         pendingRelationshipOpen={pendingRelationshipOpen}
-                        onPendingRelationshipOpenHandled={() => setPendingRelationshipOpen(null)}
+                        onPendingRelationshipOpenHandled={() =>
+                          setPendingRelationshipOpen(null)
+                        }
                       />
                     </GraphErrorBoundary>
                   )}
-                  {viewMode === 'table' && (
+                  {viewMode === "table" && (
                     <MemoryTable
                       searchQuery={filters.searchQuery}
                       filters={filters}
@@ -626,7 +685,7 @@ export default function MemoryClient() {
                       isAdmin={isAdmin}
                     />
                   )}
-                  {viewMode === 'duplicates' && <DuplicateReview />}
+                  {viewMode === "duplicates" && <DuplicateReview />}
                 </Suspense>
               </motion.div>
             </AnimatePresence>
@@ -635,17 +694,17 @@ export default function MemoryClient() {
       </div>
 
       <AnimatePresence>
-        {relationshipReturn && viewMode !== 'graph' ? (
+        {relationshipReturn && viewMode !== "graph" ? (
           <motion.button
             key="memory-relationship-return-fab"
             className="relationship-editor-fab"
             initial={{ opacity: 0, scale: 0.92, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.92, y: 10 }}
-            transition={{ type: 'spring', stiffness: 520, damping: 34 }}
+            transition={{ type: "spring", stiffness: 520, damping: 34 }}
             onClick={() => {
               setPendingRelationshipOpen(relationshipReturn);
-              setViewMode('graph');
+              setViewMode("graph");
             }}
             type="button"
             title="Return to relationship analysis"

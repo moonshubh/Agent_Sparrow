@@ -1,21 +1,21 @@
-"use client"
+"use client";
 
-import React from "react"
-import { X, Check, Loader2 } from "lucide-react"
-import { cn } from "@/shared/lib/utils"
-import { Button } from "@/shared/ui/button"
+import React from "react";
+import { X, Check, Loader2 } from "lucide-react";
+import { cn } from "@/shared/lib/utils";
+import { Button } from "@/shared/ui/button";
 
 type PopoverFormProps = {
-  title?: string
-  open: boolean
-  setOpen: (v: boolean) => void
-  width?: string
-  height?: string
-  showCloseButton?: boolean
-  showSuccess?: boolean
-  openChild: React.ReactNode
-  successChild?: React.ReactNode
-}
+  title?: string;
+  open: boolean;
+  setOpen: (v: boolean) => void;
+  width?: string;
+  height?: string;
+  showCloseButton?: boolean;
+  showSuccess?: boolean;
+  openChild: React.ReactNode;
+  successChild?: React.ReactNode;
+};
 
 export function PopoverForm({
   title,
@@ -28,7 +28,7 @@ export function PopoverForm({
   openChild,
   successChild,
 }: PopoverFormProps) {
-  if (!open) return null
+  if (!open) return null;
   return (
     <div className="fixed inset-0 z-[70] grid place-items-center overflow-hidden">
       <div
@@ -65,7 +65,7 @@ export function PopoverForm({
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 export function PopoverFormButton({
@@ -74,10 +74,10 @@ export function PopoverFormButton({
   onClick,
   className,
 }: {
-  loading?: boolean
-  children?: React.ReactNode
-  onClick?: () => void
-  className?: string
+  loading?: boolean;
+  children?: React.ReactNode;
+  onClick?: () => void;
+  className?: string;
 }) {
   return (
     <Button
@@ -94,11 +94,11 @@ export function PopoverFormButton({
       )}
       <span>{children}</span>
     </Button>
-  )
+  );
 }
 
 export function PopoverFormSeparator() {
-  return <div className="h-px w-full bg-border" />
+  return <div className="h-px w-full bg-border" />;
 }
 
 export function PopoverFormCutOutLeftIcon() {
@@ -106,7 +106,7 @@ export function PopoverFormCutOutLeftIcon() {
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
       <circle cx="10" cy="10" r="9" className="fill-popover stroke-border" />
     </svg>
-  )
+  );
 }
 
 export function PopoverFormCutOutRightIcon() {
@@ -114,15 +114,15 @@ export function PopoverFormCutOutRightIcon() {
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
       <circle cx="10" cy="10" r="9" className="fill-popover stroke-border" />
     </svg>
-  )
+  );
 }
 
 export function PopoverFormSuccess({
   title = "Submitted",
   description = "Thanks for your input!",
 }: {
-  title?: string
-  description?: string
+  title?: string;
+  description?: string;
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
@@ -132,5 +132,5 @@ export function PopoverFormSuccess({
       <div className="text-base font-medium">{title}</div>
       <div className="text-sm text-muted-foreground">{description}</div>
     </div>
-  )
+  );
 }

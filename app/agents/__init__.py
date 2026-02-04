@@ -17,8 +17,12 @@ except Exception:  # pragma: no cover
 
 # Orchestration - replaced by unified agent system
 try:
-    from app.agents.orchestration.orchestration.graph import app as agent_graph  # noqa: F401
-    from app.agents.orchestration.orchestration.state import GraphState as GraphState  # noqa: F401
+    from app.agents.orchestration.orchestration.graph import (
+        app as agent_graph,
+    )  # noqa: F401
+    from app.agents.orchestration.orchestration.state import (
+        GraphState as GraphState,
+    )  # noqa: F401
 except Exception:  # pragma: no cover
     # Do not raise at import time: this package is imported in many contexts
     # (tests, tooling) where agent dependencies may be intentionally absent.
@@ -26,7 +30,7 @@ except Exception:  # pragma: no cover
 
     logging.error("Failed to import agent_graph", exc_info=True)
     agent_graph = None  # type: ignore[assignment]
-    GraphState = None  # type: ignore[assignment]
+    GraphState = None  # type: ignore[misc,assignment]
 
 __all__ = [
     # Legacy exports removed - use unified agent via app/agents/unified/

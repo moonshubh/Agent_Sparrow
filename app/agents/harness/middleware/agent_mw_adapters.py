@@ -14,18 +14,27 @@ from loguru import logger
 try:  # pragma: no cover - optional dependency
     from langchain.agents.middleware.types import (
         AgentMiddleware,
+        AgentState,
         ModelRequest,
         ModelResponse,
         ToolCallRequest,
     )
-
-    MIDDLEWARE_AVAILABLE = True
 except Exception:  # pragma: no cover
-    AgentMiddleware = object  # type: ignore[assignment]
-    ModelRequest = object  # type: ignore[assignment]
-    ModelResponse = object  # type: ignore[assignment]
-    ToolCallRequest = object  # type: ignore[assignment]
-    MIDDLEWARE_AVAILABLE = False
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class AgentState(dict):  # type: ignore[no-redef]
+        pass
+
+    class ModelRequest:  # type: ignore[no-redef]
+        pass
+
+    class ModelResponse:  # type: ignore[no-redef]
+        pass
+
+    class ToolCallRequest:  # type: ignore[no-redef]
+        pass
 
 
 class SafeMiddleware(AgentMiddleware):
@@ -34,26 +43,39 @@ class SafeMiddleware(AgentMiddleware):
     def __init__(self, inner: AgentMiddleware, name: Optional[str] = None) -> None:
         super().__init__()
         self.inner = inner
-        self.name = name or getattr(inner, "name", type(inner).__name__)
+        resolved = name or getattr(inner, "name", None) or type(inner).__name__
+        self._name = str(resolved)
 
-    async def abefore_agent(self, state: Dict[str, Any], runtime: Any) -> Optional[Dict[str, Any]]:
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def abefore_agent(
+        self, state: AgentState, runtime: Any
+    ) -> Optional[Dict[str, Any]]:
         try:
             if hasattr(self.inner, "abefore_agent"):
                 return await self.inner.abefore_agent(state, runtime)
             if hasattr(self.inner, "before_agent"):
                 return self.inner.before_agent(state, runtime)  # type: ignore
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("middleware_before_agent_failed", mw=self.name, error=str(exc))
+            logger.warning(
+                "middleware_before_agent_failed", mw=self.name, error=str(exc)
+            )
         return None
 
-    async def aafter_agent(self, state: Dict[str, Any], runtime: Any) -> Optional[Dict[str, Any]]:
+    async def aafter_agent(
+        self, state: AgentState, runtime: Any
+    ) -> Optional[Dict[str, Any]]:
         try:
             if hasattr(self.inner, "aafter_agent"):
                 return await self.inner.aafter_agent(state, runtime)
             if hasattr(self.inner, "after_agent"):
                 return self.inner.after_agent(state, runtime)  # type: ignore
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("middleware_after_agent_failed", mw=self.name, error=str(exc))
+            logger.warning(
+                "middleware_after_agent_failed", mw=self.name, error=str(exc)
+            )
         return None
 
     def wrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
@@ -61,7 +83,9 @@ class SafeMiddleware(AgentMiddleware):
             if hasattr(self.inner, "wrap_model_call"):
                 return self.inner.wrap_model_call(request, handler)  # type: ignore
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("middleware_wrap_model_call_failed", mw=self.name, error=str(exc))
+            logger.warning(
+                "middleware_wrap_model_call_failed", mw=self.name, error=str(exc)
+            )
         return handler(request)
 
     async def awrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
@@ -71,7 +95,9 @@ class SafeMiddleware(AgentMiddleware):
             if hasattr(self.inner, "wrap_model_call"):
                 return self.inner.wrap_model_call(request, handler)  # type: ignore
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("middleware_awrap_model_call_failed", mw=self.name, error=str(exc))
+            logger.warning(
+                "middleware_awrap_model_call_failed", mw=self.name, error=str(exc)
+            )
         return await handler(request)
 
     async def awrap_tool_call(self, request: ToolCallRequest, handler) -> ToolMessage:
@@ -81,7 +107,9 @@ class SafeMiddleware(AgentMiddleware):
             if hasattr(self.inner, "wrap_tool_call"):
                 return self.inner.wrap_tool_call(request, handler)  # type: ignore
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("middleware_awrap_tool_call_failed", mw=self.name, error=str(exc))
+            logger.warning(
+                "middleware_awrap_tool_call_failed", mw=self.name, error=str(exc)
+            )
         return await handler(request)
 
 
@@ -112,12 +140,16 @@ class ToolRetryMiddleware(AgentMiddleware):
                 return await handler(request)
             except self.cfg.retry_exceptions as exc:
                 last_exc = exc
-                delay = min(self.cfg.max_delay_s, self.cfg.base_delay_s * (2 ** (attempts - 1)))
+                delay = min(
+                    self.cfg.max_delay_s, self.cfg.base_delay_s * (2 ** (attempts - 1))
+                )
                 await asyncio.sleep(delay + random.uniform(0, self.cfg.jitter_s))
             except Exception as exc:
                 return self._error_tool_message(request, exc, attempts, retryable=False)
 
-        return self._error_tool_message(request, last_exc or Exception("tool_failed"), attempts, retryable=True)
+        return self._error_tool_message(
+            request, last_exc or Exception("tool_failed"), attempts, retryable=True
+        )
 
     def _error_tool_message(
         self,
@@ -126,7 +158,9 @@ class ToolRetryMiddleware(AgentMiddleware):
         attempts: int,
         retryable: bool,
     ) -> ToolMessage:
-        tool_call_id = getattr(request, "tool_call_id", None) or getattr(request, "id", "unknown")
+        tool_call_id = getattr(request, "tool_call_id", None) or getattr(
+            request, "id", "unknown"
+        )
         tool_name = getattr(request, "name", None) or "tool"
         logger.warning(
             "tool_retry_exhausted",
@@ -168,12 +202,16 @@ class ToolCircuitBreakerMiddleware(AgentMiddleware):
         now = time.time()
         state = self._state.setdefault(tool_name, {"failures": [], "opened_until": 0.0})
         # Drop old failures
-        state["failures"] = [ts for ts in state["failures"] if now - ts <= self.window_s]
+        state["failures"] = [
+            ts for ts in state["failures"] if now - ts <= self.window_s
+        ]
         return state
 
     async def awrap_tool_call(self, request: ToolCallRequest, handler) -> ToolMessage:
         tool_name = getattr(request, "name", None) or "tool"
-        tool_call_id = getattr(request, "tool_call_id", None) or getattr(request, "id", "unknown")
+        tool_call_id = getattr(request, "tool_call_id", None) or getattr(
+            request, "id", "unknown"
+        )
         now = time.time()
         state = self._state_for(tool_name)
 
@@ -194,5 +232,7 @@ class ToolCircuitBreakerMiddleware(AgentMiddleware):
             state["failures"].append(now)
             if len(state["failures"]) >= self.failure_threshold:
                 state["opened_until"] = now + self.cooloff_s
-                logger.warning("tool_circuit_opened", tool=tool_name, cooloff=self.cooloff_s)
+                logger.warning(
+                    "tool_circuit_opened", tool=tool_name, cooloff=self.cooloff_s
+                )
             raise

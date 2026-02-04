@@ -6,7 +6,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.core.settings import settings
-from app.core.config import get_registry, Provider as RegistryProvider
+from app.core.config import get_registry
 
 # Initialize rate limiter for model endpoints
 limiter = Limiter(key_func=get_remote_address)
@@ -41,7 +41,9 @@ def get_available_providers() -> dict[str, bool]:
 @limiter.limit("60/minute")
 async def list_models(
     request: Request,
-    agent_type: str = Query("primary", description="Agent type: primary or log_analysis"),
+    agent_type: str = Query(
+        "primary", description="Agent type: primary or log_analysis"
+    ),
 ):
     """
     Returns available models by provider for the requested agent type.

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.core.config import find_model_config, get_models_config, resolve_coordinator_config
+from app.core.config import (
+    find_model_config,
+    get_models_config,
+    resolve_coordinator_config,
+)
 
 DEFAULT_CONTEXT_WINDOW = 128_000
 

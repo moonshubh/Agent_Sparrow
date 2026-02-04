@@ -1,487 +1,661 @@
-"use client"
+"use client";
 
-import React, { useEffect, useState, useCallback } from 'react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/shared/ui/dialog'
-import { Button } from '@/shared/ui/button'
-import { Separator } from '@/shared/ui/separator'
-import { CheckCircle2, Clock, Loader2, FileText, X, Maximize2, Trash2 } from 'lucide-react'
-import { Input } from '@/shared/ui/input'
-import { feedMeApi } from '@/features/feedme/services/feedme-api'
-import { useRouter } from 'next/navigation'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/shared/ui/alert-dialog'
-import { useUIStore } from '@/state/stores/ui-store'
-import type { ProcessingStageValue, ProcessingStatusValue, UploadTranscriptResponse } from '@/features/feedme/services/feedme-api'
-import { DialogErrorBoundary } from './DialogErrorBoundary'
-import { GlowingEffect } from '@/shared/ui/glowing-effect'
+import React, { useEffect, useState, useCallback } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
+import { Button } from "@/shared/ui/button";
+import { Separator } from "@/shared/ui/separator";
+import {
+  CheckCircle2,
+  Clock,
+  Loader2,
+  FileText,
+  X,
+  Maximize2,
+  Trash2,
+} from "lucide-react";
+import { Input } from "@/shared/ui/input";
+import { feedMeApi } from "@/features/feedme/services/feedme-api";
+import { useRouter } from "next/navigation";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
+import { useUIStore } from "@/state/stores/ui-store";
+import type {
+  ProcessingStageValue,
+  ProcessingStatusValue,
+  UploadTranscriptResponse,
+} from "@/features/feedme/services/feedme-api";
+import { DialogErrorBoundary } from "./DialogErrorBoundary";
+import { GlowingEffect } from "@/shared/ui/glowing-effect";
 
 type ApiConversation = UploadTranscriptResponse & {
-  id?: number
-  folder_id?: number | null
-  created_at?: string
-  extracted_text?: string
-  title?: string
-  processing_method?: string
-}
+  id?: number;
+  folder_id?: number | null;
+  created_at?: string;
+  extracted_text?: string;
+  title?: string;
+  processing_method?: string;
+};
 
 interface ProcessingTrackerMetadata {
-  progress?: number
-  stage?: ProcessingStageValue
-  message?: string
+  progress?: number;
+  stage?: ProcessingStageValue;
+  message?: string;
 }
 
 const PROCESSING_STATUS_SET: ReadonlySet<ProcessingStatusValue> = new Set([
-  'pending',
-  'processing',
-  'completed',
-  'failed',
-  'cancelled'
-])
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+  "cancelled",
+]);
 
 const PROCESSING_STAGE_SET: ReadonlySet<ProcessingStageValue> = new Set([
-  'queued',
-  'parsing',
-  'ai_extraction',
-  'embedding_generation',
-  'quality_assessment',
-  'completed',
-  'failed'
-])
+  "queued",
+  "parsing",
+  "ai_extraction",
+  "embedding_generation",
+  "quality_assessment",
+  "completed",
+  "failed",
+]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
-const isProcessingStatusValue = (value: unknown): value is ProcessingStatusValue =>
-  typeof value === 'string' && PROCESSING_STATUS_SET.has(value as ProcessingStatusValue)
+const isProcessingStatusValue = (
+  value: unknown,
+): value is ProcessingStatusValue =>
+  typeof value === "string" &&
+  PROCESSING_STATUS_SET.has(value as ProcessingStatusValue);
 
-const isProcessingStageValue = (value: unknown): value is ProcessingStageValue =>
-  typeof value === 'string' && PROCESSING_STAGE_SET.has(value as ProcessingStageValue)
+const isProcessingStageValue = (
+  value: unknown,
+): value is ProcessingStageValue =>
+  typeof value === "string" &&
+  PROCESSING_STAGE_SET.has(value as ProcessingStageValue);
 
-const extractProcessingTracker = (metadata?: Record<string, unknown>): ProcessingTrackerMetadata | undefined => {
+const extractProcessingTracker = (
+  metadata?: Record<string, unknown>,
+): ProcessingTrackerMetadata | undefined => {
   if (!isRecord(metadata)) {
-    return undefined
+    return undefined;
   }
 
-  const trackerCandidate = metadata['processing_tracker']
+  const trackerCandidate = metadata["processing_tracker"];
   if (!isRecord(trackerCandidate)) {
-    return undefined
+    return undefined;
   }
 
-  const progress = typeof trackerCandidate['progress'] === 'number' ? trackerCandidate['progress'] : undefined
-  const stage = isProcessingStageValue(trackerCandidate['stage']) ? trackerCandidate['stage'] : undefined
-  const message = typeof trackerCandidate['message'] === 'string' ? trackerCandidate['message'] : undefined
+  const progress =
+    typeof trackerCandidate["progress"] === "number"
+      ? trackerCandidate["progress"]
+      : undefined;
+  const stage = isProcessingStageValue(trackerCandidate["stage"])
+    ? trackerCandidate["stage"]
+    : undefined;
+  const message =
+    typeof trackerCandidate["message"] === "string"
+      ? trackerCandidate["message"]
+      : undefined;
 
   if (progress === undefined && stage === undefined && message === undefined) {
-    return undefined
+    return undefined;
   }
 
-  return { progress, stage, message }
-}
+  return { progress, stage, message };
+};
 
 const extractProcessingMethod = (
   metadata?: Record<string, unknown>,
-  fallback?: string
+  fallback?: string,
 ): string | undefined => {
-  if (typeof fallback === 'string' && fallback.trim()) {
-    return fallback
+  if (typeof fallback === "string" && fallback.trim()) {
+    return fallback;
   }
 
   if (!isRecord(metadata)) {
-    return undefined
+    return undefined;
   }
 
-  const method = metadata['processing_method']
-  return typeof method === 'string' ? method : undefined
-}
+  const method = metadata["processing_method"];
+  return typeof method === "string" ? method : undefined;
+};
 
 type Props = {
-  isOpen: boolean
-  onClose: () => void
-}
+  isOpen: boolean;
+  onClose: () => void;
+};
 
 type ConversationItem = {
-  id: number
-  title: string
-  processing_status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
-  progress_percentage?: number
-  processing_stage?: ProcessingStageValue
-  status_message?: string
-  created_at: string
-  extracted_text?: string
-  processing_method?: string
-}
+  id: number;
+  title: string;
+  processing_status:
+    | "pending"
+    | "processing"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  progress_percentage?: number;
+  processing_stage?: ProcessingStageValue;
+  status_message?: string;
+  created_at: string;
+  extracted_text?: string;
+  processing_method?: string;
+};
 
 export default function UnassignedDialog({ isOpen, onClose }: Props) {
-  const [conversations, setConversations] = useState<ConversationItem[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [editingId, setEditingId] = useState<number | null>(null)
-  const [titleDraft, setTitleDraft] = useState('')
-  const [originalTitle, setOriginalTitle] = useState('')
-  const [renamingId, setRenamingId] = useState<number | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<ConversationItem | null>(null)
-  const [isDeleting, setIsDeleting] = useState(false)
-  const router = useRouter()
-  const showToast = useUIStore(state => state.actions.showToast)
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [originalTitle, setOriginalTitle] = useState("");
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConversationItem | null>(
+    null,
+  );
+  const [isDeleting, setIsDeleting] = useState(false);
+  const router = useRouter();
+  const showToast = useUIStore((state) => state.actions.showToast);
 
-  const transformConversations = useCallback((items: ApiConversation[]): ConversationItem[] => {
-    const result: ConversationItem[] = []
+  const transformConversations = useCallback(
+    (items: ApiConversation[]): ConversationItem[] => {
+      const result: ConversationItem[] = [];
 
-    items.forEach((conv) => {
-      if (conv.folder_id !== null && conv.folder_id !== undefined) {
-        return
-      }
+      items.forEach((conv) => {
+        if (conv.folder_id !== null && conv.folder_id !== undefined) {
+          return;
+        }
 
-      const id = conv.id ?? conv.conversation_id
-      if (typeof id !== 'number') {
-        return
-      }
+        const id = conv.id ?? conv.conversation_id;
+        if (typeof id !== "number") {
+          return;
+        }
 
-      const status: ProcessingStatusValue = isProcessingStatusValue(conv.processing_status)
-        ? conv.processing_status
-        : 'pending'
+        const status: ProcessingStatusValue = isProcessingStatusValue(
+          conv.processing_status,
+        )
+          ? conv.processing_status
+          : "pending";
 
-      const tracker = extractProcessingTracker(conv.metadata)
-      const rawProgress = typeof tracker?.progress === 'number'
-        ? tracker.progress
-        : status === 'completed' || status === 'failed'
-          ? 100
-          : undefined
-      const progress = rawProgress !== undefined
-        ? Math.max(0, Math.min(100, rawProgress))
-        : undefined
+        const tracker = extractProcessingTracker(conv.metadata);
+        const rawProgress =
+          typeof tracker?.progress === "number"
+            ? tracker.progress
+            : status === "completed" || status === "failed"
+              ? 100
+              : undefined;
+        const progress =
+          rawProgress !== undefined
+            ? Math.max(0, Math.min(100, rawProgress))
+            : undefined;
 
-      result.push({
-        id,
-        title: conv.title ?? `Conversation ${id}`,
-        processing_status: status,
-        progress_percentage: progress,
-        processing_stage: tracker?.stage,
-        status_message: tracker?.message,
-        created_at: conv.created_at ?? new Date().toISOString(),
-        extracted_text: typeof conv.extracted_text === 'string' ? conv.extracted_text : undefined,
-        processing_method: extractProcessingMethod(conv.metadata, conv.processing_method),
-      })
-    })
+        result.push({
+          id,
+          title: conv.title ?? `Conversation ${id}`,
+          processing_status: status,
+          progress_percentage: progress,
+          processing_stage: tracker?.stage,
+          status_message: tracker?.message,
+          created_at: conv.created_at ?? new Date().toISOString(),
+          extracted_text:
+            typeof conv.extracted_text === "string"
+              ? conv.extracted_text
+              : undefined,
+          processing_method: extractProcessingMethod(
+            conv.metadata,
+            conv.processing_method,
+          ),
+        });
+      });
 
-    return result
-  }, [])
+      return result;
+    },
+    [],
+  );
 
   const fetchUnassignedConversations = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
+    setError(null);
     try {
-      const response = await feedMeApi.listConversations(1, 100, undefined, undefined, undefined, null)
-      const enriched = transformConversations(response.conversations as ApiConversation[])
-      setConversations(enriched)
+      const response = await feedMeApi.listConversations(
+        1,
+        100,
+        undefined,
+        undefined,
+        undefined,
+        null,
+      );
+      const enriched = transformConversations(
+        response.conversations as ApiConversation[],
+      );
+      setConversations(enriched);
     } catch (err) {
-      console.error('Failed to fetch unassigned conversations:', err)
-      setError('Failed to load unassigned conversations')
+      console.error("Failed to fetch unassigned conversations:", err);
+      setError("Failed to load unassigned conversations");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [transformConversations])
+  }, [transformConversations]);
 
   useEffect(() => {
     if (!isOpen) {
-      return
+      return;
     }
 
-    const abortController = new AbortController()
-    let intervalId: NodeJS.Timeout | null = null
+    const abortController = new AbortController();
+    let intervalId: NodeJS.Timeout | null = null;
 
     const run = async () => {
       try {
-        const response = await feedMeApi.listConversations(1, 100, undefined, undefined, undefined, null)
+        const response = await feedMeApi.listConversations(
+          1,
+          100,
+          undefined,
+          undefined,
+          undefined,
+          null,
+        );
         if (abortController.signal.aborted) {
-          return
+          return;
         }
 
-        const enriched = transformConversations(response.conversations as ApiConversation[])
-        setConversations(enriched)
-        setError(null)
+        const enriched = transformConversations(
+          response.conversations as ApiConversation[],
+        );
+        setConversations(enriched);
+        setError(null);
 
         const needsPolling = enriched.some(
-          conv => conv.processing_status === 'processing' || conv.processing_status === 'pending'
-        )
+          (conv) =>
+            conv.processing_status === "processing" ||
+            conv.processing_status === "pending",
+        );
 
         if (needsPolling && !intervalId) {
-          intervalId = setInterval(run, 5000)
+          intervalId = setInterval(run, 5000);
         } else if (!needsPolling && intervalId) {
-          clearInterval(intervalId)
-          intervalId = null
+          clearInterval(intervalId);
+          intervalId = null;
         }
       } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          return
+        if (err instanceof Error && err.name === "AbortError") {
+          return;
         }
-        console.error('Failed to fetch unassigned conversations:', err)
-        setError('Failed to load unassigned conversations')
+        console.error("Failed to fetch unassigned conversations:", err);
+        setError("Failed to load unassigned conversations");
       } finally {
-        setLoading(false)
+        setLoading(false);
       }
-    }
+    };
 
-    setLoading(true)
-    run()
+    setLoading(true);
+    run();
 
     return () => {
-      abortController.abort()
+      abortController.abort();
       if (intervalId) {
-        clearInterval(intervalId)
+        clearInterval(intervalId);
       }
-    }
-  }, [isOpen, transformConversations])
+    };
+  }, [isOpen, transformConversations]);
 
   const getStatusIcon = (status: string, progress?: number) => {
     switch (status) {
-      case 'completed':
-        return <CheckCircle2 className="h-4 w-4 text-green-500" />
-      case 'processing':
+      case "completed":
+        return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+      case "processing":
         return (
           <div className="flex items-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin text-green-500" />
             {progress !== undefined && (
-              <span className="text-xs text-green-500 font-medium">{progress}%</span>
+              <span className="text-xs text-green-500 font-medium">
+                {progress}%
+              </span>
             )}
           </div>
-        )
-      case 'pending':
-        return <Clock className="h-4 w-4 text-yellow-500" />
-      case 'failed':
-        return <X className="h-4 w-4 text-red-500" />
-      case 'cancelled':
-        return <FileText className="h-4 w-4 text-muted-foreground" />
+        );
+      case "pending":
+        return <Clock className="h-4 w-4 text-yellow-500" />;
+      case "failed":
+        return <X className="h-4 w-4 text-red-500" />;
+      case "cancelled":
+        return <FileText className="h-4 w-4 text-muted-foreground" />;
       default:
-        return <FileText className="h-4 w-4 text-muted-foreground" />
+        return <FileText className="h-4 w-4 text-muted-foreground" />;
     }
-  }
+  };
 
-  const handleConversationClick = useCallback((conversationId: number) => {
-    router.push(`/feedme/conversation/${conversationId}`)
-    onClose()
-  }, [router, onClose])
+  const handleConversationClick = useCallback(
+    (conversationId: number) => {
+      router.push(`/feedme/conversation/${conversationId}`);
+      onClose();
+    },
+    [router, onClose],
+  );
 
   const startEditingTitle = useCallback((conversation: ConversationItem) => {
-    setEditingId(conversation.id)
-    setTitleDraft(conversation.title || `Conversation ${conversation.id}`)
-    setOriginalTitle(conversation.title || '')
-  }, [])
+    setEditingId(conversation.id);
+    setTitleDraft(conversation.title || `Conversation ${conversation.id}`);
+    setOriginalTitle(conversation.title || "");
+  }, []);
 
   const resetEditing = useCallback(() => {
-    setEditingId(null)
-    setTitleDraft('')
-    setOriginalTitle('')
-    setRenamingId(null)
-  }, [])
+    setEditingId(null);
+    setTitleDraft("");
+    setOriginalTitle("");
+    setRenamingId(null);
+  }, []);
 
-  const commitTitleChange = useCallback(async (conversation: ConversationItem) => {
-    if (!editingId) return
-    const trimmed = titleDraft.trim()
-    if (!trimmed || trimmed === originalTitle) {
-      resetEditing()
-      return
-    }
-    setRenamingId(conversation.id)
-    try {
-      await feedMeApi.updateConversation(conversation.id, { title: trimmed })
-      setConversations(prev => prev.map(item => item.id === conversation.id ? { ...item, title: trimmed } : item))
-      // Broadcast rename so other views can update
-      document.dispatchEvent(new CustomEvent('feedme:conversation-renamed', { detail: { id: conversation.id, title: trimmed } }))
-      showToast({ type: 'success', title: 'Title updated', message: 'Conversation name saved.', duration: 3000 })
-    } catch (error) {
-      console.error('Failed to rename conversation', error)
-      showToast({ type: 'error', title: 'Rename failed', message: 'Please try again.', duration: 4000 })
-      setTitleDraft(originalTitle)
-    } finally {
-      resetEditing()
-    }
-  }, [editingId, titleDraft, originalTitle, resetEditing, showToast])
+  const commitTitleChange = useCallback(
+    async (conversation: ConversationItem) => {
+      if (!editingId) return;
+      const trimmed = titleDraft.trim();
+      if (!trimmed || trimmed === originalTitle) {
+        resetEditing();
+        return;
+      }
+      setRenamingId(conversation.id);
+      try {
+        await feedMeApi.updateConversation(conversation.id, { title: trimmed });
+        setConversations((prev) =>
+          prev.map((item) =>
+            item.id === conversation.id ? { ...item, title: trimmed } : item,
+          ),
+        );
+        // Broadcast rename so other views can update
+        document.dispatchEvent(
+          new CustomEvent("feedme:conversation-renamed", {
+            detail: { id: conversation.id, title: trimmed },
+          }),
+        );
+        showToast({
+          type: "success",
+          title: "Title updated",
+          message: "Conversation name saved.",
+          duration: 3000,
+        });
+      } catch (error) {
+        console.error("Failed to rename conversation", error);
+        showToast({
+          type: "error",
+          title: "Rename failed",
+          message: "Please try again.",
+          duration: 4000,
+        });
+        setTitleDraft(originalTitle);
+      } finally {
+        resetEditing();
+      }
+    },
+    [editingId, titleDraft, originalTitle, resetEditing, showToast],
+  );
 
   // Listen for external rename events to update list titles live
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ id: number; title: string }>).detail
-      if (!detail) return
-      setConversations(prev => prev.map(c => c.id === detail.id ? { ...c, title: detail.title } : c))
-    }
-    document.addEventListener('feedme:conversation-renamed', handler)
-    return () => document.removeEventListener('feedme:conversation-renamed', handler)
-  }, [])
+      const detail = (e as CustomEvent<{ id: number; title: string }>).detail;
+      if (!detail) return;
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === detail.id ? { ...c, title: detail.title } : c,
+        ),
+      );
+    };
+    document.addEventListener("feedme:conversation-renamed", handler);
+    return () =>
+      document.removeEventListener("feedme:conversation-renamed", handler);
+  }, []);
 
   const handleDeleteConversation = useCallback(async () => {
-    if (!deleteTarget) return
-    setIsDeleting(true)
+    if (!deleteTarget) return;
+    setIsDeleting(true);
     try {
-      await feedMeApi.deleteConversation(deleteTarget.id)
-      setConversations(prev => prev.filter(conv => conv.id !== deleteTarget.id))
-      showToast({ type: 'success', title: 'Conversation deleted', message: 'The conversation has been removed.', duration: 4000 })
+      await feedMeApi.deleteConversation(deleteTarget.id);
+      setConversations((prev) =>
+        prev.filter((conv) => conv.id !== deleteTarget.id),
+      );
+      showToast({
+        type: "success",
+        title: "Conversation deleted",
+        message: "The conversation has been removed.",
+        duration: 4000,
+      });
     } catch (error) {
-      console.error('Failed to delete conversation', error)
-      showToast({ type: 'error', title: 'Delete failed', message: 'Please try again.', duration: 5000 })
+      console.error("Failed to delete conversation", error);
+      showToast({
+        type: "error",
+        title: "Delete failed",
+        message: "Please try again.",
+        duration: 5000,
+      });
     } finally {
-      setIsDeleting(false)
-      setDeleteTarget(null)
+      setIsDeleting(false);
+      setDeleteTarget(null);
     }
-  }, [deleteTarget, showToast])
+  }, [deleteTarget, showToast]);
 
   const formatDate = useCallback((dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  }, [])
+    const date = new Date(dateString);
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }, []);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-[900px] w-[900px] p-0 overflow-hidden">
-        <DialogErrorBoundary fallbackTitle="Failed to load unassigned conversations" onReset={fetchUnassignedConversations}>
-        <DialogHeader className="px-6 pt-6 pb-3">
-          <DialogTitle>Unassigned</DialogTitle>
-        </DialogHeader>
-        <Separator />
+        <DialogErrorBoundary
+          fallbackTitle="Failed to load unassigned conversations"
+          onReset={fetchUnassignedConversations}
+        >
+          <DialogHeader className="px-6 pt-6 pb-3">
+            <DialogTitle>Unassigned</DialogTitle>
+          </DialogHeader>
+          <Separator />
 
-        <section className="p-6 max-h-[600px] overflow-auto">
-          {loading && conversations.length === 0 ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-          ) : error ? (
-            <div className="text-center py-12">
-              <p className="text-sm text-muted-foreground">{error}</p>
-              <Button variant="outline" size="sm" onClick={fetchUnassignedConversations} className="mt-4">
-                Retry
-              </Button>
-            </div>
-          ) : conversations.length === 0 ? (
-            <div className="text-center py-12">
-              <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <p className="text-sm text-muted-foreground">No unassigned conversations</p>
-              <p className="text-xs text-muted-foreground mt-2">
-                Uploaded PDFs will appear here until assigned to a folder
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {conversations.map((conv) => {
-                const isEditing = editingId === conv.id
-                const isRenaming = renamingId === conv.id
-                return (
-                <div
-                  key={conv.id}
-                  className="group relative flex h-full cursor-pointer flex-col overflow-hidden rounded-[1.75rem] border border-border/50 bg-background/70 p-5 shadow-[0_30px_80px_rgba(15,23,42,0.22)] transition-all duration-300 hover:-translate-y-1 hover:border-accent/40 hover:bg-background/90"
-                  onClick={() => {
-                    if (editingId === conv.id) return
-                    handleConversationClick(conv.id)
-                  }}
+          <section className="p-6 max-h-[600px] overflow-auto">
+            {loading && conversations.length === 0 ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : error ? (
+              <div className="text-center py-12">
+                <p className="text-sm text-muted-foreground">{error}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={fetchUnassignedConversations}
+                  className="mt-4"
                 >
-                  <GlowingEffect spread={260} proximity={180} inactiveZone={0.1} />
-
-                  <button
-                    onClick={(event) => { event.stopPropagation(); setDeleteTarget(conv) }}
-                    className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/40 bg-background/80 text-muted-foreground/90 opacity-0 backdrop-blur transition-opacity duration-200 group-hover:opacity-100 hover:border-destructive/40 hover:text-destructive z-10"
-                    aria-label="Delete conversation"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-
-                  <div className="flex flex-col h-full pr-8">
-                    {/* Header with icon and title */}
-                    <div className="flex items-start gap-3 mb-4">
-                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/20 text-black shadow-sm backdrop-blur dark:border-white/20 dark:bg-white/10 dark:text-white">
-                        <FileText className="h-4 w-4" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        {isEditing ? (
-                          <Input
-                            value={titleDraft}
-                            onChange={event => setTitleDraft(event.target.value)}
-                            onClick={event => event.stopPropagation()}
-                            onBlur={() => commitTitleChange(conv)}
-                            onKeyDown={event => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault()
-                                commitTitleChange(conv).catch(() => {})
-                              } else if (event.key === 'Escape') {
-                                event.preventDefault()
-                                resetEditing()
-                              }
-                            }}
-                            disabled={isRenaming}
-                            autoFocus
-                            className="h-9 text-sm bg-background/70"
-                          />
-                        ) : (
-                          <h4
-                            className="font-medium text-sm line-clamp-2"
-                            onDoubleClick={(event) => { event.stopPropagation(); startEditingTitle(conv) }}
-                          >
-                            {conv.title || `Conversation ${conv.id}`}
-                          </h4>
-                        )}
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {formatDate(conv.created_at)}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Status section */}
-                    <div className="mt-auto flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-muted-foreground text-xs">
-                        {getStatusIcon(conv.processing_status, conv.progress_percentage)}
-                        {conv.processing_status === 'processing' && conv.status_message && (
-                          <span className="text-xs text-muted-foreground">
-                            {conv.status_message}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Progress bar for processing conversations */}
-                    {conv.processing_status === 'processing' && conv.progress_percentage !== undefined && (
-                      <div className="mt-3">
-                        <div className="h-1.5 w-full rounded-full bg-emerald-600/15">
-                          <div
-                            className="h-1.5 rounded-full bg-emerald-400 transition-all duration-300"
-                            style={{ width: `${Math.min(Math.max(conv.progress_percentage, 0), 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {conv.status_message && conv.processing_status !== 'processing' && (
-                      <p className="mt-2 text-[11px] text-muted-foreground">{conv.status_message}</p>
-                    )}
-
-                    <button
-                      className="absolute right-3 bottom-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-background/80 text-muted-foreground/90 opacity-0 backdrop-blur transition-opacity duration-200 group-hover:opacity-100 hover:border-accent hover:text-accent-foreground z-10 shadow-sm"
-                      onClick={(event) => { event.stopPropagation(); handleConversationClick(conv.id) }}
-                      aria-label="Open conversation"
+                  Retry
+                </Button>
+              </div>
+            ) : conversations.length === 0 ? (
+              <div className="text-center py-12">
+                <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-sm text-muted-foreground">
+                  No unassigned conversations
+                </p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Uploaded PDFs will appear here until assigned to a folder
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {conversations.map((conv) => {
+                  const isEditing = editingId === conv.id;
+                  const isRenaming = renamingId === conv.id;
+                  return (
+                    <div
+                      key={conv.id}
+                      className="group relative flex h-full cursor-pointer flex-col overflow-hidden rounded-[1.75rem] border border-border/50 bg-background/70 p-5 shadow-[0_30px_80px_rgba(15,23,42,0.22)] transition-all duration-300 hover:-translate-y-1 hover:border-accent/40 hover:bg-background/90"
+                      onClick={() => {
+                        if (editingId === conv.id) return;
+                        handleConversationClick(conv.id);
+                      }}
                     >
-                      <Maximize2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )})}
-            </div>
-          )}
-        </section>
+                      <GlowingEffect
+                        spread={260}
+                        proximity={180}
+                        inactiveZone={0.1}
+                      />
+
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setDeleteTarget(conv);
+                        }}
+                        className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/40 bg-background/80 text-muted-foreground/90 opacity-0 backdrop-blur transition-opacity duration-200 group-hover:opacity-100 hover:border-destructive/40 hover:text-destructive z-10"
+                        aria-label="Delete conversation"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+
+                      <div className="flex flex-col h-full pr-8">
+                        {/* Header with icon and title */}
+                        <div className="flex items-start gap-3 mb-4">
+                          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/20 text-black shadow-sm backdrop-blur dark:border-white/20 dark:bg-white/10 dark:text-white">
+                            <FileText className="h-4 w-4" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            {isEditing ? (
+                              <Input
+                                value={titleDraft}
+                                onChange={(event) =>
+                                  setTitleDraft(event.target.value)
+                                }
+                                onClick={(event) => event.stopPropagation()}
+                                onBlur={() => commitTitleChange(conv)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    commitTitleChange(conv).catch(() => {});
+                                  } else if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    resetEditing();
+                                  }
+                                }}
+                                disabled={isRenaming}
+                                autoFocus
+                                className="h-9 text-sm bg-background/70"
+                              />
+                            ) : (
+                              <h4
+                                className="font-medium text-sm line-clamp-2"
+                                onDoubleClick={(event) => {
+                                  event.stopPropagation();
+                                  startEditingTitle(conv);
+                                }}
+                              >
+                                {conv.title || `Conversation ${conv.id}`}
+                              </h4>
+                            )}
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {formatDate(conv.created_at)}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Status section */}
+                        <div className="mt-auto flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-muted-foreground text-xs">
+                            {getStatusIcon(
+                              conv.processing_status,
+                              conv.progress_percentage,
+                            )}
+                            {conv.processing_status === "processing" &&
+                              conv.status_message && (
+                                <span className="text-xs text-muted-foreground">
+                                  {conv.status_message}
+                                </span>
+                              )}
+                          </div>
+                        </div>
+
+                        {/* Progress bar for processing conversations */}
+                        {conv.processing_status === "processing" &&
+                          conv.progress_percentage !== undefined && (
+                            <div className="mt-3">
+                              <div className="h-1.5 w-full rounded-full bg-emerald-600/15">
+                                <div
+                                  className="h-1.5 rounded-full bg-emerald-400 transition-all duration-300"
+                                  style={{
+                                    width: `${Math.min(Math.max(conv.progress_percentage, 0), 100)}%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                        {conv.status_message &&
+                          conv.processing_status !== "processing" && (
+                            <p className="mt-2 text-[11px] text-muted-foreground">
+                              {conv.status_message}
+                            </p>
+                          )}
+
+                        <button
+                          className="absolute right-3 bottom-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-background/80 text-muted-foreground/90 opacity-0 backdrop-blur transition-opacity duration-200 group-hover:opacity-100 hover:border-accent hover:text-accent-foreground z-10 shadow-sm"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleConversationClick(conv.id);
+                          }}
+                          aria-label="Open conversation"
+                        >
+                          <Maximize2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         </DialogErrorBoundary>
       </DialogContent>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && !isDeleting && setDeleteTarget(null)}>
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && !isDeleting && setDeleteTarget(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. The conversation and its processed data will be permanently removed.
+              This action cannot be undone. The conversation and its processed
+              data will be permanently removed.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isDeleting} onClick={() => setDeleteTarget(null)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteConversation} disabled={isDeleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+            <AlertDialogCancel
+              disabled={isDeleting}
+              onClick={() => setDeleteTarget(null)}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConversation}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
               {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Delete
             </AlertDialogAction>
@@ -489,5 +663,5 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
         </AlertDialogContent>
       </AlertDialog>
     </Dialog>
-  )
+  );
 }

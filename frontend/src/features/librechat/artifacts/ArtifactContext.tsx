@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { create, useStore } from 'zustand';
-import type { Artifact, ArtifactStore } from './types';
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { create, useStore } from "zustand";
+import type { Artifact, ArtifactStore } from "./types";
 
 /**
  * Zustand store for artifact state management
- * 
+ *
  * Manages artifacts extracted from chat messages, including:
  * - Storage of all artifacts by ID
  * - Current artifact selection
@@ -25,7 +25,7 @@ const createArtifactStore = () =>
     addArtifact: (artifact: Artifact) => {
       set((state) => {
         const exists = state.artifactsById[artifact.id];
-        
+
         // Update ordered IDs if this is a new artifact
         const orderedIds = exists
           ? state.orderedIds
@@ -65,7 +65,7 @@ const createArtifactStore = () =>
       set((state) => {
         const { [id]: removed, ...remaining } = state.artifactsById;
         const orderedIds = state.orderedIds.filter((aid) => aid !== id);
-        
+
         // If removing the current artifact, clear selection
         const currentArtifactId =
           state.currentArtifactId === id ? null : state.currentArtifactId;
@@ -143,7 +143,7 @@ export function ArtifactProvider({ children }: { children: React.ReactNode }) {
 export function useArtifactStore(): ArtifactStore {
   const store = useContext(ArtifactStoreContext);
   if (!store) {
-    throw new Error('useArtifactStore must be used within ArtifactProvider');
+    throw new Error("useArtifactStore must be used within ArtifactProvider");
   }
   return useStore(store);
 }
@@ -155,10 +155,12 @@ export function useArtifactStore(): ArtifactStore {
  * IMPORTANT: Uses useStore() for proper React subscription to state changes.
  * Previously used store(selector) directly which only returned a snapshot without subscribing.
  */
-export function useArtifactSelector<T>(selector: (state: ArtifactStore) => T): T {
+export function useArtifactSelector<T>(
+  selector: (state: ArtifactStore) => T,
+): T {
   const store = useContext(ArtifactStoreContext);
   if (!store) {
-    throw new Error('useArtifactSelector must be used within ArtifactProvider');
+    throw new Error("useArtifactSelector must be used within ArtifactProvider");
   }
   return useStore(store, selector);
 }
@@ -169,7 +171,7 @@ export function useArtifactSelector<T>(selector: (state: ArtifactStore) => T): T
 export function useCurrentArtifact(): Artifact | null {
   const currentId = useArtifactSelector((s) => s.currentArtifactId);
   const artifactsById = useArtifactSelector((s) => s.artifactsById);
-  return currentId ? artifactsById[currentId] ?? null : null;
+  return currentId ? (artifactsById[currentId] ?? null) : null;
 }
 
 /**
@@ -185,7 +187,7 @@ export function useArtifactsVisible(): boolean {
 export function useArtifactActions() {
   const store = useContext(ArtifactStoreContext);
   if (!store) {
-    throw new Error('useArtifactActions must be used within ArtifactProvider');
+    throw new Error("useArtifactActions must be used within ArtifactProvider");
   }
 
   const state = store.getState();
@@ -200,4 +202,4 @@ export function useArtifactActions() {
 }
 
 // Re-export types for convenience
-export type { Artifact, ArtifactStore } from './types';
+export type { Artifact, ArtifactStore } from "./types";

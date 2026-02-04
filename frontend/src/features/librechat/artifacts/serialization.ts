@@ -1,5 +1,5 @@
-import type { SerializedArtifact } from '@/features/librechat/AgentContext';
-import type { Artifact } from './types';
+import type { SerializedArtifact } from "@/features/librechat/AgentContext";
+import type { Artifact } from "./types";
 
 export const serializeArtifact = (artifact: Artifact): SerializedArtifact => ({
   id: artifact.id,

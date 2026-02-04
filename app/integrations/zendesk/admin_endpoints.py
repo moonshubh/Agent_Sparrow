@@ -3,7 +3,9 @@ from __future__ import annotations
 import hmac
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
+
+from postgrest.base_request_builder import CountMethod
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
@@ -15,12 +17,16 @@ router = APIRouter(prefix="/integrations/zendesk/admin", tags=["Zendesk Admin"])
 
 logger = logging.getLogger(__name__)
 
+COUNT_EXACT: CountMethod = CountMethod.exact
+
 
 def _require_internal(request: Request) -> None:
     expected = getattr(settings, "internal_api_token", None)
     provided = request.headers.get("X-Internal-Token")
     if not expected or not provided or not hmac.compare_digest(provided, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized"
+        )
 
 
 @router.get("/health")
@@ -32,7 +38,11 @@ async def admin_health(request: Request) -> Dict[str, Any]:
     feature_state = await _get_feature_state_snapshot()
     try:
         sched = await supa._exec(
-            lambda: supa.client.table("feature_flags").select("value").eq("key", "zendesk_scheduler").maybe_single().execute()
+            lambda: supa.client.table("feature_flags")
+            .select("value")
+            .eq("key", "zendesk_scheduler")
+            .maybe_single()
+            .execute()
         )
         sched_val = getattr(sched, "data", None) or {}
         sched_val = sched_val.get("value") if isinstance(sched_val, dict) else {}
@@ -47,21 +57,38 @@ async def admin_health(request: Request) -> Dict[str, Any]:
     try:
         # Use UTC date to align with tests and backend usage
         today = datetime.now(timezone.utc).date().isoformat()
-        du = await supa._exec(lambda: supa.client.table("zendesk_daily_usage").select("gemini_calls_used,gemini_daily_limit").eq("usage_date", today).maybe_single().execute())
+        du = await supa._exec(
+            lambda: supa.client.table("zendesk_daily_usage")
+            .select("gemini_calls_used,gemini_daily_limit")
+            .eq("usage_date", today)
+            .maybe_single()
+            .execute()
+        )
         daily_raw = getattr(du, "data", None) or {}
     except Exception:
         daily_raw = {}
     # Normalize daily payload to always include expected keys
     daily = {
         "gemini_calls_used": int(daily_raw.get("gemini_calls_used", 0) or 0),
-        "gemini_daily_limit": int(daily_raw.get("gemini_daily_limit", getattr(settings, "zendesk_gemini_daily_limit", 1000)) or getattr(settings, "zendesk_gemini_daily_limit", 1000)),
+        "gemini_daily_limit": int(
+            daily_raw.get(
+                "gemini_daily_limit",
+                getattr(settings, "zendesk_gemini_daily_limit", 1000),
+            )
+            or getattr(settings, "zendesk_gemini_daily_limit", 1000)
+        ),
     }
 
     # Queue counts by status
     q_counts: Dict[str, Optional[int]] = {}
     for st in ("pending", "retry", "processing", "failed"):
         try:
-            resp = await supa._exec(lambda st=st: supa.client.table("zendesk_pending_tickets").select("id", count="exact", head=True).eq("status", st).execute())
+            resp = await supa._exec(
+                lambda st=st: supa.client.table("zendesk_pending_tickets")
+                .select("id", count=COUNT_EXACT, head=True)
+                .eq("status", st)
+                .execute()
+            )
             q_counts[st] = getattr(resp, "count", None)
         except Exception:
             q_counts[st] = None
@@ -92,30 +119,50 @@ async def admin_health(request: Request) -> Dict[str, Any]:
 
 
 @router.get("/queue")
-async def list_queue(request: Request, response: Response, status_filter: Optional[str] = None, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+async def list_queue(
+    request: Request,
+    response: Response,
+    status_filter: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict[str, Any]:
     _require_internal(request)
     supa = get_supabase_client()
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     allowed = {"pending", "retry", "processing", "failed", "processed"}
     try:
-        query = supa.client.table("zendesk_pending_tickets").select(
-            "id,ticket_id,status,retry_count,created_at,last_attempt_at,last_error"
-        ).order("created_at", desc=True).order("id", desc=True)
+        query = (
+            supa.client.table("zendesk_pending_tickets")
+            .select(
+                "id,ticket_id,status,retry_count,created_at,last_attempt_at,last_error"
+            )
+            .order("created_at", desc=True)
+            .order("id", desc=True)
+        )
         if status_filter:
             if status_filter not in allowed:
                 raise HTTPException(status_code=400, detail="invalid status")
             query = query.eq("status", status_filter)
         # range is inclusive; emulate offset/limit
-        res = await supa._exec(lambda: query.range(offset, offset + limit - 1).execute())
+        res = await supa._exec(
+            lambda: query.range(offset, offset + limit - 1).execute()
+        )
         # Get total count for the same filter
-        count_q = supa.client.table("zendesk_pending_tickets").select("id", count="exact", head=True)
+        count_q = supa.client.table("zendesk_pending_tickets").select(
+            "id", count=COUNT_EXACT, head=True
+        )
         if status_filter:
             count_q = count_q.eq("status", status_filter)
         count_res = await supa._exec(lambda: count_q.execute())
         total = getattr(count_res, "count", 0) or 0
         response.headers["X-Total-Count"] = str(total)
-        return {"items": getattr(res, "data", []) or [], "total": total, "limit": limit, "offset": offset}
+        return {
+            "items": getattr(res, "data", []) or [],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -147,7 +194,11 @@ async def retry_item(request: Request, item_id: int) -> Dict[str, Any]:
             .execute()
         )
         data = getattr(verify, "data", None) or {}
-        return {"updated": bool(data), "status": data.get("status"), "next_attempt_at": data.get("next_attempt_at")}
+        return {
+            "updated": bool(data),
+            "status": data.get("status"),
+            "next_attempt_at": data.get("next_attempt_at"),
+        }
     except Exception as e:
         logger.error("queue retry failed: %s", e)
         raise HTTPException(status_code=500, detail="queue_retry_failed")

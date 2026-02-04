@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import { useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
-import * as THREE from 'three';
+import { useMemo, useRef } from "react";
+import { useFrame } from "@react-three/fiber";
+import * as THREE from "three";
 
 export function SkeletonTree() {
   const trunkHeight = 3.2;
@@ -10,7 +10,7 @@ export function SkeletonTree() {
 
   const trunkGeometry = useMemo(
     () => new THREE.CylinderGeometry(0.5, 0.68, trunkHeight, 16),
-    [trunkHeight]
+    [trunkHeight],
   );
 
   const branches = useMemo(() => {
@@ -33,7 +33,10 @@ export function SkeletonTree() {
     });
   }, [trunkHeight]);
 
-  const nodeGeometry = useMemo(() => new THREE.SphereGeometry(0.18, 12, 12), []);
+  const nodeGeometry = useMemo(
+    () => new THREE.SphereGeometry(0.18, 12, 12),
+    [],
+  );
 
   useFrame((state) => {
     const group = groupRef.current;

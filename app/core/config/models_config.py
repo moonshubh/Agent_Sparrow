@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -73,13 +73,27 @@ class SubagentConfig(BaseModel):
         if not model_id:
             raise ValueError("subagent model_id missing")
 
-        provider = self.provider or default.provider or infer_provider_from_model_id(model_id)
+        provider = (
+            self.provider or default.provider or infer_provider_from_model_id(model_id)
+        )
         return SubagentConfig(
             model_id=model_id,
             provider=provider,
-            temperature=self.temperature if self.temperature is not None else default.temperature,
-            context_window=self.context_window if self.context_window is not None else default.context_window,
-            rate_limits=self.rate_limits if self.rate_limits is not None else default.rate_limits,
+            temperature=(
+                self.temperature
+                if self.temperature is not None
+                else default.temperature
+            ),
+            context_window=(
+                self.context_window
+                if self.context_window is not None
+                else default.context_window
+            ),
+            rate_limits=(
+                self.rate_limits
+                if self.rate_limits is not None
+                else default.rate_limits
+            ),
         )
 
 
@@ -159,7 +173,9 @@ def get_models_config() -> ModelsConfig:
     if not default_subagent or not default_subagent.model_id:
         raise ValueError("subagents._default is required")
     if not default_subagent.provider:
-        default_subagent.provider = infer_provider_from_model_id(default_subagent.model_id)
+        default_subagent.provider = infer_provider_from_model_id(
+            default_subagent.model_id
+        )
 
     _MODELS_CONFIG_CACHE = config
     _MODELS_CONFIG_CACHE_PATH = cache_key

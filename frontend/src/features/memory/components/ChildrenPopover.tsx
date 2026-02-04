@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import React, { useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { Layers, Search, X } from 'lucide-react';
-import { ENTITY_COLORS, ENTITY_LABELS } from '../types';
-import type { GraphNode } from '../types';
+import React, { useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Layers, Search, X } from "lucide-react";
+import { ENTITY_COLORS, ENTITY_LABELS } from "../types";
+import type { GraphNode } from "../types";
 
 export function ChildrenPopover({
   open,
@@ -19,7 +19,7 @@ export function ChildrenPopover({
   onClose: () => void;
   onSelectNode: (node: GraphNode) => void;
 }) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
     const trimmed = query.trim().toLowerCase();
@@ -29,7 +29,9 @@ export function ChildrenPopover({
       const label = n.displayLabel.toLowerCase();
       const type = n.entityType.toLowerCase();
       return (
-        name.includes(trimmed) || label.includes(trimmed) || type.includes(trimmed)
+        name.includes(trimmed) ||
+        label.includes(trimmed) ||
+        type.includes(trimmed)
       );
     });
   }, [childrenNodes, query]);
@@ -42,14 +44,18 @@ export function ChildrenPopover({
           initial={{ opacity: 0, y: 10, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 10, scale: 0.98 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+          transition={{ type: "spring", stiffness: 400, damping: 32 }}
         >
           <div className="children-popover__header">
             <div className="children-popover__title">
               <Layers size={16} />
               <span>{title}</span>
             </div>
-            <button className="children-popover__close" onClick={onClose} title="Close">
+            <button
+              className="children-popover__close"
+              onClick={onClose}
+              title="Close"
+            >
               <X size={16} />
             </button>
           </div>
@@ -64,7 +70,7 @@ export function ChildrenPopover({
             {query && (
               <button
                 className="children-popover__clear"
-                onClick={() => setQuery('')}
+                onClick={() => setQuery("")}
                 title="Clear search"
               >
                 <X size={14} />
@@ -86,7 +92,9 @@ export function ChildrenPopover({
                     className="children-popover__dot"
                     style={{ backgroundColor: ENTITY_COLORS[child.entityType] }}
                   />
-                  <span className="children-popover__name">{child.displayLabel}</span>
+                  <span className="children-popover__name">
+                    {child.displayLabel}
+                  </span>
                   <span className="children-popover__type">
                     {ENTITY_LABELS[child.entityType] ?? child.entityType}
                   </span>
@@ -99,4 +107,3 @@ export function ChildrenPopover({
     </AnimatePresence>
   );
 }
-

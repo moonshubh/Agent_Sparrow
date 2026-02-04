@@ -12,11 +12,10 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Generic, Optional, TypeVar
 
 from loguru import logger
-
 
 # Type variable for cached values
 V = TypeVar("V")
@@ -303,7 +302,10 @@ class SessionCache:
         """
         with self._lock:
             # Evict old sessions if at capacity
-            if session_id not in self._sessions and len(self._sessions) >= self.max_sessions:
+            if (
+                session_id not in self._sessions
+                and len(self._sessions) >= self.max_sessions
+            ):
                 self._evict_oldest_session()
 
             # Create session cache if needed
@@ -382,9 +384,7 @@ class SessionCache:
         """
         with self._lock:
             # Use thread-safe size() method instead of accessing _cache directly
-            total_entries = sum(
-                cache.size() for cache in self._sessions.values()
-            )
+            total_entries = sum(cache.size() for cache in self._sessions.values())
             return {
                 "active_sessions": len(self._sessions),
                 "total_entries": total_entries,

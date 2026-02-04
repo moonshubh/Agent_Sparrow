@@ -4,9 +4,9 @@ import hashlib
 import os
 import threading
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Iterable
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -152,7 +152,9 @@ class FallbackConfig(BaseModel):
 
         provider = (self.coordinator_provider or "").strip().lower()
         if provider not in {"google", "xai", "openrouter"}:
-            raise ValueError("fallback.coordinator_provider must be google/xai/openrouter")
+            raise ValueError(
+                "fallback.coordinator_provider must be google/xai/openrouter"
+            )
         self.coordinator_provider = provider
         return self
 
@@ -276,15 +278,15 @@ def iter_model_configs(config: ModelsConfig) -> Iterable[tuple[str, str, ModelCo
         yield "coordinators", key, model
     for key, model in config.internal.items():
         yield "internal", key, model
-    for key, model in config.subagents.items():
-        if model is not None:
-            yield "subagents", key, model
+    for key, subagent_model in config.subagents.items():
+        if subagent_model is not None:
+            yield "subagents", key, subagent_model
     if config.zendesk is not None:
         for key, model in config.zendesk.coordinators.items():
             yield "zendesk.coordinators", key, model
-        for key, model in config.zendesk.subagents.items():
-            if model is not None:
-                yield "zendesk.subagents", key, model
+        for key, subagent_model in config.zendesk.subagents.items():
+            if subagent_model is not None:
+                yield "zendesk.subagents", key, subagent_model
 
 
 def iter_rate_limit_buckets(config: ModelsConfig) -> Iterable[tuple[str, ModelConfig]]:
@@ -302,7 +304,9 @@ def iter_rate_limit_buckets(config: ModelsConfig) -> Iterable[tuple[str, ModelCo
         for key, model in config.zendesk.coordinators.items():
             yield f"zendesk.coordinators.{key}", model
         for key in config.zendesk.subagents.keys():
-            resolved = config.zendesk.subagents.get(key) or config.zendesk.subagents.get("_default")
+            resolved = config.zendesk.subagents.get(
+                key
+            ) or config.zendesk.subagents.get("_default")
             if resolved is None:
                 continue
             yield f"zendesk.subagents.{key}", resolved

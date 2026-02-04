@@ -1,10 +1,13 @@
-import * as THREE from 'three';
+import * as THREE from "three";
 
 type TextureResult = THREE.Texture | null;
 
 const textureCache = new Map<string, THREE.Texture>();
 
-function getCachedTexture(key: string, create: () => TextureResult): TextureResult {
+function getCachedTexture(
+  key: string,
+  create: () => TextureResult,
+): TextureResult {
   const cached = textureCache.get(key);
   if (cached) return cached;
 
@@ -23,13 +26,13 @@ function createCanvasTexture(options: {
   repeat?: readonly [number, number];
   draw: (ctx: CanvasRenderingContext2D, width: number, height: number) => void;
 }): TextureResult {
-  if (typeof document === 'undefined') return null;
+  if (typeof document === "undefined") return null;
 
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = options.width;
   canvas.height = options.height;
 
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
   options.draw(ctx, options.width, options.height);
@@ -57,13 +60,13 @@ function createNormalMapFromHeight(options: {
   strength?: number;
   repeat?: readonly [number, number];
 }): TextureResult {
-  if (typeof document === 'undefined') return null;
+  if (typeof document === "undefined") return null;
 
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = options.width;
   canvas.height = options.height;
 
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
   const image = ctx.createImageData(options.width, options.height);
@@ -86,9 +89,9 @@ function createNormalMapFromHeight(options: {
       const nz = 1;
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
 
-      const r = clamp01(nx / len * 0.5 + 0.5);
-      const g = clamp01(ny / len * 0.5 + 0.5);
-      const b = clamp01(nz / len * 0.5 + 0.5);
+      const r = clamp01((nx / len) * 0.5 + 0.5);
+      const g = clamp01((ny / len) * 0.5 + 0.5);
+      const b = clamp01((nz / len) * 0.5 + 0.5);
 
       const idx = (y * options.width + x) * 4;
       image.data[idx] = Math.round(r * 255);
@@ -122,7 +125,7 @@ function seededRng(seed: number): () => number {
 }
 
 export function getLeafTexture(): TextureResult {
-  return getCachedTexture('leafTexture.v2', () =>
+  return getCachedTexture("leafTexture.v2", () =>
     createCanvasTexture({
       width: 128,
       height: 128,
@@ -144,31 +147,45 @@ export function getLeafTexture(): TextureResult {
 
         ctx.beginPath();
         ctx.moveTo(0, -leafH);
-        ctx.bezierCurveTo(leafW * 0.9, -leafH * 0.75, leafW * 1.2, -leafH * 0.05, 0, leafH);
-        ctx.bezierCurveTo(-leafW * 1.2, -leafH * 0.05, -leafW * 0.9, -leafH * 0.75, 0, -leafH);
+        ctx.bezierCurveTo(
+          leafW * 0.9,
+          -leafH * 0.75,
+          leafW * 1.2,
+          -leafH * 0.05,
+          0,
+          leafH,
+        );
+        ctx.bezierCurveTo(
+          -leafW * 1.2,
+          -leafH * 0.05,
+          -leafW * 0.9,
+          -leafH * 0.75,
+          0,
+          -leafH,
+        );
         ctx.closePath();
 
         const fill = ctx.createLinearGradient(0, -leafH, 0, leafH);
-        fill.addColorStop(0, 'rgba(255,255,255,0.92)');
-        fill.addColorStop(0.55, 'rgba(255,255,255,0.78)');
-        fill.addColorStop(1, 'rgba(255,255,255,0.0)');
+        fill.addColorStop(0, "rgba(255,255,255,0.92)");
+        fill.addColorStop(0.55, "rgba(255,255,255,0.78)");
+        fill.addColorStop(1, "rgba(255,255,255,0.0)");
 
-        ctx.shadowColor = 'rgba(255,255,255,0.08)';
+        ctx.shadowColor = "rgba(255,255,255,0.08)";
         ctx.shadowBlur = 10;
         ctx.fillStyle = fill;
         ctx.fill();
 
         // Midrib + veins (subtle highlights).
         ctx.shadowBlur = 0;
-        ctx.lineCap = 'round';
-        ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+        ctx.lineCap = "round";
+        ctx.strokeStyle = "rgba(255,255,255,0.22)";
         ctx.lineWidth = Math.max(1, Math.round(width * 0.012));
         ctx.beginPath();
         ctx.moveTo(0, -leafH * 0.92);
         ctx.lineTo(0, leafH * 0.85);
         ctx.stroke();
 
-        ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+        ctx.strokeStyle = "rgba(255,255,255,0.14)";
         ctx.lineWidth = Math.max(1, Math.round(width * 0.006));
         for (let i = 0; i < 6; i += 1) {
           const t = (i + 1) / 7;
@@ -180,12 +197,17 @@ export function getLeafTexture(): TextureResult {
           ctx.stroke();
           ctx.beginPath();
           ctx.moveTo(0, y);
-          ctx.quadraticCurveTo(-x * 0.5, y + leafH * 0.05, -x, y + leafH * 0.14);
+          ctx.quadraticCurveTo(
+            -x * 0.5,
+            y + leafH * 0.05,
+            -x,
+            y + leafH * 0.14,
+          );
           ctx.stroke();
         }
 
         // Edge softening + micro texture
-        ctx.globalCompositeOperation = 'source-atop';
+        ctx.globalCompositeOperation = "source-atop";
         const speckleCount = 420;
         for (let i = 0; i < speckleCount; i += 1) {
           const x = (rng() - 0.5) * leafW * 2.2;
@@ -196,11 +218,11 @@ export function getLeafTexture(): TextureResult {
           ctx.arc(x, y, r, 0, Math.PI * 2);
           ctx.fill();
         }
-        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalCompositeOperation = "source-over";
 
         ctx.restore();
       },
-    })
+    }),
   );
 }
 
@@ -208,7 +230,7 @@ export function getBarkTextures(): {
   map: TextureResult;
   normalMap: TextureResult;
 } {
-  const map = getCachedTexture('bark.map.v2', () => {
+  const map = getCachedTexture("bark.map.v2", () => {
     const rng = seededRng(1337);
     return createCanvasTexture({
       width: 384,
@@ -216,13 +238,14 @@ export function getBarkTextures(): {
       colorSpace: THREE.SRGBColorSpace,
       repeat: [2, 6],
       draw: (ctx, width, height) => {
-        ctx.fillStyle = '#2a201b';
+        ctx.fillStyle = "#2a201b";
         ctx.fillRect(0, 0, width, height);
 
         // Vertical ridges (bark grain)
         for (let x = 0; x < width; x += 1) {
           const ridge = Math.sin((x / width) * Math.PI * 18) * 0.24;
-          const ridge2 = Math.sin((x / width) * Math.PI * 6 + (rng() - 0.5) * 0.4) * 0.18;
+          const ridge2 =
+            Math.sin((x / width) * Math.PI * 6 + (rng() - 0.5) * 0.4) * 0.18;
           const noise = (rng() - 0.5) * 0.22;
           const v = Math.min(1, Math.max(0, 0.56 + ridge + ridge2 + noise));
           const c = Math.round(52 + v * 92);
@@ -234,7 +257,7 @@ export function getBarkTextures(): {
 
         // Longitudinal cracks
         ctx.globalAlpha = 0.22;
-        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+        ctx.strokeStyle = "rgba(0,0,0,0.45)";
         ctx.lineWidth = 1.2;
         for (let i = 0; i < 38; i += 1) {
           const x = rng() * width;
@@ -242,7 +265,8 @@ export function getBarkTextures(): {
           ctx.beginPath();
           ctx.moveTo(x, -10);
           for (let y = 0; y <= height + 10; y += 18) {
-            const dx = Math.sin((y / height) * Math.PI * 2 + rng() * 6) * wobble;
+            const dx =
+              Math.sin((y / height) * Math.PI * 2 + rng() * 6) * wobble;
             ctx.lineTo(x + dx, y);
           }
           ctx.stroke();
@@ -255,9 +279,9 @@ export function getBarkTextures(): {
           const y = rng() * height;
           const r = 10 + rng() * 24;
           const knot = ctx.createRadialGradient(x, y, 1, x, y, r);
-          knot.addColorStop(0, 'rgba(170,140,112,0.22)');
-          knot.addColorStop(0.55, 'rgba(55,40,30,0.12)');
-          knot.addColorStop(1, 'rgba(0,0,0,0)');
+          knot.addColorStop(0, "rgba(170,140,112,0.22)");
+          knot.addColorStop(0.55, "rgba(55,40,30,0.12)");
+          knot.addColorStop(1, "rgba(0,0,0,0)");
           ctx.fillStyle = knot;
           ctx.beginPath();
           ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -281,7 +305,7 @@ export function getBarkTextures(): {
     });
   });
 
-  const normalMap = getCachedTexture('bark.normal.v2', () => {
+  const normalMap = getCachedTexture("bark.normal.v2", () => {
     const width = 256;
     const height = 256;
     const rng = seededRng(4242);
@@ -300,7 +324,8 @@ export function getBarkTextures(): {
         const yf = y / height;
 
         const ridge = Math.sin(xf * Math.PI * 18) * 0.55;
-        const ridge2 = Math.sin(xf * Math.PI * 6 + Math.sin(yf * Math.PI * 2) * 0.8) * 0.25;
+        const ridge2 =
+          Math.sin(xf * Math.PI * 6 + Math.sin(yf * Math.PI * 2) * 0.8) * 0.25;
         const warp = Math.sin(yf * Math.PI * 10 + xf * Math.PI * 2) * 0.18;
         const grain = (rng() - 0.5) * 0.3;
 
@@ -337,7 +362,7 @@ export function getGroundTextures(): {
   normalMap: TextureResult;
   emissiveMap: TextureResult;
 } {
-  const map = getCachedTexture('ground.map.v2', () => {
+  const map = getCachedTexture("ground.map.v2", () => {
     const rng = seededRng(2025);
     return createCanvasTexture({
       width: 384,
@@ -345,7 +370,7 @@ export function getGroundTextures(): {
       colorSpace: THREE.SRGBColorSpace,
       repeat: [8, 8],
       draw: (ctx, width, height) => {
-        ctx.fillStyle = '#2f4b2a';
+        ctx.fillStyle = "#2f4b2a";
         ctx.fillRect(0, 0, width, height);
 
         // Grass & soil grain
@@ -382,9 +407,9 @@ export function getGroundTextures(): {
           const y = rng() * height;
           const r = 10 + rng() * 32;
           const moss = ctx.createRadialGradient(x, y, 0, x, y, r);
-          moss.addColorStop(0, 'rgba(92, 190, 105, 0.55)');
-          moss.addColorStop(0.55, 'rgba(52, 132, 70, 0.18)');
-          moss.addColorStop(1, 'rgba(0, 0, 0, 0)');
+          moss.addColorStop(0, "rgba(92, 190, 105, 0.55)");
+          moss.addColorStop(0.55, "rgba(52, 132, 70, 0.18)");
+          moss.addColorStop(1, "rgba(0, 0, 0, 0)");
           ctx.fillStyle = moss;
           ctx.beginPath();
           ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -396,7 +421,7 @@ export function getGroundTextures(): {
     });
   });
 
-  const emissiveMap = getCachedTexture('ground.emissive.v1', () => {
+  const emissiveMap = getCachedTexture("ground.emissive.v1", () => {
     const rng = seededRng(9001);
     return createCanvasTexture({
       width: 384,
@@ -404,7 +429,7 @@ export function getGroundTextures(): {
       colorSpace: THREE.SRGBColorSpace,
       repeat: [8, 8],
       draw: (ctx, width, height) => {
-        ctx.fillStyle = '#000000';
+        ctx.fillStyle = "#000000";
         ctx.fillRect(0, 0, width, height);
 
         // Fluorescent moss specks
@@ -426,9 +451,9 @@ export function getGroundTextures(): {
           const y = rng() * height;
           const r = 12 + rng() * 26;
           const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-          grad.addColorStop(0, 'rgba(34, 211, 238, 0.25)');
-          grad.addColorStop(0.5, 'rgba(34, 211, 238, 0.08)');
-          grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+          grad.addColorStop(0, "rgba(34, 211, 238, 0.25)");
+          grad.addColorStop(0.5, "rgba(34, 211, 238, 0.08)");
+          grad.addColorStop(1, "rgba(0, 0, 0, 0)");
           ctx.fillStyle = grad;
           ctx.beginPath();
           ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -438,7 +463,7 @@ export function getGroundTextures(): {
     });
   });
 
-  const normalMap = getCachedTexture('ground.normal.v2', () => {
+  const normalMap = getCachedTexture("ground.normal.v2", () => {
     const width = 256;
     const height = 256;
     const rng = seededRng(77);

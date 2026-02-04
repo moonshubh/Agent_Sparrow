@@ -20,21 +20,31 @@ import httpx
 try:
     from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 except Exception:  # pragma: no cover - optional dependency
-    ChatGoogleGenerativeAIError = None
+
+    class ChatGoogleGenerativeAIError(Exception):  # type: ignore[no-redef]
+        pass
+
 
 try:
     from google.genai.errors import ServerError as GoogleGenaiServerError
 except Exception:  # pragma: no cover - optional dependency
-    GoogleGenaiServerError = None
+
+    class GoogleGenaiServerError(Exception):  # type: ignore[no-redef]
+        pass
+
 
 try:
     from app.agents.unified.quota_manager import QuotaExceededError
 except Exception:  # pragma: no cover - defensive import
-    QuotaExceededError = None
+
+    class QuotaExceededError(Exception):  # type: ignore[no-redef]
+        pass
+
 
 try:
     from opentelemetry import trace
     from opentelemetry.trace import Status, StatusCode
+
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
@@ -415,7 +425,9 @@ class StreamEventHandler:
         return "invalid message role" in message and "system" in message
 
     @staticmethod
-    def _coerce_system_messages_to_user(messages: list[BaseMessage]) -> list[BaseMessage]:
+    def _coerce_system_messages_to_user(
+        messages: list[BaseMessage],
+    ) -> list[BaseMessage]:
         """Rewrite SystemMessage content into a HumanMessage prefix.
 
         Some OpenAI-compatible endpoints reject role=system in the messages array.
@@ -514,7 +526,12 @@ class StreamEventHandler:
 
             # Try fallback invoke with retry and exponential backoff (LangGraph pattern)
             # Retry transient errors up to 3 times with jitter to avoid thundering herd
-            retryable_exceptions: list[type] = [ConnectionError, TimeoutError, OSError, httpx.ReadTimeout]
+            retryable_exceptions: list[type] = [
+                ConnectionError,
+                TimeoutError,
+                OSError,
+                httpx.ReadTimeout,
+            ]
             if ChatGoogleGenerativeAIError is not None:
                 retryable_exceptions.append(ChatGoogleGenerativeAIError)
             if GoogleGenaiServerError is not None:
@@ -552,7 +569,9 @@ class StreamEventHandler:
                     try:
                         built = self.fallback_agent_factory()
                     except Exception as build_exc:  # pragma: no cover - defensive
-                        logger.warning("fallback_agent_build_failed", error=str(build_exc))
+                        logger.warning(
+                            "fallback_agent_build_failed", error=str(build_exc)
+                        )
                     else:
                         if built:
                             fallback_agent, fallback_config, fallback_runtime = built
@@ -567,7 +586,9 @@ class StreamEventHandler:
                                     "totalSteps": 2,
                                     "latestStep": {
                                         "id": f"fallback-switch-{int(time.time() * 1000)}",
-                                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                        "timestamp": time.strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                        ),
                                         "type": "thought",
                                         "content": (
                                             "Primary model overloaded; switching to fallback model."
@@ -592,7 +613,10 @@ class StreamEventHandler:
                                 coerced_messages = self._coerce_system_messages_to_user(
                                     list(fallback_inputs.get("messages") or [])
                                 )
-                                coerced_inputs = {**fallback_inputs, "messages": coerced_messages}
+                                coerced_inputs = {
+                                    **fallback_inputs,
+                                    "messages": coerced_messages,
+                                }
                             except Exception:  # pragma: no cover - defensive
                                 raise inner_exc
 
@@ -627,7 +651,9 @@ class StreamEventHandler:
                         "totalSteps": 2,
                         "latestStep": {
                             "id": f"fallback-complete-{int(time.time() * 1000)}",
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                            ),
                             "type": "result",
                             "content": "Fallback invoke completed successfully (with retry)",
                             "metadata": success_metadata,
@@ -660,8 +686,12 @@ class StreamEventHandler:
                             failure = system_bucket.get("streaming_failure")
                             if isinstance(failure, dict):
                                 failure["fallback_succeeded"] = False
-                                failure["fallback_error_type"] = type(fallback_error).__name__
-                                failure["fallback_error"] = truncate_error_message(fallback_error)
+                                failure["fallback_error_type"] = type(
+                                    fallback_error
+                                ).__name__
+                                failure["fallback_error"] = truncate_error_message(
+                                    fallback_error
+                                )
                 except Exception:  # pragma: no cover - best effort only
                     pass
                 self.emitter.emit_custom_event(
@@ -670,7 +700,9 @@ class StreamEventHandler:
                         "totalSteps": 2,
                         "latestStep": {
                             "id": f"fallback-error-{int(time.time() * 1000)}",
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                            ),
                             "type": "result",
                             "content": f"Fallback invoke failed after {retry_config.max_attempts} attempts: {type(fallback_error).__name__}",
                             "metadata": {
@@ -749,7 +781,9 @@ class StreamEventHandler:
         with span_cm as run_span:
             cfg = (self.config or {}).get("configurable", {})
             if run_span is not None:
-                run_span.set_attribute("agui.session_id", str(cfg.get("session_id") or ""))
+                run_span.set_attribute(
+                    "agui.session_id", str(cfg.get("session_id") or "")
+                )
                 run_span.set_attribute("agui.trace_id", str(cfg.get("trace_id") or ""))
                 run_span.set_attribute("agui.provider", str(cfg.get("provider") or ""))
                 run_span.set_attribute("agui.model", str(cfg.get("model") or ""))
@@ -788,6 +822,8 @@ class StreamEventHandler:
     async def _handle_event(self, event: dict[str, Any]) -> None:
         """Route event to appropriate handler."""
         event_type = event.get("event")
+        if not isinstance(event_type, str):
+            return
         handlers = {
             "on_chain_start": self._on_chain_start,
             "on_graph_start": self._on_chain_start,
@@ -822,7 +858,9 @@ class StreamEventHandler:
                 return
             if not parent_run_id:
                 self._root_run_id = str(run_id)
-                self._root_run_name = str(name) if isinstance(name, str) and name else None
+                self._root_run_name = (
+                    str(name) if isinstance(name, str) and name else None
+                )
                 return
 
         if (
@@ -849,7 +887,9 @@ class StreamEventHandler:
         tool_input = tool_data.get("input") or tool_data.get("tool_input")
         subagent_type: str | None = None
         if isinstance(tool_input, dict):
-            raw_subagent_type = tool_input.get("subagent_type") or tool_input.get("subagentType")
+            raw_subagent_type = tool_input.get("subagent_type") or tool_input.get(
+                "subagentType"
+            )
             if isinstance(raw_subagent_type, str) and raw_subagent_type.strip():
                 subagent_type = raw_subagent_type.strip()
 
@@ -879,19 +919,33 @@ class StreamEventHandler:
                 except Exception:
                     payload = {}
 
-            title = payload.get("title") if isinstance(payload.get("title"), str) else ""
-            detail = payload.get("detail") if isinstance(payload.get("detail"), str) else ""
-            kind = payload.get("kind") if isinstance(payload.get("kind"), str) else "thought"
+            title = (
+                payload.get("title") if isinstance(payload.get("title"), str) else ""
+            )
+            detail = (
+                payload.get("detail") if isinstance(payload.get("detail"), str) else ""
+            )
+            kind = (
+                payload.get("kind")
+                if isinstance(payload.get("kind"), str)
+                else "thought"
+            )
             kind = kind.lower().strip() if kind else "thought"
             if kind not in {"thought", "phase"}:
                 kind = "thought"
 
             goal = payload.get("goal_for_next_tool") or payload.get("goalForNextTool")
-            if isinstance(goal, str) and goal.strip() and isinstance(self.state.scratchpad, dict):
+            if (
+                isinstance(goal, str)
+                and goal.strip()
+                and isinstance(self.state.scratchpad, dict)
+            ):
                 self.state.scratchpad["_next_tool_goal"] = goal.strip()
 
-            heading = title.strip() or "Thought"
-            body = detail.strip()
+            title_text = title if isinstance(title, str) else ""
+            detail_text = detail if isinstance(detail, str) else ""
+            heading = title_text.strip() or "Thought"
+            body = detail_text.strip()
             content = f"**{heading}**\n\n{body}" if body else f"**{heading}**"
             self.emitter.add_trace_step(
                 step_type="thought",
@@ -901,9 +955,8 @@ class StreamEventHandler:
             return
 
         tool_goal: str | None = None
-        if (
-            tool_name not in {"write_todos", "trace_update"}
-            and isinstance(self.state.scratchpad, dict)
+        if tool_name not in {"write_todos", "trace_update"} and isinstance(
+            self.state.scratchpad, dict
         ):
             raw_goal = self.state.scratchpad.pop("_next_tool_goal", None)
             if isinstance(raw_goal, str) and raw_goal.strip():
@@ -914,9 +967,14 @@ class StreamEventHandler:
             if "work" not in self._phase_emitted:
                 lower = tool_name.lower()
                 label = "Working"
-                if any(key in lower for key in ("search", "tavily", "firecrawl", "grounding")):
+                if any(
+                    key in lower
+                    for key in ("search", "tavily", "firecrawl", "grounding")
+                ):
                     label = "Searching"
-                elif any(key in lower for key in ("read", "fetch", "scrape", "crawl", "map")):
+                elif any(
+                    key in lower for key in ("read", "fetch", "scrape", "crawl", "map")
+                ):
                     label = "Exploring"
 
                 phase_detail = self._build_tool_phase_detail(
@@ -936,7 +994,9 @@ class StreamEventHandler:
 
         self.emitter.start_tool(tool_call_id, tool_name, tool_input, goal=tool_goal)
         # Drive todo status progression when tools start (skip write_todos itself)
-        if tool_name not in {"write_todos", "trace_update"} and hasattr(self.emitter, "start_next_todo"):
+        if tool_name not in {"write_todos", "trace_update"} and hasattr(
+            self.emitter, "start_next_todo"
+        ):
             if self.emitter.start_next_todo():
                 todos_dicts = self.emitter.get_todos_as_dicts()
                 self.state.scratchpad["_todos"] = todos_dicts
@@ -961,7 +1021,9 @@ class StreamEventHandler:
         if run_id_str:
             tool_meta = self._tool_run_metadata.pop(run_id_str, None)
             if tool_meta and tool_meta.get("tool_name") == "task":
-                self.emitter.flush_subagent_thinking(tool_meta.get("tool_call_id", tool_call_id))
+                self.emitter.flush_subagent_thinking(
+                    tool_meta.get("tool_call_id", tool_call_id)
+                )
         if tool_name == "trace_update":
             return
 
@@ -1027,7 +1089,9 @@ class StreamEventHandler:
         self.emitter.end_tool(tool_call_id, tool_name, output, summary, cards=cards)
 
         # Mark active todo as done when a tool finishes (skip write_todos)
-        if tool_name not in {"write_todos", "trace_update"} and hasattr(self.emitter, "complete_active_todo"):
+        if tool_name not in {"write_todos", "trace_update"} and hasattr(
+            self.emitter, "complete_active_todo"
+        ):
             if self.emitter.complete_active_todo():
                 todos_dicts = self.emitter.get_todos_as_dicts()
                 self.state.scratchpad["_todos"] = todos_dicts
@@ -1055,7 +1119,9 @@ class StreamEventHandler:
         if run_id_str:
             tool_meta = self._tool_run_metadata.pop(run_id_str, None)
             if tool_meta and tool_meta.get("tool_name") == "task":
-                self.emitter.flush_subagent_thinking(tool_meta.get("tool_call_id", tool_call_id))
+                self.emitter.flush_subagent_thinking(
+                    tool_meta.get("tool_call_id", tool_call_id)
+                )
 
         self.emitter.error_tool(tool_call_id, tool_name, raw_error)
 
@@ -1117,7 +1183,11 @@ class StreamEventHandler:
 
                 # If we have extracted reasoning, emit it to the thinking trace as a final summary
                 # This ensures the trace panel gets the full reasoning without polluting the message
-                if reasoning_content and run_id and settings.trace_mode in {"hybrid", "provider_reasoning"}:
+                if (
+                    reasoning_content
+                    and run_id
+                    and settings.trace_mode in {"hybrid", "provider_reasoning"}
+                ):
                     cleaned_reasoning = reasoning_content.strip()
                     updated = self.emitter.update_trace_step(
                         alias=str(run_id),
@@ -1135,7 +1205,9 @@ class StreamEventHandler:
             # IMPORTANT: never flush the buffer for tool-call turns.
             if run_id_str and run_id_str in self._gemini_buffer_runs:
                 buffered_text = " ".join(self._gemini_buffer_runs.pop(run_id_str) or [])
-                buffered_text = ThinkingBlockTracker.sanitize_final_content(buffered_text)
+                buffered_text = ThinkingBlockTracker.sanitize_final_content(
+                    buffered_text
+                )
 
                 if not has_tool_calls:
                     final_visible = content or buffered_text
@@ -1321,7 +1393,7 @@ class StreamEventHandler:
 
             # Use a per-run tracker to filter thinking blocks for all providers.
             if not hasattr(self, "_thinking_trackers"):
-                self._thinking_trackers: dict[str, ThinkingBlockTracker] = {}
+                self._thinking_trackers = {}
             if run_id_str not in self._thinking_trackers:
                 self._thinking_trackers[run_id_str] = ThinkingBlockTracker()
             tracker = self._thinking_trackers[run_id_str]
@@ -1420,17 +1492,22 @@ class StreamEventHandler:
             # Filter visible_content since that's what gets emitted to the chat
             # Base64 images are typically 50KB-3MB; normal text chunks are < 8KB
             if visible_content and len(visible_content) > 8000:
-                logger.debug("skipping_large_visible_chunk", length=len(visible_content))
+                logger.debug(
+                    "skipping_large_visible_chunk", length=len(visible_content)
+                )
                 return
 
             # Also detect base64-like patterns (long strings of alphanumeric + /+=)
             # Real text has spaces, punctuation, varied patterns - base64 doesn't
             if visible_content and len(visible_content) > 500:
-                sample = visible_content.replace('\n', '').replace(' ', '')[:500]
-                stripped = sample.rstrip('=')
+                sample = visible_content.replace("\n", "").replace(" ", "")[:500]
+                stripped = sample.rstrip("=")
                 # Check for valid base64 alphabet (no spaces, punctuation, or varied case patterns)
-                if stripped and re.match(r'^[A-Za-z0-9+/]+$', stripped):
-                    logger.debug("skipping_base64_like_visible_chunk", length=len(visible_content))
+                if stripped and re.match(r"^[A-Za-z0-9+/]+$", stripped):
+                    logger.debug(
+                        "skipping_base64_like_visible_chunk",
+                        length=len(visible_content),
+                    )
                     return
 
             # Filter markdown images with data URIs: ![alt](data:image/...)
@@ -1493,7 +1570,9 @@ class StreamEventHandler:
 
         run_id = event.get("run_id")
         run_id_str = str(run_id) if run_id is not None else None
-        is_root = bool(run_id_str and self._root_run_id and run_id_str == self._root_run_id)
+        is_root = bool(
+            run_id_str and self._root_run_id and run_id_str == self._root_run_id
+        )
         if not is_root:
             # Fallback heuristic when we didn't capture root run id (defensive).
             is_root = (
@@ -1588,7 +1667,17 @@ class StreamEventHandler:
                 payload = tool_input
 
         if isinstance(payload, dict):
-            for key in ("query", "q", "prompt", "url", "path", "file", "id", "name", "title"):
+            for key in (
+                "query",
+                "q",
+                "prompt",
+                "url",
+                "path",
+                "file",
+                "id",
+                "name",
+                "title",
+            ):
                 value = payload.get(key)
                 if isinstance(value, str) and value.strip():
                     return self._truncate_trace_value(value.strip())
@@ -1613,7 +1702,9 @@ class StreamEventHandler:
         preview_chunks = []
         for message in prompt_messages[-2:]:
             if isinstance(message, dict):
-                preview_chunks.append(self._stringify_message_content(message.get("content")))
+                preview_chunks.append(
+                    self._stringify_message_content(message.get("content"))
+                )
             else:
                 preview_chunks.append(self._stringify_message_content(message))
 
@@ -1720,7 +1811,9 @@ class StreamEventHandler:
                         if text:
                             return text
                     elif isinstance(message, dict):
-                        role = str(message.get("role") or message.get("type") or "").lower()
+                        role = str(
+                            message.get("role") or message.get("type") or ""
+                        ).lower()
                         if role not in ("assistant", "ai"):
                             continue
                         has_tool_calls, _ = self._detect_tool_calls(message)
@@ -1792,7 +1885,13 @@ class StreamEventHandler:
             # REASONING BLOCKS - Skip in main content (handled separately)
             # LangChain pattern: reasoning blocks go to thinking trace only
             # =================================================================
-            if block_type in ("thinking", "reasoning", "thought", "signature", "thought_signature"):
+            if block_type in (
+                "thinking",
+                "reasoning",
+                "thought",
+                "signature",
+                "thought_signature",
+            ):
                 return ""
 
             # Extract text from Gemini 3 content blocks
@@ -1806,7 +1905,8 @@ class StreamEventHandler:
 
             # For other dicts, only include safe fields (avoid signature/extras)
             safe_content = {
-                k: v for k, v in content.items()
+                k: v
+                for k, v in content.items()
                 if k
                 not in (
                     "extras",
@@ -1821,10 +1921,13 @@ class StreamEventHandler:
                     "toolCall",
                     "arguments",
                 )
-                and not (isinstance(v, str) and len(v) > 10000)  # Skip large base64 blobs
+                and not (
+                    isinstance(v, str) and len(v) > 10000
+                )  # Skip large base64 blobs
             }
             if safe_content:
                 import json
+
                 return json.dumps(safe_content, default=str)
             return ""
 
@@ -1874,7 +1977,14 @@ class StreamEventHandler:
             block_type = raw_type.lower() if isinstance(raw_type, str) else ""
 
             # Tool call blocks should never be treated as visible text.
-            if block_type in ("tool", "tool_use", "tool_call", "tool_calls", "function_call", "function"):
+            if block_type in (
+                "tool",
+                "tool_use",
+                "tool_call",
+                "tool_calls",
+                "function_call",
+                "function",
+            ):
                 return "", ""
             if any(
                 key in content
@@ -2014,7 +2124,11 @@ class StreamEventHandler:
                             reasoning_parts.append(reasoning_text)
             if reasoning_parts:
                 combined = "\n\n".join(reasoning_parts)
-                logger.debug("extracted_gemini3_thinking", length=len(combined), blocks=len(reasoning_parts))
+                logger.debug(
+                    "extracted_gemini3_thinking",
+                    length=len(combined),
+                    blocks=len(reasoning_parts),
+                )
                 return combined
 
         # Additional kwargs (xAI/OpenRouter/Claude/OpenAI-compatible)
@@ -2052,7 +2166,9 @@ class StreamEventHandler:
             hasher = hashlib.md5()
             for s in snippet_texts:
                 hasher.update(s.encode("utf-8", errors="ignore"))
-            rerank_key = f"rerank:{self.last_user_query.lower().strip()}:{hasher.hexdigest()}"
+            rerank_key = (
+                f"rerank:{self.last_user_query.lower().strip()}:{hasher.hexdigest()}"
+            )
             cached = self.session_cache.get(rerank_key, {}).get("value")
             if cached:
                 return self._apply_reranked_results(output, results, cached)
@@ -2060,6 +2176,7 @@ class StreamEventHandler:
         # Call helper with timeout
         try:
             import asyncio
+
             reranked = await asyncio.wait_for(
                 self.helper.rerank(
                     snippet_texts,
@@ -2072,7 +2189,10 @@ class StreamEventHandler:
             if reranked:
                 # Cache the result
                 if rerank_key and self.session_cache is not None:
-                    self.session_cache[rerank_key] = {"value": reranked, "ts": time.time()}
+                    self.session_cache[rerank_key] = {
+                        "value": reranked,
+                        "ts": time.time(),
+                    }
 
                 return self._apply_reranked_results(output, results, reranked)
 
@@ -2120,7 +2240,9 @@ class StreamEventHandler:
         if isinstance(output, ToolMessage):
             raw_output = output.content
             content_type = type(raw_output).__name__
-            logger.debug("write_todos_extracted_from_toolmessage: type=%s", content_type)
+            logger.debug(
+                "write_todos_extracted_from_toolmessage: type=%s", content_type
+            )
 
         self.emitter.update_todos(raw_output)
 
@@ -2153,14 +2275,20 @@ class StreamEventHandler:
 
         # Check if image generation was successful
         if not isinstance(raw_output, dict):
-            logger.debug("image_generation_output_not_dict: %s", type(raw_output).__name__)
+            logger.debug(
+                "image_generation_output_not_dict: %s", type(raw_output).__name__
+            )
             return
 
         if not raw_output.get("success"):
             logger.debug("image_generation_not_successful: %s", raw_output.get("error"))
             return
 
-        image_url = raw_output.get("image_url") or raw_output.get("imageUrl") or raw_output.get("url")
+        image_url = (
+            raw_output.get("image_url")
+            or raw_output.get("imageUrl")
+            or raw_output.get("url")
+        )
         image_base64 = raw_output.get("image_base64") or raw_output.get("imageBase64")
 
         # Phase V: Prefer URL-based images (no base64 payloads).
@@ -2185,8 +2313,11 @@ class StreamEventHandler:
             aspect_ratio=raw_output.get("aspect_ratio"),
             resolution=raw_output.get("resolution"),
         )
-        logger.info("image_artifact_emitted: aspect=%s, resolution=%s",
-                   raw_output.get("aspect_ratio"), raw_output.get("resolution"))
+        logger.info(
+            "image_artifact_emitted: aspect=%s, resolution=%s",
+            raw_output.get("aspect_ratio"),
+            raw_output.get("resolution"),
+        )
 
     def _compact_image_output(self, output: Any) -> Any:
         """Strip large base64 image data from output to prevent context overflow.
@@ -2219,7 +2350,11 @@ class StreamEventHandler:
             return output
 
         # Create compact version without base64
-        image_url = raw_output.get("image_url") or raw_output.get("imageUrl") or raw_output.get("url")
+        image_url = (
+            raw_output.get("image_url")
+            or raw_output.get("imageUrl")
+            or raw_output.get("url")
+        )
         compact = {
             "success": True,
             "image_generated": True,  # Flag that image was created
@@ -2231,7 +2366,11 @@ class StreamEventHandler:
             "width": raw_output.get("width"),
             "height": raw_output.get("height"),
             # Note for model: image was sent to user's display
-            "status": "Image generated and available at image_url" if image_url else "Image generated and displayed to user",
+            "status": (
+                "Image generated and available at image_url"
+                if image_url
+                else "Image generated and displayed to user"
+            ),
         }
 
         if raw_output.get("image_base64"):
@@ -2245,7 +2384,7 @@ class StreamEventHandler:
             return ToolMessage(
                 content=json.dumps(compact),
                 tool_call_id=output.tool_call_id,
-                name=output.name if hasattr(output, 'name') else "generate_image",
+                name=output.name if hasattr(output, "name") else "generate_image",
             )
         return compact
 
@@ -2269,11 +2408,15 @@ class StreamEventHandler:
 
         # Check if article creation was successful
         if not isinstance(raw_output, dict):
-            logger.debug("article_generation_output_not_dict: %s", type(raw_output).__name__)
+            logger.debug(
+                "article_generation_output_not_dict: %s", type(raw_output).__name__
+            )
             return
 
         if not raw_output.get("success"):
-            logger.debug("article_generation_not_successful: %s", raw_output.get("error"))
+            logger.debug(
+                "article_generation_not_successful: %s", raw_output.get("error")
+            )
             return
 
         # The tool already calls emit_article_artifact via runtime
@@ -2319,7 +2462,9 @@ class StreamEventHandler:
             )
             logger.info(
                 "article_artifact_emitted: title=%s, content_length=%d, images=%d",
-                title, len(content or ""), len(images or [])
+                title,
+                len(content or ""),
+                len(images or []),
             )
         else:
             logger.warning("article_artifact_skipped: no content or images")
@@ -2356,7 +2501,12 @@ class StreamEventHandler:
                 or entry.get("id")
                 or f"Result {idx}"
             ).strip()
-            snippet = entry.get("snippet") or entry.get("summary") or entry.get("content") or ""
+            snippet = (
+                entry.get("snippet")
+                or entry.get("summary")
+                or entry.get("content")
+                or ""
+            )
             snippet_text = (
                 textwrap.shorten(str(snippet).strip(), width=220, placeholder="...")
                 if snippet
@@ -2392,7 +2542,10 @@ class StreamEventHandler:
                 dict_values = [v for v in data.values() if isinstance(v, dict)]
                 if dict_values:
                     entries.extend(dict_values)
-                elif all(isinstance(v, (str, int, float, bool, type(None))) for v in data.values()):
+                elif all(
+                    isinstance(v, (str, int, float, bool, type(None)))
+                    for v in data.values()
+                ):
                     # Treat as single entry if it looks flat
                     entries.append(data)
 
@@ -2422,10 +2575,17 @@ class StreamEventHandler:
         # Handle dict - filter large binary fields
         if isinstance(output, dict):
             filtered = {
-                k: v for k, v in output.items()
-                if k not in (
-                    "image_base64", "base64", "binary", "data",
-                    "thought_signature", "signature", "extras"
+                k: v
+                for k, v in output.items()
+                if k
+                not in (
+                    "image_base64",
+                    "base64",
+                    "binary",
+                    "data",
+                    "thought_signature",
+                    "signature",
+                    "extras",
                 )
                 and not (isinstance(v, str) and len(v) > 50000)  # Skip large strings
             }
@@ -2465,7 +2625,9 @@ class StreamEventHandler:
             forwarded = getattr(self.state, "forwarded_props", {}) or {}
             customer_id = None
             if isinstance(forwarded, dict):
-                customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
+                customer_id = forwarded.get("customer_id") or forwarded.get(
+                    "customerId"
+                )
 
             stored_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             store = SparrowWorkspaceStore(
@@ -2574,7 +2736,9 @@ class StreamEventHandler:
                 )
 
                 # Store in scratchpad for LangSmith metadata
-                if hasattr(self.state, "scratchpad") and isinstance(self.state.scratchpad, dict):
+                if hasattr(self.state, "scratchpad") and isinstance(
+                    self.state.scratchpad, dict
+                ):
                     system_bucket = self.state.scratchpad.setdefault("_system", {})
                     system_bucket["cache_metrics"] = {
                         "cache_hit_ratio": round(cache_ratio, 3),

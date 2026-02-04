@@ -1,22 +1,24 @@
+# ruff: noqa: E402
 import logging
-from datetime import datetime, timezone
-from uuid import uuid4
-import json
+from types import ModuleType
+from typing import cast
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
 import os
 import asyncio
 from langchain_core.messages import HumanMessage
 
 # Ensure AG-UI LangGraph custom events propagate even if site-packages are overwritten
 from app.patches.agui_custom_events import apply_patch as _apply_agui_patch
+
 _apply_agui_patch()
 
 # Fix circular reference issue in AG-UI state serialization
 from app.patches.agui_json_safe import apply_patch as _apply_json_safe_patch
+
 _apply_json_safe_patch()
 
 # Rate limiting imports
@@ -29,12 +31,13 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.core.rate_limiting.exceptions import (
     RateLimitExceededException,
     CircuitBreakerOpenException,
-    GeminiServiceUnavailableException
+    GeminiServiceUnavailableException,
 )
 
 from app.agents import agent_graph
-from app.agents import GraphState # Corrected import location
-from app.api.v1.endpoints import search_tools_endpoints # Added for search tools endpoints
+from app.api.v1.endpoints import (
+    search_tools_endpoints,
+)  # Added for search tools endpoints
 from app.api.v1.endpoints import (
     logs_endpoints,  # Log analysis (JSON + SSE + sessions)
     research_endpoints,  # Research (JSON + SSE)
@@ -45,12 +48,15 @@ from app.api.v1.endpoints import (
 from app.api.v1.endpoints import agents_endpoints  # Agent metadata discovery
 from app.api.v1.endpoints import tavily_selftest  # Dev-only Tavily diagnostics
 from app.api.v1.endpoints import feedme  # FeedMe transcript ingestion (modular package)
-from app.api.v1.endpoints import text_approval_endpoints  # Text approval workflow for FeedMe
+from app.api.v1.endpoints import (
+    text_approval_endpoints,
+)  # Text approval workflow for FeedMe
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
 from app.api.v1.endpoints import feedme_intelligence  # FeedMe AI intelligence endpoints
 from app.api.v1.endpoints import agent_interrupt_endpoints  # HITL interrupt controls
 from app.api.v1.endpoints import memory  # Memory UI endpoints
+
 # from app.api.v1.endpoints import secure_log_analysis  # Secure Log Analysis endpoints - Disabled due to reasoning engine removal
 from app.api.v1.endpoints import (
     message_feedback_endpoints,  # Message thumbs up/down feedback
@@ -66,12 +72,13 @@ from app.integrations.zendesk.scheduler import start_background_scheduler
 configure_logging(production=settings.is_production_mode())
 
 # Conditional imports based on security configuration
-auth_endpoints = None
-api_key_endpoints = None
+auth_endpoints: ModuleType | None = None
+api_key_endpoints: ModuleType | None = None
 
 if settings.should_enable_auth_endpoints():
     try:
         from app.api.v1.endpoints import auth as auth_endpoints
+
         logging.info("Authentication endpoints enabled")
     except ImportError as e:
         logging.warning(f"Failed to import auth endpoints: {e}")
@@ -80,6 +87,7 @@ if settings.should_enable_auth_endpoints():
 if settings.should_enable_api_key_endpoints():
     try:
         from app.api.v1.endpoints import api_key_endpoints
+
         logging.info("API key endpoints enabled")
     except ImportError as e:
         logging.warning(f"Failed to import API key endpoints: {e}")
@@ -95,9 +103,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 import hashlib
 
 # Configure the resource for your application
-resource = Resource(attributes={
-    "service.name": "mb-sparrow-agent-server"
-})
+resource = Resource(attributes={"service.name": "mb-sparrow-agent-server"})
 
 # Determine if OpenTelemetry exporter should be enabled (e.g., in production)
 ENABLE_OTEL: bool = os.getenv("ENABLE_OTEL", "false").lower() in {"1", "true", "yes"}
@@ -109,16 +115,21 @@ if ENABLE_OTEL:
     try:
         # Configure an OTLP exporter
         # Ensure your OTLP collector is running and accessible (e.g., http://localhost:4318/v1/traces)
-        otlp_exporter = OTLPSpanExporter(endpoint="http://localhost:4318/v1/traces")  # Adjust endpoint as needed
+        otlp_exporter = OTLPSpanExporter(
+            endpoint="http://localhost:4318/v1/traces"
+        )  # Adjust endpoint as needed
 
         # Use a BatchSpanProcessor for better performance in production
         span_processor = BatchSpanProcessor(otlp_exporter)
 
         # Add the span processor to the tracer provider
-        trace.get_tracer_provider().add_span_processor(span_processor)
+        provider = cast(TracerProvider, trace.get_tracer_provider())
+        provider.add_span_processor(span_processor)
     except Exception as e:  # pragma: no cover -- best-effort safeguard
         # Fallback: disable exporter if configuration fails (e.g., collector not running)
-        print(f"[OTel] Warning: failed to configure OTLP exporter -> {e}. Telemetry disabled.")
+        print(
+            f"[OTel] Warning: failed to configure OTLP exporter -> {e}. Telemetry disabled."
+        )
 
 # Get a tracer instance
 tracer = trace.get_tracer(__name__)
@@ -130,11 +141,12 @@ limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(
     title="MB-Sparrow Agent Server",
     version="1.0",
-    description="API server for the MB-Sparrow multi-agent system."
+    description="API server for the MB-Sparrow multi-agent system.",
 )
 
 # Configure LangSmith tracing during startup (if enabled)
 from app.core.tracing import configure_langsmith
+
 configure_langsmith()
 
 # Enable FastAPI auto-instrumentation for OpenTelemetry when enabled
@@ -142,7 +154,9 @@ if ENABLE_OTEL:
     try:  # pragma: no cover - best-effort, do not fail app startup on instrumentation issues
         FastAPIInstrumentor().instrument_app(app)
     except Exception as _otel_exc:
-        print(f"[OTel] Warning: failed to instrument FastAPI -> {_otel_exc}. Continuing without instrumentation.")
+        print(
+            f"[OTel] Warning: failed to instrument FastAPI -> {_otel_exc}. Continuing without instrumentation."
+        )
 
 _DEBUG_AGUI_REQUESTS: bool = os.getenv("DEBUG_AGUI_REQUESTS", "false").lower() in {
     "1",
@@ -167,6 +181,7 @@ async def _debug_log_agui_requests(request: Request, call_next):
             request.headers.get("content-type"),
         )
     return await call_next(request)
+
 
 # AG-UI streaming endpoint
 # LangGraph stream endpoint via router: /api/v1/agui/stream
@@ -211,45 +226,78 @@ app.add_middleware(
 
 # Conditionally include authentication router
 if auth_endpoints and settings.should_enable_auth_endpoints():
-    app.include_router(auth_endpoints.router, prefix="/api/v1/auth", tags=["Authentication"])
+    app.include_router(
+        auth_endpoints.router, prefix="/api/v1/auth", tags=["Authentication"]
+    )
     logging.info("Authentication router registered")
 else:
-    logging.warning("Authentication router not registered - endpoints disabled or import failed")
+    logging.warning(
+        "Authentication router not registered - endpoints disabled or import failed"
+    )
 
 # Include local auth bypass router for development
 if os.getenv("ENABLE_LOCAL_AUTH_BYPASS", "false").lower() == "true":
     try:
         from app.api.v1.endpoints import local_auth
-        app.include_router(local_auth.router, prefix="/api/v1/auth", tags=["Local Auth"])
+
+        app.include_router(
+            local_auth.router, prefix="/api/v1/auth", tags=["Local Auth"]
+        )
         logging.warning("⚠️  LOCAL AUTH BYPASS ENABLED - DO NOT USE IN PRODUCTION")
     except ImportError as e:
         logging.error(f"Failed to import local auth endpoints: {e}")
 
 # Always include core application routers
-app.include_router(search_tools_endpoints.router, prefix="/api/v1/tools", tags=["Search Tools"])
-app.include_router(tavily_selftest.router, prefix="/api/v1", tags=["Search Tools"])  # GET /api/v1/tools/tavily/self-test
+app.include_router(
+    search_tools_endpoints.router, prefix="/api/v1/tools", tags=["Search Tools"]
+)
+app.include_router(
+    tavily_selftest.router, prefix="/api/v1", tags=["Search Tools"]
+)  # GET /api/v1/tools/tavily/self-test
 # Register Agent Interaction routers (modularized)
-app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
-app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
-app.include_router(agui_endpoints.router, prefix="/api/v1", tags=["AG-UI"])  # /api/v1/agui/stream
-app.include_router(models_endpoints.router, prefix="/api/v1", tags=["Models"])  # /api/v1/models
-app.include_router(agents_endpoints.router, prefix="/api/v1", tags=["Agents"])  # /api/v1/agents
-app.include_router(metadata_endpoints.router, prefix="/api/v1", tags=["Metadata"])  # /api/v1/metadata - Phase 6
-app.include_router(message_feedback_endpoints.router, prefix="/api/v1", tags=["Message Feedback"])  # /api/v1/feedback/message
+app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
+app.include_router(
+    research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]
+)
+app.include_router(
+    agui_endpoints.router, prefix="/api/v1", tags=["AG-UI"]
+)  # /api/v1/agui/stream
+app.include_router(
+    models_endpoints.router, prefix="/api/v1", tags=["Models"]
+)  # /api/v1/models
+app.include_router(
+    agents_endpoints.router, prefix="/api/v1", tags=["Agents"]
+)  # /api/v1/agents
+app.include_router(
+    metadata_endpoints.router, prefix="/api/v1", tags=["Metadata"]
+)  # /api/v1/metadata - Phase 6
+app.include_router(
+    message_feedback_endpoints.router, prefix="/api/v1", tags=["Message Feedback"]
+)  # /api/v1/feedback/message
 # Register Memory UI routes
-app.include_router(memory.router, prefix="/api/v1", tags=["Memory UI"])  # /api/v1/memory/*
+app.include_router(
+    memory.router, prefix="/api/v1", tags=["Memory UI"]
+)  # /api/v1/memory/*
 # Register FeedMe routes (modular package)
 app.include_router(feedme.router, prefix="/api/v1", tags=["FeedMe"])
-# Register FeedMe Text Approval routes  
+# Register FeedMe Text Approval routes
 app.include_router(text_approval_endpoints.router, tags=["FeedMe Text Approval"])
 # Register FeedMe Intelligence routes
-app.include_router(feedme_intelligence.router, prefix="/api/v1", tags=["FeedMe Intelligence"])
+app.include_router(
+    feedme_intelligence.router, prefix="/api/v1", tags=["FeedMe Intelligence"]
+)
 # Register Chat Session routes
-app.include_router(chat_session_endpoints.router, prefix="/api/v1", tags=["Chat Sessions"])
+app.include_router(
+    chat_session_endpoints.router, prefix="/api/v1", tags=["Chat Sessions"]
+)
 # Register Rate Limiting routes
-app.include_router(rate_limit_endpoints.router, prefix="/api/v1", tags=["Rate Limiting"])
+app.include_router(
+    rate_limit_endpoints.router, prefix="/api/v1", tags=["Rate Limiting"]
+)
 # Register Agent Interrupt control routes
-app.include_router(agent_interrupt_endpoints.router, prefix="/api/v1", tags=["Agent Interrupts"])
+app.include_router(
+    agent_interrupt_endpoints.router, prefix="/api/v1", tags=["Agent Interrupts"]
+)
 # Register Secure Log Analysis routes
 # app.include_router(secure_log_analysis.router, prefix="/api/v1", tags=["Secure Log Analysis"])  # Disabled due to reasoning engine removal
 # Register Zendesk integration routes
@@ -258,13 +306,18 @@ app.include_router(zendesk_admin_router, prefix="/api/v1", tags=["Zendesk Admin"
 
 # Conditionally include API Key Management router
 if api_key_endpoints and settings.should_enable_api_key_endpoints():
-    app.include_router(api_key_endpoints.router, prefix="/api/v1", tags=["API Key Management"])
+    app.include_router(
+        api_key_endpoints.router, prefix="/api/v1", tags=["API Key Management"]
+    )
     logging.info("API Key Management router registered")
 else:
-    logging.warning("API Key Management router not registered - endpoints disabled or import failed")
+    logging.warning(
+        "API Key Management router not registered - endpoints disabled or import failed"
+    )
 
 # Register FeedMe WebSocket routes
 app.include_router(feedme_websocket.router, prefix="/ws", tags=["FeedMe WebSocket"])
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -272,32 +325,41 @@ async def startup_event():
     is_production = settings.is_production_mode()
     auth_enabled = settings.should_enable_auth_endpoints()
     api_key_enabled = settings.should_enable_api_key_endpoints()
-    
+
     # Debug environment variable loading
     import os
+
     skip_auth_env = os.getenv("SKIP_AUTH", "not_set")
-    
+
     logging.info("=== MB-Sparrow Security Configuration ===")
     logging.info(f"Production Mode: {is_production}")
-    logging.info(f"Authentication Endpoints: {'ENABLED' if auth_enabled else 'DISABLED'}")
+    logging.info(
+        f"Authentication Endpoints: {'ENABLED' if auth_enabled else 'DISABLED'}"
+    )
     logging.info(f"API Key Endpoints: {'ENABLED' if api_key_enabled else 'DISABLED'}")
     logging.info(f"Skip Auth (settings): {settings.skip_auth}")
     logging.info(f"Skip Auth (env raw): {skip_auth_env}")
     logging.info(f"Development User ID: {settings.development_user_id}")
     # Reflect real JWT secret configuration (prefer explicit env var; treat default placeholder as not configured)
     jwt_env = os.getenv("JWT_SECRET_KEY")
-    jwt_val = jwt_env if jwt_env is not None else getattr(settings, "jwt_secret_key", None)
+    jwt_val = (
+        jwt_env if jwt_env is not None else getattr(settings, "jwt_secret_key", None)
+    )
     jwt_configured = bool(jwt_val) and str(jwt_val) != "change-this-in-production"
     logging.info(f"JWT Secret Configured: {jwt_configured}")
 
     logging.info("=======================================")
-    
+
     if not is_production:
-        logging.warning("Running in development mode - some security features may be disabled")
-    
+        logging.warning(
+            "Running in development mode - some security features may be disabled"
+        )
+
     if not auth_enabled or not api_key_enabled:
-        logging.warning("Some security endpoints are disabled - ensure this is intentional")
-    
+        logging.warning(
+            "Some security endpoints are disabled - ensure this is intentional"
+        )
+
     logging.info("==========================================")
 
     # Run model health checks on startup (non-fatal; uses real API calls).
@@ -307,8 +369,14 @@ async def startup_event():
 
         results = await run_startup_health_checks()
         if results:
-            allowed = {model_id for model_id, payload in results.items() if payload.get("ok")}
-            blocked = {model_id for model_id, payload in results.items() if not payload.get("ok")}
+            allowed = {
+                model_id for model_id, payload in results.items() if payload.get("ok")
+            }
+            blocked = {
+                model_id
+                for model_id, payload in results.items()
+                if not payload.get("ok")
+            }
             if allowed:
                 model_router.allowed_models = allowed
                 logging.info(
@@ -326,7 +394,9 @@ async def startup_event():
                     "Model health checks completed but no models passed; router left unrestricted"
                 )
         else:
-            logging.info("Model health checks skipped or empty; router left unrestricted")
+            logging.info(
+                "Model health checks skipped or empty; router left unrestricted"
+            )
     except Exception as exc:  # pragma: no cover - best effort startup checks
         logging.warning("Model health checks failed: %s", exc)
 
@@ -355,6 +425,7 @@ async def shutdown_event():
     # Clear Supabase client singleton (thread-safe)
     try:
         from app.db.supabase.client import clear_supabase_client
+
         clear_supabase_client()
         logging.info("Supabase client cleared")
     except Exception as e:
@@ -363,7 +434,8 @@ async def shutdown_event():
     # Clear Redis cache client
     try:
         from app.cache import redis_cache
-        if hasattr(redis_cache, '_redis_client') and redis_cache._redis_client:
+
+        if hasattr(redis_cache, "_redis_client") and redis_cache._redis_client:
             redis_cache._redis_client = None
         logging.info("Redis cache client cleared")
     except Exception as e:
@@ -371,11 +443,13 @@ async def shutdown_event():
 
     # Force garbage collection
     import gc
+
     gc.collect()
     logging.info("=== MB-Sparrow Shutdown Complete ===")
 
 
 # Global exception handlers for rate limiting
+
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
@@ -383,15 +457,16 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     Global handler for SlowAPI rate limit exceeded errors.
     Provides user-friendly feedback with proper HTTP status.
     """
-    logging.warning(f"Rate limit exceeded for {request.client.host}: {exc.detail}")
-    
+    client_host = request.client.host if request.client else "unknown"
+    logging.warning(f"Rate limit exceeded for {client_host}: {exc.detail}")
+
     response = JSONResponse(
         status_code=429,
         content={
             "error": "rate_limit_exceeded",
             "message": "Too many requests. Please try again later.",
             "detail": str(exc.detail),
-            "type": "rate_limit"
+            "type": "rate_limit",
         },
     )
     response.headers["Retry-After"] = "60"  # Suggest retry after 60 seconds
@@ -408,18 +483,18 @@ async def custom_rate_limit_handler(request: Request, exc: RateLimitExceededExce
         f"Custom rate limit exceeded for {request.client.host if request.client else 'unknown'}: "
         f"{exc.message} (model: {exc.model})"
     )
-    
+
     response = JSONResponse(
         status_code=429,
         content=exc.to_dict(),
     )
-    
+
     # Add retry-after header if available
     if exc.retry_after:
         response.headers["Retry-After"] = str(exc.retry_after)
     else:
         response.headers["Retry-After"] = "60"  # Default to 60 seconds
-    
+
     return response
 
 
@@ -433,24 +508,28 @@ async def circuit_breaker_handler(request: Request, exc: CircuitBreakerOpenExcep
         f"Circuit breaker open for {request.client.host if request.client else 'unknown'}: "
         f"{exc.message} (failures: {exc.failure_count})"
     )
-    
+
     response = JSONResponse(
         status_code=503,
         content=exc.to_dict(),
     )
-    
+
     # Add retry-after header based on estimated recovery time
     if exc.estimated_recovery:
-        retry_seconds = max(60, int((exc.estimated_recovery - datetime.now()).total_seconds()))
+        retry_seconds = max(
+            60, int((exc.estimated_recovery - datetime.now()).total_seconds())
+        )
         response.headers["Retry-After"] = str(retry_seconds)
     else:
         response.headers["Retry-After"] = "300"  # Default to 5 minutes
-        
+
     return response
 
 
 @app.exception_handler(GeminiServiceUnavailableException)
-async def gemini_service_unavailable_handler(request: Request, exc: GeminiServiceUnavailableException):
+async def gemini_service_unavailable_handler(
+    request: Request, exc: GeminiServiceUnavailableException
+):
     """
     Global handler for Gemini service unavailable exceptions.
     Indicates the Gemini API is temporarily down or unreachable.
@@ -459,18 +538,18 @@ async def gemini_service_unavailable_handler(request: Request, exc: GeminiServic
         f"Gemini service unavailable for {request.client.host if request.client else 'unknown'}: "
         f"{exc.message} (status: {exc.service_status})"
     )
-    
+
     response = JSONResponse(
         status_code=503,
         content=exc.to_dict(),
     )
-    
+
     # Add retry-after header
     if exc.retry_after:
         response.headers["Retry-After"] = str(exc.retry_after)
     else:
         response.headers["Retry-After"] = "120"  # Default to 2 minutes
-        
+
     return response
 
 
@@ -482,8 +561,10 @@ async def global_exception_handler(request: Request, exc: Exception):
     This prevents sensitive application details from leaking in production.
     """
     # Log the full error for internal debugging
-    logging.error(f"Unhandled exception for request {request.url}: {exc}", exc_info=True)
-    
+    logging.error(
+        f"Unhandled exception for request {request.url}: {exc}", exc_info=True
+    )
+
     # Return a generic, sanitized error response to the client
     return JSONResponse(
         status_code=500,
@@ -497,15 +578,18 @@ class AgentQueryRequest(BaseModel):
     query: str
     log_content: str | None = None
 
+
 class AgentResponse(BaseModel):
     # Define what a typical response should look like
     # For now, returning the full final state for inspection
     final_state: dict
 
+
 @app.get("/", tags=["General"])
 async def read_root():
     """Root endpoint, returns a welcome message."""
     return {"message": "Welcome to MB-Sparrow Agent API"}
+
 
 @app.get("/health", tags=["General"])
 async def health_check():
@@ -515,7 +599,7 @@ async def health_check():
         return {
             "status": "healthy",
             "service": "mb-sparrow-agent-server",
-            "version": "1.0"
+            "version": "1.0",
         }
     except Exception as e:
         logging.error(f"Health check failed: {e}")
@@ -524,13 +608,14 @@ async def health_check():
             content={
                 "status": "unhealthy",
                 "service": "mb-sparrow-agent-server",
-                "error": "Service unavailable"
-            }
+                "error": "Service unavailable",
+            },
         )
 
 
 # Rate limiting test endpoint removed - functionality verified
 # The global exception handlers are working properly for all rate-limited endpoints
+
 
 @app.get("/security-status", tags=["General"])
 async def security_status():
@@ -541,38 +626,45 @@ async def security_status():
     # Get list of all registered routes
     routes = []
     for route in app.routes:
-        if hasattr(route, 'path') and hasattr(route, 'methods'):
-            routes.append({
-                "path": route.path,
-                "methods": list(route.methods) if route.methods else []
-            })
-    
+        if hasattr(route, "path") and hasattr(route, "methods"):
+            routes.append(
+                {
+                    "path": route.path,
+                    "methods": list(route.methods) if route.methods else [],
+                }
+            )
+
     return {
         "production_mode": settings.is_production_mode(),
         "authentication_endpoints": {
             "should_enable": settings.should_enable_auth_endpoints(),
             "actually_enabled": auth_endpoints is not None,
-            "config_value": settings.enable_auth_endpoints
+            "config_value": settings.enable_auth_endpoints,
         },
         "api_key_endpoints": {
             "should_enable": settings.should_enable_api_key_endpoints(),
             "actually_enabled": api_key_endpoints is not None,
-            "config_value": settings.enable_api_key_endpoints
+            "config_value": settings.enable_api_key_endpoints,
         },
         "auth_configuration": {
             "skip_auth": settings.skip_auth,
             "development_user_id": settings.development_user_id,
-            "force_production_security": settings.force_production_security
+            "force_production_security": settings.force_production_security,
         },
         "environment_indicators": {
             "supabase_configured": bool(settings.supabase_url),
             "internal_api_token_configured": bool(settings.internal_api_token),
-            "encryption_secret_configured": bool(getattr(settings, 'api_key_encryption_secret', None))
+            "encryption_secret_configured": bool(
+                getattr(settings, "api_key_encryption_secret", None)
+            ),
         },
         "registered_routes": routes,
         "api_key_routes_registered": any("/api-keys" in r["path"] for r in routes),
-        "rate_limit_routes_registered": any("/rate-limits" in r["path"] for r in routes)
+        "rate_limit_routes_registered": any(
+            "/rate-limits" in r["path"] for r in routes
+        ),
     }
+
 
 @app.post("/agent", response_model=AgentResponse, tags=["Agent"])
 async def agent_invoke_endpoint(request: AgentQueryRequest):
@@ -588,7 +680,7 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
     # For simplicity, we'll wrap the query. Adjust if your graph expects richer messages.
     initial_input = {
         "messages": [HumanMessage(content=request.query)],
-        "raw_log_content": request.log_content
+        "raw_log_content": request.log_content,
     }
 
     try:
@@ -610,19 +702,24 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
                 span.set_attribute("input.query_present", bool(request.query))
             if request.log_content:
                 span.set_attribute("input.log_content_length", len(request.log_content))
-            
+
             final_state = await agent_graph.ainvoke(initial_input)
-            
+
             # You could add attributes from final_state to the span if useful
             # For example, if final_state contains a 'destination'
-            if isinstance(final_state, dict) and final_state.get('destination'):
-                span.set_attribute("output.destination", str(final_state['destination']))
-            
+            if isinstance(final_state, dict) and final_state.get("destination"):
+                span.set_attribute(
+                    "output.destination", str(final_state["destination"])
+                )
+
         return {"final_state": final_state}
     except Exception as e:
         # Log the exception details for debugging
         print(f"Error invoking agent graph: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing agent request: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error processing agent request: {str(e)}"
+        )
+
 
 # To run this app (from the project root directory):
 # uvicorn app.main:app --reload

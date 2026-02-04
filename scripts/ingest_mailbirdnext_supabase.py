@@ -20,7 +20,6 @@ from supabase import Client, create_client  # type: ignore
 from app.db.embedding.utils import get_embedding_model
 from app.db.embedding_config import EXPECTED_DIM, assert_dim
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge_mailbirdnext"
 
@@ -48,7 +47,9 @@ def provider_markdown(slug: str, data: Dict[str, Any]) -> str:
             cfg = incoming.get(proto)
             if not cfg:
                 continue
-            lines.append(f"- {proto.upper()}: {cfg.get('host')}:{cfg.get('port')} ({cfg.get('security')})")
+            lines.append(
+                f"- {proto.upper()}: {cfg.get('host')}:{cfg.get('port')} ({cfg.get('security')})"
+            )
         return lines
 
     def _fmt_outgoing() -> str:
@@ -89,7 +90,9 @@ def provider_markdown(slug: str, data: Dict[str, Any]) -> str:
 def build_entries() -> List[Dict[str, Any]]:
     md_technical = load_text(KNOWLEDGE_DIR / "mailbird_technical_knowledge.md")
     md_troubleshoot = load_text(KNOWLEDGE_DIR / "mailbird_troubleshooting_guide.md")
-    providers_data = load_provider_settings(KNOWLEDGE_DIR / "mailbird_provider_settings.json")
+    providers_data = load_provider_settings(
+        KNOWLEDGE_DIR / "mailbird_provider_settings.json"
+    )
 
     entries: List[Dict[str, Any]] = [
         {
@@ -165,7 +168,9 @@ def embed_entries(embedder, entries: List[Dict[str, Any]]) -> None:
 
 def upsert_entries(client: Client, entries: List[Dict[str, Any]]) -> None:
     # Use on_conflict=url to avoid duplicates if rerun
-    resp = client.table("mailbird_knowledge").upsert(entries, on_conflict="url").execute()
+    resp = (
+        client.table("mailbird_knowledge").upsert(entries, on_conflict="url").execute()
+    )
     if getattr(resp, "error", None):
         raise RuntimeError(f"Supabase upsert failed: {resp.error}")
 
@@ -176,7 +181,9 @@ def main() -> None:
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_ANON_KEY")
     if not url or not key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_KEY (or SUPABASE_ANON_KEY) must be set in .env")
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_SERVICE_KEY (or SUPABASE_ANON_KEY) must be set in .env"
+        )
 
     embedder = get_embedding_model()
     entries = build_entries()
@@ -185,7 +192,9 @@ def main() -> None:
     client = create_client(url, key)
     upsert_entries(client, entries)
 
-    print(f"Upserted {len(entries)} MailbirdNext knowledge rows with embeddings (dim={EXPECTED_DIM})")
+    print(
+        f"Upserted {len(entries)} MailbirdNext knowledge rows with embeddings (dim={EXPECTED_DIM})"
+    )
 
 
 if __name__ == "__main__":

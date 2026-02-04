@@ -1,18 +1,22 @@
-'use client';
+"use client";
 
-import Image from '@tiptap/extension-image';
-import { ReactNodeViewRenderer } from '@tiptap/react';
-import { MemoryImageView } from './MemoryImageView';
-import { parseMemoryImageSrc, parseDimensionValue, withSizeFragment } from '@/features/memory/lib/memoryImageSizing';
+import Image from "@tiptap/extension-image";
+import { ReactNodeViewRenderer } from "@tiptap/react";
+import { MemoryImageView } from "./MemoryImageView";
+import {
+  parseMemoryImageSrc,
+  parseDimensionValue,
+  withSizeFragment,
+} from "@/features/memory/lib/memoryImageSizing";
 
 export const MemoryImageExtension = Image.extend({
-  name: 'image',
+  name: "image",
   addNodeView() {
     return ReactNodeViewRenderer(MemoryImageView);
   },
   parseMarkdown: (token, helpers) => {
-    const parsed = parseMemoryImageSrc(token.href || '');
-    return helpers.createNode('image', {
+    const parsed = parseMemoryImageSrc(token.href || "");
+    return helpers.createNode("image", {
       src: parsed.baseSrc,
       title: token.title,
       alt: token.text,
@@ -22,12 +26,12 @@ export const MemoryImageExtension = Image.extend({
   },
   renderMarkdown: (node) => {
     const src = withSizeFragment(
-      node.attrs?.src ?? '',
+      node.attrs?.src ?? "",
       parseDimensionValue(node.attrs?.width),
-      parseDimensionValue(node.attrs?.height)
+      parseDimensionValue(node.attrs?.height),
     );
-    const alt = node.attrs?.alt ?? '';
-    const title = node.attrs?.title ?? '';
+    const alt = node.attrs?.alt ?? "";
+    const title = node.attrs?.title ?? "";
     return title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
   },
 });

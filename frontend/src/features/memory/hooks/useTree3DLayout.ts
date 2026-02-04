@@ -1,16 +1,27 @@
-import { hierarchy, tree as d3Tree } from 'd3-hierarchy';
-import { useMemo } from 'react';
-import * as THREE from 'three';
-import type { CycleEdge, EntityType, TreeEdge, TreeNodeData, TreeTransformResult } from '../types';
-import { clamp, getParticleCount, hashStringToUint32, mulberry32 } from '../lib/tree3DGeometry';
-import { spatialKMeans, type Vec3 } from '../lib/spatialClustering';
+import { hierarchy, tree as d3Tree } from "d3-hierarchy";
+import { useMemo } from "react";
+import * as THREE from "three";
+import type {
+  CycleEdge,
+  EntityType,
+  TreeEdge,
+  TreeNodeData,
+  TreeTransformResult,
+} from "../types";
+import {
+  clamp,
+  getParticleCount,
+  hashStringToUint32,
+  mulberry32,
+} from "../lib/tree3DGeometry";
+import { spatialKMeans, type Vec3 } from "../lib/spatialClustering";
 
-export type NodeFreshness = 'fresh' | 'stale';
+export type NodeFreshness = "fresh" | "stale";
 
-export type RenderNodeKind = 'entity' | 'cluster';
+export type RenderNodeKind = "entity" | "cluster";
 
 export interface TreeNode3D {
-  kind: 'entity';
+  kind: "entity";
   id: string;
   data: TreeNodeData;
   position: THREE.Vector3;
@@ -25,7 +36,7 @@ export interface TreeNode3D {
 }
 
 export interface TreeCluster3D {
-  kind: 'cluster';
+  kind: "cluster";
   id: string;
   position: THREE.Vector3;
   depth: number;
@@ -38,9 +49,9 @@ export interface TreeCluster3D {
 
 export type TreeRenderableNode3D = TreeNode3D | TreeCluster3D;
 
-export type BranchStrengthTier = 'weak' | 'medium' | 'strong';
+export type BranchStrengthTier = "weak" | "medium" | "strong";
 
-export type GapReason = 'review' | 'confidence' | 'weak' | null;
+export type GapReason = "review" | "confidence" | "weak" | null;
 
 export interface TreeLink3D {
   key: string;
@@ -80,24 +91,24 @@ function toTimeMs(value: string | null | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-function getFreshness(node: TreeNodeData['node']): NodeFreshness {
+function getFreshness(node: TreeNodeData["node"]): NodeFreshness {
   const acknowledgedMs = toTimeMs(node.acknowledgedAt);
-  if (!acknowledgedMs) return 'fresh';
+  if (!acknowledgedMs) return "fresh";
 
   const lastModifiedMs = toTimeMs(node.lastModifiedAt);
-  if (!lastModifiedMs) return 'stale';
+  if (!lastModifiedMs) return "stale";
 
-  return lastModifiedMs > acknowledgedMs ? 'fresh' : 'stale';
+  return lastModifiedMs > acknowledgedMs ? "fresh" : "stale";
 }
 
 function toRankTier(rank: number, total: number): BranchStrengthTier {
-  if (total <= 1) return 'medium';
-  if (total === 2) return rank === 0 ? 'weak' : 'strong';
+  if (total <= 1) return "medium";
+  if (total === 2) return rank === 0 ? "weak" : "strong";
 
   const percentile = rank / (total - 1);
-  if (percentile <= 0.25) return 'weak';
-  if (percentile >= 0.75) return 'strong';
-  return 'medium';
+  if (percentile <= 0.25) return "weak";
+  if (percentile >= 0.75) return "strong";
+  return "medium";
 }
 
 function getRelationshipNeedsReview(input: {
@@ -128,13 +139,13 @@ function makePseudoPoint(childId: string): Vec3 {
 
 type LayoutItem =
   | {
-      kind: 'entity';
+      kind: "entity";
       id: string;
       treeNode: TreeNodeData;
       children: LayoutItem[];
     }
   | {
-      kind: 'cluster';
+      kind: "cluster";
       id: string;
       parentEntityId: string;
       memberNodes: readonly TreeNodeData[];
@@ -150,9 +161,14 @@ export function useTree3DLayout(
     selectedNodeId: string | null;
     maxChildrenVisible: number;
     showAllLabels: boolean;
-  }
+  },
 ): TreeLayout3D {
-  const { expandedNodeIdSet, selectedNodeId, maxChildrenVisible, showAllLabels } = options;
+  const {
+    expandedNodeIdSet,
+    selectedNodeId,
+    maxChildrenVisible,
+    showAllLabels,
+  } = options;
 
   return useMemo((): TreeLayout3D => {
     if (!treeResult) {
@@ -189,7 +205,7 @@ export function useTree3DLayout(
 
     const buildEntityItem = (node: TreeNodeData): LayoutItem => {
       if (!effectiveExpanded.has(node.id)) {
-        return { kind: 'entity', id: node.id, treeNode: node, children: [] };
+        return { kind: "entity", id: node.id, treeNode: node, children: [] };
       }
 
       const requestedChildId = requiredChildByParentId.get(node.id) ?? null;
@@ -197,23 +213,33 @@ export function useTree3DLayout(
 
       if (childCount >= DENSE_CHILDREN_THRESHOLD) {
         const k = getClusterCount(childCount);
-        const sortedChildren = [...node.children].sort((a, b) => a.id.localeCompare(b.id));
+        const sortedChildren = [...node.children].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        );
         const clusters = spatialKMeans(sortedChildren, {
           k,
           seed: hashStringToUint32(`kmeans:${node.id}`),
           getPoint: (child) => makePseudoPoint(child.id),
         })
           .map((cluster) => {
-            const memberNodes = [...cluster.items].sort((a, b) => a.id.localeCompare(b.id));
+            const memberNodes = [...cluster.items].sort((a, b) =>
+              a.id.localeCompare(b.id),
+            );
             const memberNodeIds = memberNodes.map((c) => c.id);
             const clusterHash = hashStringToUint32(
-              `${node.id}|${memberNodeIds.join(',')}`
+              `${node.id}|${memberNodeIds.join(",")}`,
             ).toString(36);
             const id = `cluster:${node.id}:${clusterHash}`;
             const memberTypes = new Set<EntityType>(
-              memberNodes.map((m) => m.node.entityType)
+              memberNodes.map((m) => m.node.entityType),
             );
-            return { id, memberNodes, memberNodeIds, memberTypes, centroid: cluster.centroid };
+            return {
+              id,
+              memberNodes,
+              memberNodeIds,
+              memberTypes,
+              centroid: cluster.centroid,
+            };
           })
           .sort((a, b) => {
             const aAngle = Math.atan2(a.centroid[2], a.centroid[0]);
@@ -223,7 +249,9 @@ export function useTree3DLayout(
 
         // Ensure the path to the selected node stays visible even if it falls inside a cluster.
         if (requestedChildId) {
-          const clusterWithRequired = clusters.find((c) => c.memberNodeIds.includes(requestedChildId));
+          const clusterWithRequired = clusters.find((c) =>
+            c.memberNodeIds.includes(requestedChildId),
+          );
           if (clusterWithRequired) {
             effectiveExpanded.add(clusterWithRequired.id);
           }
@@ -232,22 +260,34 @@ export function useTree3DLayout(
         const clusterItems: LayoutItem[] = clusters.map((cluster) => {
           const expanded = effectiveExpanded.has(cluster.id);
           return {
-            kind: 'cluster',
+            kind: "cluster",
             id: cluster.id,
             parentEntityId: node.id,
             memberNodes: cluster.memberNodes,
             memberNodeIds: cluster.memberNodeIds,
             memberTypes: cluster.memberTypes,
-            children: expanded ? cluster.memberNodes.map((m) => buildEntityItem(m)) : [],
+            children: expanded
+              ? cluster.memberNodes.map((m) => buildEntityItem(m))
+              : [],
           };
         });
 
-        return { kind: 'entity', id: node.id, treeNode: node, children: clusterItems };
+        return {
+          kind: "entity",
+          id: node.id,
+          treeNode: node,
+          children: clusterItems,
+        };
       }
 
       let visibleChildren = node.children.slice(0, maxChildrenVisible);
-      if (requestedChildId && !visibleChildren.some((c) => c.id === requestedChildId)) {
-        const requiredChild = node.children.find((c) => c.id === requestedChildId);
+      if (
+        requestedChildId &&
+        !visibleChildren.some((c) => c.id === requestedChildId)
+      ) {
+        const requiredChild = node.children.find(
+          (c) => c.id === requestedChildId,
+        );
         if (requiredChild) {
           visibleChildren = [
             ...visibleChildren.slice(0, Math.max(0, maxChildrenVisible - 1)),
@@ -257,7 +297,7 @@ export function useTree3DLayout(
       }
 
       return {
-        kind: 'entity',
+        kind: "entity",
         id: node.id,
         treeNode: node,
         children: visibleChildren.map((child) => buildEntityItem(child)),
@@ -270,10 +310,13 @@ export function useTree3DLayout(
 
     const descendants = rootHierarchy.descendants();
     const maxDepth = Math.max(0, ...descendants.map((d) => d.depth));
-    const maxLabelLen = Math.max(0, ...descendants.map((d) => {
-      if (d.data.kind !== 'entity') return 0;
-      return d.data.treeNode.node.displayLabel?.length ?? 0;
-    }));
+    const maxLabelLen = Math.max(
+      0,
+      ...descendants.map((d) => {
+        if (d.data.kind !== "entity") return 0;
+        return d.data.treeNode.node.displayLabel?.length ?? 0;
+      }),
+    );
 
     const labelScale = showAllLabels ? 1 + Math.min(1.6, maxLabelLen / 28) : 1;
 
@@ -284,13 +327,14 @@ export function useTree3DLayout(
     const avgPerLevel = descendants.length / Math.max(1, maxDepth + 1);
     const densityScale = clamp(1 / Math.sqrt(avgPerLevel / 12), 0.55, 1);
 
-    const baseRadiusStep = (showAllLabels ? 3.2 * labelScale : 2.4) * densityScale;
+    const baseRadiusStep =
+      (showAllLabels ? 3.2 * labelScale : 2.4) * densityScale;
     const layoutRadius = Math.max(5.5, (maxDepth + 1) * baseRadiusStep);
 
     const treeLayout = d3Tree<LayoutItem>().size([2 * Math.PI, layoutRadius]);
     if (showAllLabels) {
       treeLayout.separation((a, b) => {
-        if (a.data.kind !== 'entity' || b.data.kind !== 'entity') {
+        if (a.data.kind !== "entity" || b.data.kind !== "entity") {
           return a.parent === b.parent ? 1 : 1.8;
         }
 
@@ -323,8 +367,12 @@ export function useTree3DLayout(
       if (siblingCount <= 1) return 1;
 
       const depthTighten = clamp(0.88 - parent.depth * 0.075, 0.58, 0.92);
-      const countTighten = clamp(1 - Math.max(0, siblingCount - 4) * 0.028, 0.72, 1);
-      const kindTighten = parent.data.kind === 'cluster' ? 0.9 : 1;
+      const countTighten = clamp(
+        1 - Math.max(0, siblingCount - 4) * 0.028,
+        0.72,
+        1,
+      );
+      const kindTighten = parent.data.kind === "cluster" ? 0.9 : 1;
       return clamp(depthTighten * countTighten * kindTighten, 0.54, 0.94);
     };
 
@@ -369,7 +417,9 @@ export function useTree3DLayout(
       const last = indexed[indexed.length - 1]?.delta ?? 0;
       const centerOffset = -((first + last) / 2);
 
-      const finalChildAngles: number[] = new Array(node.children.length).fill(0);
+      const finalChildAngles: number[] = new Array(node.children.length).fill(
+        0,
+      );
       for (const entry of indexed) {
         finalChildAngles[entry.idx] = nextAngle + entry.delta + centerOffset;
       }
@@ -396,15 +446,15 @@ export function useTree3DLayout(
       const jitterBase = showAllLabels ? 0.26 : 0.42;
       const jitterScale =
         Math.min(1, n.depth / 3) *
-        (n.data.kind === 'cluster' ? jitterBase * 0.35 : jitterBase);
+        (n.data.kind === "cluster" ? jitterBase * 0.35 : jitterBase);
       const jitterX = (rng() - 0.5) * jitterScale;
       const jitterZ = (rng() - 0.5) * jitterScale;
 
       const renderParentId = n.parent?.data.id ?? null;
 
-      if (n.data.kind === 'cluster') {
+      if (n.data.kind === "cluster") {
         const clusterNode: TreeCluster3D = {
-          kind: 'cluster',
+          kind: "cluster",
           id: n.data.id,
           position: new THREE.Vector3(x + jitterX, y, z + jitterZ),
           depth: n.depth,
@@ -426,7 +476,7 @@ export function useTree3DLayout(
       const connectionCount = childCount + (n.data.treeNode.parentId ? 1 : 0);
 
       const entityNode: TreeNode3D = {
-        kind: 'entity',
+        kind: "entity",
         id: n.data.id,
         data: n.data.treeNode,
         position: new THREE.Vector3(x + jitterX, y, z + jitterZ),
@@ -436,7 +486,10 @@ export function useTree3DLayout(
         isExpanded,
         overflowCount,
         connectionCount,
-        foliageCount: getParticleCount(n.data.treeNode.node.occurrenceCount, connectionCount),
+        foliageCount: getParticleCount(
+          n.data.treeNode.node.occurrenceCount,
+          connectionCount,
+        ),
         freshness: getFreshness(n.data.treeNode.node),
       };
 
@@ -452,7 +505,8 @@ export function useTree3DLayout(
         const target = renderableById.get(l.target.data.id);
         if (!source || !target) return null;
 
-        const edge = target.kind === 'entity' ? target.data.parentEdge ?? null : null;
+        const edge =
+          target.kind === "entity" ? (target.data.parentEdge ?? null) : null;
         const occurrenceCount = edge?.occurrenceCount ?? 1;
         const weight = edge?.weight ?? 0.5;
         const weightNorm = clamp(weight, 0, 10) / 10;
@@ -464,7 +518,7 @@ export function useTree3DLayout(
               getRelationshipNeedsReview({
                 acknowledgedAt: rel.acknowledgedAt ?? null,
                 lastModifiedAt: rel.lastModifiedAt ?? null,
-              })
+              }),
             )
           : false;
 
@@ -480,16 +534,14 @@ export function useTree3DLayout(
           needsReview,
         };
       })
-      .filter(
-        (
-          link
-        ): link is NonNullable<
-          typeof link
-        > => Boolean(link)
-      );
+      .filter((link): link is NonNullable<typeof link> => Boolean(link));
 
-    const sortedByStrength = [...provisionalLinks].sort((a, b) => a.rawScore - b.rawScore);
-    const sortedByWeight = [...provisionalLinks].sort((a, b) => a.weightNorm - b.weightNorm);
+    const sortedByStrength = [...provisionalLinks].sort(
+      (a, b) => a.rawScore - b.rawScore,
+    );
+    const sortedByWeight = [...provisionalLinks].sort(
+      (a, b) => a.weightNorm - b.weightNorm,
+    );
 
     const strengthRankByKey = new Map<string, number>();
     sortedByStrength.forEach((l, idx) => strengthRankByKey.set(l.key, idx));
@@ -501,7 +553,8 @@ export function useTree3DLayout(
 
     const links: TreeLink3D[] = provisionalLinks.map((link) => {
       const strengthRank = strengthRankByKey.get(link.key) ?? 0;
-      const strengthScore = linkCount <= 1 ? 0.5 : strengthRank / (linkCount - 1);
+      const strengthScore =
+        linkCount <= 1 ? 0.5 : strengthRank / (linkCount - 1);
       const strength = toRankTier(strengthRank, linkCount);
 
       const weightRank = weightRankByKey.get(link.key) ?? 0;
@@ -509,11 +562,11 @@ export function useTree3DLayout(
       const lowConfidence = weightScore <= 0.2 || link.weightNorm <= 0.25;
 
       const gapReason: GapReason = link.needsReview
-        ? 'review'
+        ? "review"
         : lowConfidence
-          ? 'confidence'
-          : strength === 'weak'
-            ? 'weak'
+          ? "confidence"
+          : strength === "weak"
+            ? "weak"
             : null;
 
       return {
@@ -555,5 +608,11 @@ export function useTree3DLayout(
       layoutRadius,
       trunkHeight,
     };
-  }, [expandedNodeIdSet, maxChildrenVisible, selectedNodeId, showAllLabels, treeResult]);
+  }, [
+    expandedNodeIdSet,
+    maxChildrenVisible,
+    selectedNodeId,
+    showAllLabels,
+    treeResult,
+  ]);
 }

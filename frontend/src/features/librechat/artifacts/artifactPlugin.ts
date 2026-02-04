@@ -1,25 +1,25 @@
 /**
  * Artifact Detection Plugin for Remark
- * 
+ *
  * A remark plugin that detects artifact directives and code blocks
  * that should be treated as artifacts, and transforms them into
  * artifact nodes for rendering.
- * 
+ *
  * Detection strategies:
  * 1. Explicit ::artifact{} directives
  * 2. ```mermaid code blocks (auto-artifact)
  * 3. ```html/jsx/tsx blocks with `// artifact` marker
  */
 
-import { visit } from 'unist-util-visit';
-import type { Plugin } from 'unified';
-import type { Root, Code, Parent } from 'mdast';
-import { ARTIFACT_DEFAULTS, isArtifactLanguage } from './types';
-import type { ArtifactType, ArtifactDirectiveProps } from './types';
+import { visit } from "unist-util-visit";
+import type { Plugin } from "unified";
+import type { Root, Code, Parent } from "mdast";
+import { ARTIFACT_DEFAULTS, isArtifactLanguage } from "./types";
+import type { ArtifactType, ArtifactDirectiveProps } from "./types";
 
 // Extended node type for directive nodes from remark-directive
 interface DirectiveNode {
-  type: 'textDirective' | 'leafDirective' | 'containerDirective';
+  type: "textDirective" | "leafDirective" | "containerDirective";
   name: string;
   attributes?: Record<string, string>;
   children?: any[];
@@ -51,16 +51,16 @@ function shouldAutoDetectAsArtifact(node: Code): {
   type?: ArtifactType;
   title?: string;
 } {
-  const lang = (node.lang || '').toLowerCase();
-  const content = node.value || '';
-  const firstLine = content.split('\n')[0] || '';
+  const lang = (node.lang || "").toLowerCase();
+  const content = node.value || "";
+  const firstLine = content.split("\n")[0] || "";
 
   // Mermaid blocks are always artifacts
-  if (lang === 'mermaid') {
+  if (lang === "mermaid") {
     return {
       isArtifact: true,
-      type: 'mermaid',
-      title: 'Mermaid Diagram',
+      type: "mermaid",
+      title: "Mermaid Diagram",
     };
   }
 
@@ -69,13 +69,15 @@ function shouldAutoDetectAsArtifact(node: Code): {
   const artifactMarkerPattern = /^(?:\/\/|\/\*|#)\s*artifact(?:\s*\*\/)?/i;
   if (artifactMarkerPattern.test(firstLine.trim())) {
     // Determine type based on language
-    let type: ArtifactType = 'code';
-    if (lang === 'html') type = 'html';
-    else if (lang === 'jsx' || lang === 'tsx') type = 'react';
+    let type: ArtifactType = "code";
+    if (lang === "html") type = "html";
+    else if (lang === "jsx" || lang === "tsx") type = "react";
 
     // Try to extract title from marker: // artifact: My Title
     const titleMatch = firstLine.match(/artifact[:\s]+(.+?)(?:\*\/)?$/i);
-    const title = titleMatch ? titleMatch[1].trim() : `${lang.toUpperCase()} Artifact`;
+    const title = titleMatch
+      ? titleMatch[1].trim()
+      : `${lang.toUpperCase()} Artifact`;
 
     return {
       isArtifact: true,
@@ -95,14 +97,18 @@ export const artifactPlugin: Plugin<[], Root> = () => {
     // First pass: Handle directive nodes (::artifact{})
     visit(
       tree,
-      ['textDirective', 'leafDirective', 'containerDirective'],
+      ["textDirective", "leafDirective", "containerDirective"],
       (node: any, index, parent) => {
         // Handle text directives that aren't artifact - preserve them as text
-        if (node.type === 'textDirective' && node.name !== 'artifact') {
+        if (node.type === "textDirective" && node.name !== "artifact") {
           const replacementText = `:${node.name}`;
-          if (parent && Array.isArray(parent.children) && typeof index === 'number') {
+          if (
+            parent &&
+            Array.isArray(parent.children) &&
+            typeof index === "number"
+          ) {
             parent.children[index] = {
-              type: 'text',
+              type: "text",
               value: replacementText,
             };
           }
@@ -110,7 +116,7 @@ export const artifactPlugin: Plugin<[], Root> = () => {
         }
 
         // Only process artifact directives
-        if (node.name !== 'artifact') {
+        if (node.name !== "artifact") {
           return;
         }
 
@@ -118,7 +124,7 @@ export const artifactPlugin: Plugin<[], Root> = () => {
 
         // Transform directive to custom artifact node
         node.data = {
-          hName: 'artifact',
+          hName: "artifact",
           hProperties: {
             type: attrs.type || ARTIFACT_DEFAULTS.type,
             title: attrs.title || ARTIFACT_DEFAULTS.title,
@@ -129,11 +135,11 @@ export const artifactPlugin: Plugin<[], Root> = () => {
         };
 
         return node;
-      }
+      },
     );
 
     // Second pass: Handle code blocks that should be artifacts
-    visit(tree, 'code', (node: Code, index, parent: Parent | undefined) => {
+    visit(tree, "code", (node: Code, index, parent: Parent | undefined) => {
       const detection = shouldAutoDetectAsArtifact(node);
 
       if (detection.isArtifact) {
@@ -158,43 +164,45 @@ export const artifactPlugin: Plugin<[], Root> = () => {
  * Extract text content from React children (for artifact content extraction)
  */
 export function extractContent(children: React.ReactNode): string {
-  if (typeof children === 'string') {
+  if (typeof children === "string") {
     return children;
   }
 
   if (Array.isArray(children)) {
-    return children.map(extractContent).join('');
+    return children.map(extractContent).join("");
   }
 
-  if (children && typeof children === 'object' && 'props' in children) {
+  if (children && typeof children === "object" && "props" in children) {
     const props = children.props as { children?: React.ReactNode };
     if (props.children) {
       return extractContent(props.children);
     }
   }
 
-  return '';
+  return "";
 }
 
 /**
  * Parse artifact attributes from directive string
  * Example: ::artifact{type="mermaid" title="System Diagram"}
  */
-export function parseArtifactAttributes(attrString: string): ArtifactDirectiveProps {
+export function parseArtifactAttributes(
+  attrString: string,
+): ArtifactDirectiveProps {
   const attrs: ArtifactDirectiveProps = {};
-  
+
   // Match key="value" patterns
   const attrPattern = /(\w+)="([^"]+)"/g;
   let match;
-  
+
   while ((match = attrPattern.exec(attrString)) !== null) {
     const [, key, value] = match;
-    if (key === 'type') attrs.type = value;
-    else if (key === 'title') attrs.title = value;
-    else if (key === 'identifier') attrs.identifier = value;
-    else if (key === 'language') attrs.language = value;
+    if (key === "type") attrs.type = value;
+    else if (key === "title") attrs.title = value;
+    else if (key === "identifier") attrs.identifier = value;
+    else if (key === "language") attrs.language = value;
   }
-  
+
   return attrs;
 }
 

@@ -154,7 +154,9 @@ def glob_match_files(
         List of matching file objects.
     """
     if path_extractor is None:
-        path_extractor = lambda f: getattr(f, "path", str(f))
+
+        def path_extractor(f: Any) -> str:
+            return getattr(f, "path", str(f))
 
     matched = []
     for file_info in files:

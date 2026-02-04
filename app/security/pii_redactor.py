@@ -6,7 +6,9 @@ import re
 from typing import Any, Iterable
 
 EMAIL_PATTERN = re.compile(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", re.IGNORECASE)
-PHONE_PATTERN = re.compile(r"(?:\+?\d{1,3}[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}")
+PHONE_PATTERN = re.compile(
+    r"(?:\+?\d{1,3}[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}"
+)
 IPV4_PATTERN = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
 )
@@ -16,8 +18,12 @@ UUID_PATTERN = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
     re.IGNORECASE,
 )
-LICENSE_KEY_PATTERN = re.compile(r"\b[a-z0-9]{4,6}(?:-[a-z0-9]{4,6}){2,}\b", re.IGNORECASE)
-MIXED_ALNUM_TOKEN_PATTERN = re.compile(r"\b(?=[a-z0-9]{20,}\b)(?=.*[a-z])(?=.*\d)[a-z0-9]+\b", re.IGNORECASE)
+LICENSE_KEY_PATTERN = re.compile(
+    r"\b[a-z0-9]{4,6}(?:-[a-z0-9]{4,6}){2,}\b", re.IGNORECASE
+)
+MIXED_ALNUM_TOKEN_PATTERN = re.compile(
+    r"\b(?=[a-z0-9]{20,}\b)(?=.*[a-z])(?=.*\d)[a-z0-9]+\b", re.IGNORECASE
+)
 
 
 def contains_pii(text: str) -> bool:

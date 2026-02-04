@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import argparse
 import asyncio
 import json
@@ -8,7 +10,7 @@ import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import sys
 
@@ -20,7 +22,6 @@ from app.core.settings import settings
 from app.integrations.zendesk.client import ZendeskClient
 from app.integrations.zendesk import scheduler
 from app.security.pii_redactor import redact_sensitive
-
 
 logger = logging.getLogger("zendesk_phase6")
 
@@ -138,7 +139,11 @@ async def _audit_internal_retrieval(
     ticket_id: int,
     subject: str | None,
     description: str | None,
-) -> tuple[scheduler.ZendeskQueryAgentIntent | None, scheduler.ZendeskInternalRetrievalPreflight | None, str]:
+) -> tuple[
+    scheduler.ZendeskQueryAgentIntent | None,
+    scheduler.ZendeskInternalRetrievalPreflight | None,
+    str,
+]:
     subject_s = str(subject or "").strip()
     description_s = str(description or "").strip()
     ticket_text = "\n\n".join([p for p in (subject_s, description_s) if p]).strip()
@@ -146,13 +151,19 @@ async def _audit_internal_retrieval(
     if not ticket_text:
         return None, None, ""
 
-    intent, base_text, retrieval_query = scheduler._zendesk_build_query_agent_intent_and_query(
-        ticket_text=ticket_text,
-        subject=subject_s if subject_s else None,
+    intent, base_text, retrieval_query = (
+        scheduler._zendesk_build_query_agent_intent_and_query(
+            ticket_text=ticket_text,
+            subject=subject_s if subject_s else None,
+        )
     )
 
-    decomposition_enabled = bool(getattr(settings, "zendesk_query_decomposition_enabled", True))
-    decomposition_max_subqueries = int(getattr(settings, "zendesk_query_decomposition_max_subqueries", 3))
+    decomposition_enabled = bool(
+        getattr(settings, "zendesk_query_decomposition_enabled", True)
+    )
+    decomposition_max_subqueries = int(
+        getattr(settings, "zendesk_query_decomposition_max_subqueries", 3)
+    )
     issue_segments: list[str] = []
     if decomposition_enabled and intent is not None:
         issue_segments = scheduler._zendesk_extract_issue_segments(
@@ -161,23 +172,31 @@ async def _audit_internal_retrieval(
         )
 
     min_rel = float(getattr(settings, "zendesk_internal_retrieval_min_relevance", 0.35))
-    max_per_source = int(getattr(settings, "zendesk_internal_retrieval_max_per_source", 3))
-    confidence_threshold = float(getattr(settings, "zendesk_query_confidence_threshold", 0.6))
-    max_reformulations = int(getattr(settings, "zendesk_query_reformulation_max_attempts", 2))
+    max_per_source = int(
+        getattr(settings, "zendesk_internal_retrieval_max_per_source", 3)
+    )
+    confidence_threshold = float(
+        getattr(settings, "zendesk_query_confidence_threshold", 0.6)
+    )
+    max_reformulations = int(
+        getattr(settings, "zendesk_query_reformulation_max_attempts", 2)
+    )
     expansion_count = int(getattr(settings, "zendesk_query_expansion_count", 2))
 
     if intent is not None and len(issue_segments) > 1:
-        preflight = await scheduler._zendesk_run_multi_issue_internal_retrieval_preflight(
-            subject=subject_s if subject_s else None,
-            base_text=base_text,
-            intent=intent,
-            issue_segments=issue_segments,
-            min_relevance=min_rel,
-            max_per_source=max_per_source,
-            max_subqueries=decomposition_max_subqueries,
-            confidence_threshold=confidence_threshold,
-            max_reformulations=max_reformulations,
-            expansion_count=expansion_count,
+        preflight = (
+            await scheduler._zendesk_run_multi_issue_internal_retrieval_preflight(
+                subject=subject_s if subject_s else None,
+                base_text=base_text,
+                intent=intent,
+                issue_segments=issue_segments,
+                min_relevance=min_rel,
+                max_per_source=max_per_source,
+                max_subqueries=decomposition_max_subqueries,
+                confidence_threshold=confidence_threshold,
+                max_reformulations=max_reformulations,
+                expansion_count=expansion_count,
+            )
         )
     else:
         preflight = await scheduler._zendesk_run_internal_retrieval_preflight(
@@ -211,8 +230,12 @@ async def _build_policy_context(
     try:
         if scheduler._ticket_wants_refund(ticket_text):
             hint_text = f"{subject}\n{description}".lower()
-            wants_yearly = bool(re.search(r"\b(yearly|annual|subscription)\b", hint_text))
-            wants_pay_once = bool(re.search(r"\b(pay\s*once|lifetime|one[- ]time)\b", hint_text))
+            wants_yearly = bool(
+                re.search(r"\b(yearly|annual|subscription)\b", hint_text)
+            )
+            wants_pay_once = bool(
+                re.search(r"\b(pay\s*once|lifetime|one[- ]time)\b", hint_text)
+            )
             if wants_yearly and not wants_pay_once:
                 macro = await scheduler._fetch_zendesk_macro_by_title(
                     scheduler._POLICY_MACRO_TITLES["refund_yearly"]
@@ -271,14 +294,18 @@ async def _process_one_ticket(
         description=str(description or ""),
         ticket_text=ticket_text,
     )
-    internal_chars, _internal_words, internal_tokens_est = scheduler._text_stats(internal_context)
+    internal_chars, _internal_words, internal_tokens_est = scheduler._text_stats(
+        internal_context
+    )
 
     feedme_audit: list[Phase6FeedmeAudit] = []
     if preflight is not None:
         for item in preflight.retrieved_results or []:
             if not isinstance(item, dict) or item.get("source") != "feedme":
                 continue
-            meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            meta = (
+                item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            )
             conv_raw = meta.get("id") or meta.get("conversation_id")
             try:
                 conv_id = int(conv_raw)
@@ -291,9 +318,19 @@ async def _process_one_ticket(
                 Phase6FeedmeAudit(
                     conversation_id=conv_id,
                     hydration=str(hydration) if hydration is not None else None,
-                    matched_chunks=len(matched_indices) if isinstance(matched_indices, list) else 0,
-                    hydrated_chunks=len(hydrated_indices) if isinstance(hydrated_indices, list) else 0,
-                    hydrated_window=meta.get("hydrated_window") if isinstance(meta.get("hydrated_window"), dict) else None,
+                    matched_chunks=(
+                        len(matched_indices) if isinstance(matched_indices, list) else 0
+                    ),
+                    hydrated_chunks=(
+                        len(hydrated_indices)
+                        if isinstance(hydrated_indices, list)
+                        else 0
+                    ),
+                    hydrated_window=(
+                        meta.get("hydrated_window")
+                        if isinstance(meta.get("hydrated_window"), dict)
+                        else None
+                    ),
                     content_chars=len(str(item.get("content") or "")),
                 )
             )
@@ -311,7 +348,9 @@ async def _process_one_ticket(
 
     use_html = bool(getattr(settings, "zendesk_use_html", True))
     strictness = str(getattr(settings, "zendesk_drift_guard_strictness", "medium"))
-    evidence_text = "\n\n".join([p for p in [internal_context, policy_context] if p]).strip()
+    evidence_text = "\n\n".join(
+        [p for p in [internal_context, policy_context] if p]
+    ).strip()
     reply_validation: list[str] = []
     reply_topic_drift: list[str] = []
     reply_risk: list[str] = []
@@ -349,11 +388,17 @@ async def _process_one_ticket(
         comments = await asyncio.to_thread(zc.get_ticket_comments, ticket_id, 5)
         comment = _pick_recent_private_comment(comments, posted_after=posted_after)
         if comment:
-            posted_comment_id = comment.get("id") if isinstance(comment.get("id"), int) else None
-            posted_comment_public = bool(comment.get("public")) if "public" in comment else None
+            posted_comment_id = (
+                comment.get("id") if isinstance(comment.get("id"), int) else None
+            )
+            posted_comment_public = (
+                bool(comment.get("public")) if "public" in comment else None
+            )
             posted_text, posted_is_html = _best_effort_reply_text_from_comment(comment)
 
-            posted_validation = scheduler._quality_gate_issues(posted_text, use_html=posted_is_html)
+            posted_validation = scheduler._quality_gate_issues(
+                posted_text, use_html=posted_is_html
+            )
             posted_topic_drift = scheduler._topic_drift_issues(
                 posted_text,
                 ticket_text=ticket_text,
@@ -362,10 +407,10 @@ async def _process_one_ticket(
             )
             posted_risk = scheduler._risk_statement_issues(
                 posted_text,
-                    ticket_text=ticket_text,
-                    evidence_text=evidence_text,
-                    intent=intent,
-                )
+                ticket_text=ticket_text,
+                evidence_text=evidence_text,
+                intent=intent,
+            )
     elif verify_posted:
         comments = await asyncio.to_thread(zc.get_ticket_comments, ticket_id, 10)
         comment = None
@@ -377,11 +422,17 @@ async def _process_one_ticket(
             comment = c
             break
         if comment:
-            posted_comment_id = comment.get("id") if isinstance(comment.get("id"), int) else None
-            posted_comment_public = bool(comment.get("public")) if "public" in comment else None
+            posted_comment_id = (
+                comment.get("id") if isinstance(comment.get("id"), int) else None
+            )
+            posted_comment_public = (
+                bool(comment.get("public")) if "public" in comment else None
+            )
             posted_text, posted_is_html = _best_effort_reply_text_from_comment(comment)
 
-            posted_validation = scheduler._quality_gate_issues(posted_text, use_html=posted_is_html)
+            posted_validation = scheduler._quality_gate_issues(
+                posted_text, use_html=posted_is_html
+            )
             posted_topic_drift = scheduler._topic_drift_issues(
                 posted_text,
                 ticket_text=ticket_text,
@@ -410,8 +461,12 @@ async def _process_one_ticket(
         posted_risk_issues=posted_risk,
         internal_context_chars=internal_chars,
         internal_context_tokens_est=internal_tokens_est,
-        retrieval_best_score=float(preflight.best_score) if preflight is not None else 0.0,
-        retrieval_confidence=float(preflight.confidence) if preflight is not None else 0.0,
+        retrieval_best_score=(
+            float(preflight.best_score) if preflight is not None else 0.0
+        ),
+        retrieval_confidence=(
+            float(preflight.confidence) if preflight is not None else 0.0
+        ),
         macro_hits=int(preflight.macro_hits) if preflight is not None else 0,
         kb_hits=int(preflight.kb_hits) if preflight is not None else 0,
         feedme_hits=int(preflight.feedme_hits) if preflight is not None else 0,
@@ -461,9 +516,19 @@ async def main() -> None:
         default=[],
         help="Zendesk ticket id or agent URL (repeatable).",
     )
-    parser.add_argument("--provider", default="google", help='Agent provider (default: "google")')
-    parser.add_argument("--model", default="gemini-2.5-pro", help='Agent model (default: "gemini-2.5-pro")')
-    parser.add_argument("--post", action="store_true", help="Actually post internal notes (otherwise dry-run).")
+    parser.add_argument(
+        "--provider", default="google", help='Agent provider (default: "google")'
+    )
+    parser.add_argument(
+        "--model",
+        default="gemini-2.5-pro",
+        help='Agent model (default: "gemini-2.5-pro")',
+    )
+    parser.add_argument(
+        "--post",
+        action="store_true",
+        help="Actually post internal notes (otherwise dry-run).",
+    )
     parser.add_argument(
         "--verify-posted",
         action="store_true",
@@ -474,9 +539,15 @@ async def main() -> None:
         action="store_true",
         help="Skip generating a new reply (use with --verify-posted to only validate what’s already posted).",
     )
-    parser.add_argument("--tag", default="", help="Optional Zendesk tag to add when posting.")
-    parser.add_argument("--sleep-sec", type=float, default=0.7, help="Sleep between tickets (seconds).")
-    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument(
+        "--tag", default="", help="Optional Zendesk tag to add when posting."
+    )
+    parser.add_argument(
+        "--sleep-sec", type=float, default=0.7, help="Sleep between tickets (seconds)."
+    )
+    parser.add_argument(
+        "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
+    )
     args = parser.parse_args()
 
     if bool(args.post) and bool(args.skip_generate):
@@ -585,22 +656,46 @@ async def main() -> None:
                 **{
                     k: v
                     for k, v in asdict(r).items()
-                    if k not in {"feedme_audit", "reply_validation_issues", "reply_topic_drift_issues", "reply_risk_issues", "posted_validation_issues", "posted_topic_drift_issues", "posted_risk_issues"}
+                    if k
+                    not in {
+                        "feedme_audit",
+                        "reply_validation_issues",
+                        "reply_topic_drift_issues",
+                        "reply_risk_issues",
+                        "posted_validation_issues",
+                        "posted_topic_drift_issues",
+                        "posted_risk_issues",
+                    }
                 },
                 "feedme_audit": [asdict(a) for a in r.feedme_audit],
-                "reply_validation_issues": [redact_sensitive(i) for i in r.reply_validation_issues],
-                "reply_topic_drift_issues": [redact_sensitive(i) for i in r.reply_topic_drift_issues],
+                "reply_validation_issues": [
+                    redact_sensitive(i) for i in r.reply_validation_issues
+                ],
+                "reply_topic_drift_issues": [
+                    redact_sensitive(i) for i in r.reply_topic_drift_issues
+                ],
                 "reply_risk_issues": [redact_sensitive(i) for i in r.reply_risk_issues],
-                "posted_validation_issues": [redact_sensitive(i) for i in r.posted_validation_issues],
-                "posted_topic_drift_issues": [redact_sensitive(i) for i in r.posted_topic_drift_issues],
-                "posted_risk_issues": [redact_sensitive(i) for i in r.posted_risk_issues],
+                "posted_validation_issues": [
+                    redact_sensitive(i) for i in r.posted_validation_issues
+                ],
+                "posted_topic_drift_issues": [
+                    redact_sensitive(i) for i in r.posted_topic_drift_issues
+                ],
+                "posted_risk_issues": [
+                    redact_sensitive(i) for i in r.posted_risk_issues
+                ],
             }
             for r in results
         ],
     }
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    logger.info("phase6_batch_done successes=%s failures=%s json=%s", len(results), len(failures), json_path)
+    logger.info(
+        "phase6_batch_done successes=%s failures=%s json=%s",
+        len(results),
+        len(failures),
+        json_path,
+    )
 
 
 if __name__ == "__main__":

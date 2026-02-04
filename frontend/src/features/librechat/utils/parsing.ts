@@ -1,6 +1,6 @@
 /**
  * Shared parsing utilities for LibreChat feature
- * 
+ *
  * Provides common functions for parsing tool outputs, extracting data,
  * and handling various data formats from the backend.
  */
@@ -19,10 +19,10 @@ const isInternalRetrievalPayload = (value: unknown): boolean => {
   if (Array.isArray(value)) {
     return value.some((item) => isInternalRetrievalPayload(item));
   }
-  if (typeof value !== 'object') return false;
+  if (typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   return (
-    typeof record.retrieval_id === 'string' &&
+    typeof record.retrieval_id === "string" &&
     Array.isArray(record.sources_searched) &&
     Array.isArray(record.results)
   );
@@ -30,20 +30,28 @@ const isInternalRetrievalPayload = (value: unknown): boolean => {
 
 const isStructuredLogPayload = (value: unknown): boolean => {
   const isSegment = (item: Record<string, unknown>): boolean =>
-    'line_range' in item || 'lineRange' in item || 'key_info' in item || 'keyInfo' in item || 'relevance' in item;
+    "line_range" in item ||
+    "lineRange" in item ||
+    "key_info" in item ||
+    "keyInfo" in item ||
+    "relevance" in item;
 
   if (Array.isArray(value)) {
     return value.some((item) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+      if (!item || typeof item !== "object" || Array.isArray(item))
+        return false;
       return isSegment(item as Record<string, unknown>);
     });
   }
-  if (!value || typeof value !== 'object') return false;
+  if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  const containers = ['segments', 'items', 'sections'] as const;
+  const containers = ["segments", "items", "sections"] as const;
   for (const key of containers) {
     const list = record[key];
-    if (Array.isArray(list) && list.some((item) => isSegment(item as Record<string, unknown>))) {
+    if (
+      Array.isArray(list) &&
+      list.some((item) => isSegment(item as Record<string, unknown>))
+    ) {
       return true;
     }
   }
@@ -51,20 +59,27 @@ const isStructuredLogPayload = (value: unknown): boolean => {
 };
 
 const isLogDiagnoserPayload = (value: unknown): boolean => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   const hasEvidence = Array.isArray(record.evidence);
-  const hasIssues = Array.isArray(record.issues) || Array.isArray(record.identified_issues);
+  const hasIssues =
+    Array.isArray(record.issues) || Array.isArray(record.identified_issues);
   const hasActions =
     Array.isArray(record.actions) ||
     Array.isArray(record.recommended_actions) ||
     Array.isArray(record.proposed_solutions);
-  const hasAnswer = typeof record.answer === 'string' || typeof record.summary === 'string';
-  return (hasEvidence && (hasIssues || hasActions)) || (hasAnswer && (hasIssues || hasActions));
+  const hasAnswer =
+    typeof record.answer === "string" || typeof record.summary === "string";
+  return (
+    (hasEvidence && (hasIssues || hasActions)) ||
+    (hasAnswer && (hasIssues || hasActions))
+  );
 };
 
 const isInternalToolPayload = (value: unknown): boolean =>
-  isInternalRetrievalPayload(value) || isStructuredLogPayload(value) || isLogDiagnoserPayload(value);
+  isInternalRetrievalPayload(value) ||
+  isStructuredLogPayload(value) ||
+  isLogDiagnoserPayload(value);
 
 const INTERNAL_MARKER_REGEX =
   /"(retrieval_id|sources_searched|query_understood|customer_ready|internal_notes|recommended_actions|proposed_solutions|line_range|key_info|relevance_score|priority_concerns|identified_issues|structured_log)"/i;
@@ -73,8 +88,10 @@ const tryParseJson = (raw: string): unknown | null => {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   if (
-    !((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-      (trimmed.startsWith('[') && trimmed.endsWith(']')))
+    !(
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    )
   ) {
     return null;
   }
@@ -87,12 +104,12 @@ const tryParseJson = (raw: string): unknown | null => {
 
 export function extractJsonObjects(text: string): string[] {
   const objects: string[] = [];
-  const startIdx = text.indexOf('{');
+  const startIdx = text.indexOf("{");
   if (startIdx < 0) return objects;
 
   let idx = startIdx;
   while (idx >= 0 && idx < text.length) {
-    const start = text.indexOf('{', idx);
+    const start = text.indexOf("{", idx);
     if (start < 0) break;
 
     let depth = 0;
@@ -103,7 +120,7 @@ export function extractJsonObjects(text: string): string[] {
       if (inString) {
         if (escape) {
           escape = false;
-        } else if (ch === '\\') {
+        } else if (ch === "\\") {
           escape = true;
         } else if (ch === '"') {
           inString = false;
@@ -114,8 +131,8 @@ export function extractJsonObjects(text: string): string[] {
         inString = true;
         continue;
       }
-      if (ch === '{') depth += 1;
-      if (ch === '}') depth -= 1;
+      if (ch === "{") depth += 1;
+      if (ch === "}") depth -= 1;
       if (depth === 0) {
         objects.push(text.slice(start, i + 1));
         idx = i + 1;
@@ -136,8 +153,8 @@ export function extractJsonBlocks(text: string): string[] {
 
   let idx = startIdx;
   while (idx >= 0 && idx < text.length) {
-    const braceIdx = text.indexOf('{', idx);
-    const bracketIdx = text.indexOf('[', idx);
+    const braceIdx = text.indexOf("{", idx);
+    const bracketIdx = text.indexOf("[", idx);
     const start =
       braceIdx >= 0 && bracketIdx >= 0
         ? Math.min(braceIdx, bracketIdx)
@@ -146,9 +163,9 @@ export function extractJsonBlocks(text: string): string[] {
           : bracketIdx;
     if (start < 0) break;
 
-    const isArray = text[start] === '[';
-    const openChar = isArray ? '[' : '{';
-    const closeChar = isArray ? ']' : '}';
+    const isArray = text[start] === "[";
+    const openChar = isArray ? "[" : "{";
+    const closeChar = isArray ? "]" : "}";
     let depth = 0;
     let inString = false;
     let escape = false;
@@ -158,7 +175,7 @@ export function extractJsonBlocks(text: string): string[] {
       if (inString) {
         if (escape) {
           escape = false;
-        } else if (ch === '\\') {
+        } else if (ch === "\\") {
           escape = true;
         } else if (ch === '"') {
           inString = false;
@@ -208,7 +225,7 @@ export function stripInternalSearchPayloads(content: string): string {
     const parsed = tryParseJson(inner);
     if (parsed && isInternalToolPayload(parsed)) {
       changed = true;
-      return '';
+      return "";
     }
     return match;
   });
@@ -216,7 +233,7 @@ export function stripInternalSearchPayloads(content: string): string {
   const trimmed = stripCodeFence(cleaned).trim();
   const parsedTop = tryParseJson(trimmed);
   if (parsedTop && isInternalToolPayload(parsedTop)) {
-    return '';
+    return "";
   }
 
   const blocks = extractJsonBlocks(cleaned);
@@ -225,12 +242,12 @@ export function stripInternalSearchPayloads(content: string): string {
     blocks.forEach((block) => {
       const parsed = tryParseJson(block);
       if (parsed && isInternalToolPayload(parsed)) {
-        next = next.replace(block, '');
+        next = next.replace(block, "");
         changed = true;
         return;
       }
       if (hasMarkers && INTERNAL_MARKER_REGEX.test(block)) {
-        next = next.replace(block, '');
+        next = next.replace(block, "");
         changed = true;
       }
     });
@@ -239,13 +256,13 @@ export function stripInternalSearchPayloads(content: string): string {
 
   if (!changed && hasMarkers) {
     const pruned = cleaned
-      .split('\n')
+      .split("\n")
       .filter((line) => !INTERNAL_MARKER_REGEX.test(line))
       .filter((line) => {
         const trimmedLine = line.trim();
-        return !['{', '}', '[', ']'].includes(trimmedLine);
+        return !["{", "}", "[", "]"].includes(trimmedLine);
       })
-      .join('\n');
+      .join("\n");
     cleaned = pruned;
     changed = true;
   }
@@ -254,11 +271,14 @@ export function stripInternalSearchPayloads(content: string): string {
 
   const isPrefaceLine = (line: string): boolean => {
     const lower = line.toLowerCase();
-    if (!/(json|retrieval|sources?\s+searched|kb|macros|feedme)/.test(lower)) return false;
+    if (!/(json|retrieval|sources?\s+searched|kb|macros|feedme)/.test(lower))
+      return false;
     if (
-      /(compile|format|results|following|below|here|required|provide|structured)/.test(lower) ||
-      lower.startsWith('now i have') ||
-      lower.startsWith('let me')
+      /(compile|format|results|following|below|here|required|provide|structured)/.test(
+        lower,
+      ) ||
+      lower.startsWith("now i have") ||
+      lower.startsWith("let me")
     ) {
       return true;
     }
@@ -266,19 +286,22 @@ export function stripInternalSearchPayloads(content: string): string {
   };
 
   const lines = cleaned
-    .split('\n')
+    .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
   const filtered = lines.filter((line) => !isPrefaceLine(line));
 
-  if (!filtered.length) return '';
+  if (!filtered.length) return "";
 
-  const cleanedResult = filtered.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const cleanedResult = filtered
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   if (changed) {
-    const compact = cleanedResult.replace(/\s+/g, ' ').trim();
+    const compact = cleanedResult.replace(/\s+/g, " ").trim();
     const hasSentenceEnd = /[.!?]/.test(compact);
     if (compact.length < 180 && !hasSentenceEnd) {
-      return '';
+      return "";
     }
   }
 
@@ -296,12 +319,12 @@ export function parseToolOutput(output: unknown): Record<string, unknown> {
   if (!output) return {};
 
   // Already an object
-  if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
+  if (typeof output === "object" && output !== null && !Array.isArray(output)) {
     return output as Record<string, unknown>;
   }
 
   // Not a string - can't parse further
-  if (typeof output !== 'string') return {};
+  if (typeof output !== "string") return {};
 
   let text = output.trim();
 
@@ -314,17 +337,20 @@ export function parseToolOutput(output: unknown): Record<string, unknown> {
     const startPos = 9; // Position after "content='"
 
     // Find the JSON start (first { or [)
-    const jsonStartBrace = text.indexOf('{', startPos);
-    const jsonStartBracket = text.indexOf('[', startPos);
-    const jsonStart = jsonStartBrace >= 0 && jsonStartBracket >= 0
-      ? Math.min(jsonStartBrace, jsonStartBracket)
-      : jsonStartBrace >= 0 ? jsonStartBrace : jsonStartBracket;
+    const jsonStartBrace = text.indexOf("{", startPos);
+    const jsonStartBracket = text.indexOf("[", startPos);
+    const jsonStart =
+      jsonStartBrace >= 0 && jsonStartBracket >= 0
+        ? Math.min(jsonStartBrace, jsonStartBracket)
+        : jsonStartBrace >= 0
+          ? jsonStartBrace
+          : jsonStartBracket;
 
     if (jsonStart >= 0) {
       // Find the matching end by counting brackets
-      const isArray = text[jsonStart] === '[';
-      const openChar = isArray ? '[' : '{';
-      const closeChar = isArray ? ']' : '}';
+      const isArray = text[jsonStart] === "[";
+      const openChar = isArray ? "[" : "{";
+      const closeChar = isArray ? "]" : "}";
       let depth = 0;
       let inString = false;
       let escaped = false;
@@ -338,7 +364,7 @@ export function parseToolOutput(output: unknown): Record<string, unknown> {
           continue;
         }
 
-        if (char === '\\') {
+        if (char === "\\") {
           escaped = true;
           continue;
         }
@@ -367,17 +393,19 @@ export function parseToolOutput(output: unknown): Record<string, unknown> {
           text = text.replace(/\\'/g, "'");
         }
         // Handle double-escaped sequences
-        text = text.replace(/\\\\(["\\/bfnrtu])/g, '\\$1');
+        text = text.replace(/\\\\(["\\/bfnrtu])/g, "\\$1");
       }
     }
   }
 
   // Try parsing as JSON
-  if ((text.startsWith('{') && text.endsWith('}')) ||
-    (text.startsWith('[') && text.endsWith(']'))) {
+  if (
+    (text.startsWith("{") && text.endsWith("}")) ||
+    (text.startsWith("[") && text.endsWith("]"))
+  ) {
     try {
       const parsed = JSON.parse(text);
-      if (typeof parsed === 'object' && parsed !== null) {
+      if (typeof parsed === "object" && parsed !== null) {
         return Array.isArray(parsed) ? { items: parsed } : parsed;
       }
     } catch {
@@ -386,17 +414,20 @@ export function parseToolOutput(output: unknown): Record<string, unknown> {
   }
 
   // Try to find JSON object in the string (handles prefix/suffix noise)
-  const braceIdx = text.indexOf('{');
-  const bracketIdx = text.indexOf('[');
-  const startIdx = braceIdx >= 0 && bracketIdx >= 0
-    ? Math.min(braceIdx, bracketIdx)
-    : braceIdx >= 0 ? braceIdx : bracketIdx;
+  const braceIdx = text.indexOf("{");
+  const bracketIdx = text.indexOf("[");
+  const startIdx =
+    braceIdx >= 0 && bracketIdx >= 0
+      ? Math.min(braceIdx, bracketIdx)
+      : braceIdx >= 0
+        ? braceIdx
+        : bracketIdx;
 
   if (startIdx >= 0) {
     // Try to find balanced JSON by bracket counting
-    const isArray = text[startIdx] === '[';
-    const openChar = isArray ? '[' : '{';
-    const closeChar = isArray ? ']' : '}';
+    const isArray = text[startIdx] === "[";
+    const openChar = isArray ? "[" : "{";
+    const closeChar = isArray ? "]" : "}";
     let depth = 0;
     let inString = false;
     let escaped = false;
@@ -410,7 +441,7 @@ export function parseToolOutput(output: unknown): Record<string, unknown> {
         continue;
       }
 
-      if (char === '\\') {
+      if (char === "\\") {
         escaped = true;
         continue;
       }
@@ -436,7 +467,7 @@ export function parseToolOutput(output: unknown): Record<string, unknown> {
       const candidate = text.slice(startIdx, jsonEnd + 1);
       try {
         const parsed = JSON.parse(candidate);
-        if (typeof parsed === 'object' && parsed !== null) {
+        if (typeof parsed === "object" && parsed !== null) {
           return Array.isArray(parsed) ? { items: parsed } : parsed;
         }
       } catch {
@@ -458,10 +489,10 @@ export function extractTodosFromPayload(input: any): any[] {
     const raw = queue.shift();
     if (!raw) continue;
 
-    if (typeof raw === 'string') {
+    if (typeof raw === "string") {
       const stripped = stripCodeFence(raw);
       const direct = stripped.trim();
-      const hasJsonFence = direct.startsWith('{') || direct.startsWith('[');
+      const hasJsonFence = direct.startsWith("{") || direct.startsWith("[");
       if (hasJsonFence) {
         try {
           queue.push(JSON.parse(direct));
@@ -470,14 +501,14 @@ export function extractTodosFromPayload(input: any): any[] {
         }
       } else {
         // Try to extract the first JSON object/array from noisy strings
-        const braceIdx = direct.indexOf('{');
-        const bracketIdx = direct.indexOf('[');
+        const braceIdx = direct.indexOf("{");
+        const bracketIdx = direct.indexOf("[");
         const candidates = [braceIdx, bracketIdx].filter((i) => i >= 0);
         const startIdx = candidates.length ? Math.min(...candidates) : -1;
         if (startIdx >= 0) {
-          const isArray = direct[startIdx] === '[';
-          const openChar = isArray ? '[' : '{';
-          const closeChar = isArray ? ']' : '}';
+          const isArray = direct[startIdx] === "[";
+          const openChar = isArray ? "[" : "{";
+          const closeChar = isArray ? "]" : "}";
           let depth = 0;
           let inString = false;
           let escaped = false;
@@ -491,7 +522,7 @@ export function extractTodosFromPayload(input: any): any[] {
               continue;
             }
 
-            if (char === '\\') {
+            if (char === "\\") {
               escaped = true;
               continue;
             }
@@ -529,10 +560,10 @@ export function extractTodosFromPayload(input: any): any[] {
     if (Array.isArray(raw)) {
       // Normalize array contents to plain objects and drop invalid entries
       const normalized = raw.reduce<any[]>((acc, item) => {
-        if (item && typeof item === 'object' && !Array.isArray(item)) {
+        if (item && typeof item === "object" && !Array.isArray(item)) {
           const todo = { ...item };
           // Provide minimal defaults for common fields
-          if (!('title' in todo) && 'id' in todo) {
+          if (!("title" in todo) && "id" in todo) {
             todo.title = String(todo.id);
           }
           acc.push(todo);
@@ -542,16 +573,17 @@ export function extractTodosFromPayload(input: any): any[] {
       return normalized;
     }
 
-    if (typeof raw === 'object') {
+    if (typeof raw === "object") {
       if (Array.isArray(raw.todos)) return raw.todos;
-      if (Array.isArray((raw as any).result?.todos)) return (raw as any).result.todos;
+      if (Array.isArray((raw as any).result?.todos))
+        return (raw as any).result.todos;
       if (Array.isArray((raw as any).items)) return (raw as any).items;
       if (Array.isArray((raw as any).steps)) return (raw as any).steps;
       if (Array.isArray((raw as any).value)) return (raw as any).value;
       // Explore nested containers for todos
-      const nestedKeys = ['output', 'data', 'result', 'payload', 'content'];
+      const nestedKeys = ["output", "data", "result", "payload", "content"];
       nestedKeys.forEach((key) => {
-        if (raw && typeof raw === 'object' && key in raw) {
+        if (raw && typeof raw === "object" && key in raw) {
           queue.push((raw as any)[key]);
         }
       });

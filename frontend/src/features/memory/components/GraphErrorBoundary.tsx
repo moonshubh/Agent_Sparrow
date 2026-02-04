@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import React, { Component, type ReactNode } from 'react';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import React, { Component, type ReactNode } from "react";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 
 interface Props {
   children: ReactNode;
@@ -35,8 +35,8 @@ export class GraphErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     // Log the error for debugging
-    console.error('MemoryGraph Error:', error);
-    console.error('Component Stack:', errorInfo.componentStack);
+    console.error("MemoryGraph Error:", error);
+    console.error("Component Stack:", errorInfo.componentStack);
 
     this.setState({
       error,
@@ -56,8 +56,8 @@ export class GraphErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       const isWebGLError =
-        this.state.error?.message?.toLowerCase().includes('webgl') ||
-        this.state.error?.message?.toLowerCase().includes('context');
+        this.state.error?.message?.toLowerCase().includes("webgl") ||
+        this.state.error?.message?.toLowerCase().includes("context");
 
       return (
         <div className="graph-error-boundary">
@@ -65,15 +65,15 @@ export class GraphErrorBoundary extends Component<Props, State> {
             <AlertTriangle size={48} className="graph-error-icon" />
             <h3 className="graph-error-title">
               {isWebGLError
-                ? 'WebGL Not Available'
-                : 'Graph Visualization Error'}
+                ? "WebGL Not Available"
+                : "Graph Visualization Error"}
             </h3>
             <p className="graph-error-message">
               {isWebGLError
-                ? 'Your browser or device does not support WebGL, which is required for the 3D graph visualization. Try using a different browser or enabling hardware acceleration.'
-                : 'An error occurred while rendering the knowledge graph. This could be due to memory constraints or an incompatible browser.'}
+                ? "Your browser or device does not support WebGL, which is required for the 3D graph visualization. Try using a different browser or enabling hardware acceleration."
+                : "An error occurred while rendering the knowledge graph. This could be due to memory constraints or an incompatible browser."}
             </p>
-            {process.env.NODE_ENV === 'development' && this.state.error && (
+            {process.env.NODE_ENV === "development" && this.state.error && (
               <details className="graph-error-details">
                 <summary>Error Details</summary>
                 <pre>{this.state.error.message}</pre>

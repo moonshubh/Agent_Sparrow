@@ -10,7 +10,6 @@ Migration date: 2025-11-25
 
 import json
 import logging
-import asyncio
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
@@ -26,31 +25,33 @@ logger = logging.getLogger(__name__)
 
 class EnhancedKBSearchInput(BaseModel):
     """Enhanced input schema for knowledge base search with FeedMe and Zendesk macros integration"""
-    query: str = Field(..., description="The search query to find relevant articles, support examples, and macros")
+
+    query: str = Field(
+        ...,
+        description="The search query to find relevant articles, support examples, and macros",
+    )
     context: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Additional context from Primary Agent (emotional state, platform, etc.)"
+        description="Additional context from Primary Agent (emotional state, platform, etc.)",
     )
     max_results: int = Field(
-        default=5,
-        description="Maximum number of results to return (3-10)",
-        ge=1,
-        le=10
+        default=5, description="Maximum number of results to return (3-10)", ge=1, le=10
     )
     search_sources: List[str] = Field(
         default=["knowledge_base", "feedme", "macros"],
-        description="Sources to search: knowledge_base, feedme, macros, or any combination"
+        description="Sources to search: knowledge_base, feedme, macros, or any combination",
     )
     min_confidence: Optional[float] = Field(
         default=None,
         description="Minimum confidence threshold for FeedMe results (0.0-1.0)",
         ge=0.0,
-        le=1.0
+        le=1.0,
     )
 
 
 class SearchResultSummary(BaseModel):
     """Summary of search results for Primary Agent consumption"""
+
     total_results: int
     kb_results: int
     feedme_results: int
@@ -71,6 +72,7 @@ def _get_connector_lock():
     global _feedme_connector_lock
     if _feedme_connector_lock is None:
         import threading
+
         _feedme_connector_lock = threading.Lock()
     return _feedme_connector_lock
 
@@ -93,6 +95,8 @@ def get_feedme_connector() -> PrimaryAgentConnector:
         except Exception as e:
             logger.error(f"Failed to initialize FeedMe connector: {e}")
             # Don't set to None - leave it uninitialized for retry
+    if _feedme_connector is None:
+        raise RuntimeError("FeedMe connector is not available")
     return _feedme_connector
 
 
@@ -101,7 +105,7 @@ def _enhanced_mailbird_kb_search_payload(
     context: Optional[Dict[str, Any]] = None,
     max_results: int = 5,
     search_sources: List[str] = ["knowledge_base", "feedme"],
-    min_confidence: Optional[float] = None
+    min_confidence: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Enhanced knowledge base search with FeedMe integration.
@@ -120,6 +124,7 @@ def _enhanced_mailbird_kb_search_payload(
         Formatted search results with relevance scores and source information
     """
     import time
+
     start_time = time.time()
 
     try:
@@ -153,7 +158,7 @@ def _enhanced_mailbird_kb_search_payload(
                     query=query,
                     context=context or {},
                     max_results=max_results,
-                    min_confidence=min_confidence
+                    min_confidence=min_confidence,
                 )
                 all_results.extend(feedme_results)
                 feedme_count = len(feedme_results)
@@ -167,8 +172,7 @@ def _enhanced_mailbird_kb_search_payload(
         if use_kb and (not all_results or len(all_results) < max_results):
             try:
                 kb_results = _search_traditional_kb(
-                    query=query,
-                    max_results=max_results - len(all_results)
+                    query=query, max_results=max_results - len(all_results)
                 )
                 all_results.extend(kb_results)
                 kb_count = len(kb_results)
@@ -182,8 +186,7 @@ def _enhanced_mailbird_kb_search_payload(
         if use_macros and len(all_results) < max_results:
             try:
                 macro_results = _search_zendesk_macros(
-                    query=query,
-                    max_results=max_results - len(all_results)
+                    query=query, max_results=max_results - len(all_results)
                 )
                 all_results.extend(macro_results)
                 macro_count = len(macro_results)
@@ -197,14 +200,26 @@ def _enhanced_mailbird_kb_search_payload(
         # Don't overwrite partial results from successful searches
         if not all_results:
             try:
-                logger.info("Using combined search fallback (no results from primary methods)")
+                logger.info(
+                    "Using combined search fallback (no results from primary methods)"
+                )
                 combined_results = _search_combined_fallback(query, max_results)
                 if combined_results:
                     all_results = combined_results
                     # Count by source type
-                    kb_count = len([r for r in combined_results if r.get('source') == 'knowledge_base'])
-                    feedme_count = len([r for r in combined_results if r.get('source') == 'feedme'])
-                    macro_count = len([r for r in combined_results if r.get('source') == 'macro'])
+                    kb_count = len(
+                        [
+                            r
+                            for r in combined_results
+                            if r.get("source") == "knowledge_base"
+                        ]
+                    )
+                    feedme_count = len(
+                        [r for r in combined_results if r.get("source") == "feedme"]
+                    )
+                    macro_count = len(
+                        [r for r in combined_results if r.get("source") == "macro"]
+                    )
                     fallback_used = True
 
             except Exception as e:
@@ -244,7 +259,7 @@ def _enhanced_mailbird_kb_search_payload(
             avg_relevance=avg_relevance,
             search_time_ms=search_time_ms,
             sources_used=search_sources,
-            fallback_used=fallback_used
+            fallback_used=fallback_used,
         )
 
         # Format final response
@@ -282,7 +297,7 @@ def enhanced_mailbird_kb_search(
     context: Optional[Dict[str, Any]] = None,
     max_results: int = 5,
     search_sources: List[str] = ["knowledge_base", "feedme"],
-    min_confidence: Optional[float] = None
+    min_confidence: Optional[float] = None,
 ) -> str:
     """Wrapper to expose formatted results for LangChain tool usage."""
     payload = _enhanced_mailbird_kb_search_payload(
@@ -299,7 +314,7 @@ def _search_with_feedme(
     query: str,
     context: Dict[str, Any],
     max_results: int,
-    min_confidence: Optional[float]
+    min_confidence: Optional[float],
 ) -> List[Dict[str, Any]]:
     """Search using FeedMe integration"""
 
@@ -309,14 +324,11 @@ def _search_with_feedme(
         raise Exception("FeedMe connector not available")
 
     # Build query object for FeedMe
-    feedme_query = {
-        'query_text': query,
-        **context
-    }
+    feedme_query = {"query_text": query, **context}
 
     # Add confidence threshold to context if specified
     if min_confidence is not None:
-        feedme_query['min_confidence'] = min_confidence
+        feedme_query["min_confidence"] = min_confidence
 
     # Perform async search (run in thread pool if needed)
     try:
@@ -345,33 +357,37 @@ def _search_traditional_kb(query: str, max_results: int) -> List[Dict[str, Any]]
 
         async def _search_kb_async(qv: List[float], limit: int):
             client = SupabaseClient()
-            rows = await client.search_kb_articles(qv, limit=limit, similarity_threshold=0.25)
+            rows = await client.search_kb_articles(
+                qv, limit=limit, similarity_threshold=0.25
+            )
             return rows
 
         rows = run_coro_blocking(_search_kb_async(query_vec, max_results), timeout=30)
 
         formatted_results: List[Dict[str, Any]] = []
         for r in rows or []:
-            sim = float(r.get('similarity') or 0.0)
-            formatted_results.append({
-                'source': 'knowledge_base',
-                'title': r.get('url') or 'Knowledge Base Article',
-                'content': (r.get('markdown') or r.get('content') or ''),
-                'relevance_score': sim,
-                'confidence': sim,
-                'metadata': {
-                    'kb_id': r.get('id'),
-                    'url': r.get('url'),
-                    'original_metadata': r.get('metadata'),
-                    'search_type': 'traditional_kb'
-                },
-                'context': {},
-                'quality_indicators': {
-                    'high_confidence': sim >= 0.8,
-                    'semantic_match': True,
-                    'source_authority': 'official'
+            sim = float(r.get("similarity") or 0.0)
+            formatted_results.append(
+                {
+                    "source": "knowledge_base",
+                    "title": r.get("url") or "Knowledge Base Article",
+                    "content": (r.get("markdown") or r.get("content") or ""),
+                    "relevance_score": sim,
+                    "confidence": sim,
+                    "metadata": {
+                        "kb_id": r.get("id"),
+                        "url": r.get("url"),
+                        "original_metadata": r.get("metadata"),
+                        "search_type": "traditional_kb",
+                    },
+                    "context": {},
+                    "quality_indicators": {
+                        "high_confidence": sim >= 0.8,
+                        "semantic_match": True,
+                        "source_authority": "official",
+                    },
                 }
-            })
+            )
 
         return formatted_results
 
@@ -395,12 +411,12 @@ def _search_zendesk_macros(query: str, max_results: int) -> List[Dict[str, Any]]
             client = SupabaseClient()
             # Use RPC function for semantic search
             result = client.client.rpc(
-                'search_zendesk_macros',
+                "search_zendesk_macros",
                 {
-                    'query_embedding': qv,
-                    'match_threshold': 0.4,  # Higher threshold than KB (0.25) for more precise macro matches
-                    'match_count': limit
-                }
+                    "query_embedding": qv,
+                    "match_threshold": 0.4,  # Higher threshold than KB (0.25) for more precise macro matches
+                    "match_count": limit,
+                },
             ).execute()
             return result.data if result.data else []
 
@@ -408,27 +424,29 @@ def _search_zendesk_macros(query: str, max_results: int) -> List[Dict[str, Any]]
 
         formatted_results: List[Dict[str, Any]] = []
         for r in rows or []:
-            sim = float(r.get('similarity') or 0.0)
-            formatted_results.append({
-                'source': 'macro',
-                'title': r.get('title') or 'Zendesk Macro',
-                'content': r.get('comment_value') or r.get('description') or '',
-                'relevance_score': sim,
-                'confidence': sim,
-                'metadata': {
-                    'macro_id': r.get('id'),
-                    'zendesk_id': r.get('zendesk_id'),
-                    'description': r.get('description'),
-                    'search_type': 'zendesk_macro'
-                },
-                'context': {},
-                'quality_indicators': {
-                    'high_confidence': sim >= 0.8,
-                    'semantic_match': True,
-                    'source_authority': 'macro',
-                    'pre_approved': True  # Macros are pre-approved responses
+            sim = float(r.get("similarity") or 0.0)
+            formatted_results.append(
+                {
+                    "source": "macro",
+                    "title": r.get("title") or "Zendesk Macro",
+                    "content": r.get("comment_value") or r.get("description") or "",
+                    "relevance_score": sim,
+                    "confidence": sim,
+                    "metadata": {
+                        "macro_id": r.get("id"),
+                        "zendesk_id": r.get("zendesk_id"),
+                        "description": r.get("description"),
+                        "search_type": "zendesk_macro",
+                    },
+                    "context": {},
+                    "quality_indicators": {
+                        "high_confidence": sim >= 0.8,
+                        "semantic_match": True,
+                        "source_authority": "macro",
+                        "pre_approved": True,  # Macros are pre-approved responses
+                    },
                 }
-            })
+            )
 
         return formatted_results
 
@@ -478,14 +496,12 @@ def _calculate_average_relevance(results: List[Dict[str, Any]]) -> float:
     if not results:
         return 0.0
 
-    total_relevance = sum(r.get('relevance_score', 0.0) for r in results)
+    total_relevance = sum(r.get("relevance_score", 0.0) for r in results)
     return total_relevance / len(results)
 
 
 def _format_search_response(
-    results: List[Dict[str, Any]],
-    summary: SearchResultSummary,
-    original_query: str
+    results: List[Dict[str, Any]], summary: SearchResultSummary, original_query: str
 ) -> str:
     """Format search results for Primary Agent consumption"""
 
@@ -500,10 +516,12 @@ I couldn't find any relevant information for your query. You may want to:
 2. Use different keywords
 3. Contact human support for specialized assistance
 
-*Search performed across {', '.join(summary.sources_used)} in {summary.search_time_ms}ms*"""
+*Search performed across {", ".join(summary.sources_used)} in {summary.search_time_ms}ms*"""
 
     # Build formatted response
-    result_breakdown = f"{summary.kb_results} KB, {summary.feedme_results} support examples"
+    result_breakdown = (
+        f"{summary.kb_results} KB, {summary.feedme_results} support examples"
+    )
     if summary.macro_results > 0:
         result_breakdown += f", {summary.macro_results} macros"
 
@@ -513,32 +531,44 @@ I couldn't find any relevant information for your query. You may want to:
         f"**Query:** {original_query}",
         f"**Found:** {summary.total_results} results ({result_breakdown})",
         f"**Average Relevance:** {summary.avg_relevance:.2f}",
-        ""
+        "",
     ]
 
     # Format each result
     for i, result in enumerate(results, 1):
-        source_icon = "📖" if result['source'] == 'knowledge_base' else ("🔧" if result['source'] == 'macro' else "💬")
-        confidence_icon = "🔥" if result.get('confidence', 0) >= 0.8 else "✅" if result.get('confidence', 0) >= 0.7 else "ℹ️"
+        source_icon = (
+            "📖"
+            if result["source"] == "knowledge_base"
+            else ("🔧" if result["source"] == "macro" else "💬")
+        )
+        confidence_value = result.get("confidence", 0)
+        if confidence_value >= 0.8:
+            confidence_icon = "🔥"
+        elif confidence_value >= 0.7:
+            confidence_icon = "✅"
+        else:
+            confidence_icon = "ℹ️"
 
-        response_parts.extend([
-            f"## {source_icon} Result {i}: {result.get('title', 'Knowledge Item')}",
-            f"{confidence_icon} **Relevance:** {result.get('relevance_score', 0):.2f} | **Source:** {result['source']}",
-            f"",
-            f"{result.get('content', 'No content available')[:500]}{'...' if len(result.get('content', '')) > 500 else ''}",
-            f""
-        ])
+        response_parts.extend(
+            [
+                f"## {source_icon} Result {i}: {result.get('title', 'Knowledge Item')}",
+                f"{confidence_icon} **Relevance:** {result.get('relevance_score', 0):.2f} | **Source:** {result['source']}",
+                "",
+                f"{result.get('content', 'No content available')[:500]}{'...' if len(result.get('content', '')) > 500 else ''}",
+                "",
+            ]
+        )
 
         # Add metadata for high-quality results
-        if result.get('confidence', 0) >= 0.8:
+        if result.get("confidence", 0) >= 0.8:
             quality_info = []
-            qi = result.get('quality_indicators', {})
+            qi = result.get("quality_indicators", {})
 
-            if qi.get('frequently_used'):
+            if qi.get("frequently_used"):
                 quality_info.append("Frequently used solution")
-            if qi.get('recent_usage'):
+            if qi.get("recent_usage"):
                 quality_info.append("Recently validated")
-            if qi.get('high_confidence'):
+            if qi.get("high_confidence"):
                 quality_info.append("High confidence match")
 
             if quality_info:
@@ -546,19 +576,21 @@ I couldn't find any relevant information for your query. You may want to:
                 response_parts.append("")
 
         # Add source-specific context
-        if result['source'] == 'feedme':
-            metadata = result.get('metadata', {})
-            if metadata.get('issue_type'):
+        if result["source"] == "feedme":
+            metadata = result.get("metadata", {})
+            if metadata.get("issue_type"):
                 response_parts.append(f"**Issue Type:** {metadata['issue_type']}")
-            if metadata.get('tags'):
+            if metadata.get("tags"):
                 response_parts.append(f"**Tags:** {', '.join(metadata['tags'][:3])}")
             response_parts.append("")
-        elif result['source'] == 'macro':
-            metadata = result.get('metadata', {})
-            if metadata.get('description'):
-                response_parts.append(f"**Macro Description:** {metadata['description']}")
-            qi = result.get('quality_indicators', {})
-            if qi.get('pre_approved'):
+        elif result["source"] == "macro":
+            metadata = result.get("metadata", {})
+            if metadata.get("description"):
+                response_parts.append(
+                    f"**Macro Description:** {metadata['description']}"
+                )
+            qi = result.get("quality_indicators", {})
+            if qi.get("pre_approved"):
                 response_parts.append("*This is a pre-approved response template*")
             response_parts.append("")
 
@@ -566,10 +598,12 @@ I couldn't find any relevant information for your query. You may want to:
         response_parts.append("")
 
     # Add search metadata
-    response_parts.extend([
-        f"*Search completed in {summary.search_time_ms}ms using {', '.join(summary.sources_used)}*",
-        f"*{'Fallback search used due to primary method issues' if summary.fallback_used else 'Primary search methods successful'}*"
-    ])
+    response_parts.extend(
+        [
+            f"*Search completed in {summary.search_time_ms}ms using {', '.join(summary.sources_used)}*",
+            f"*{'Fallback search used due to primary method issues' if summary.fallback_used else 'Primary search methods successful'}*",
+        ]
+    )
 
     return "\n".join(response_parts)
 
@@ -611,7 +645,9 @@ def mailbird_kb_search(query: str, **kwargs) -> str:
     try:
         return json.dumps(serializable_payload)
     except TypeError as e:
-        logger.warning(f"mailbird_kb_search serialization failed: {e}; returning formatted text fallback")
+        logger.warning(
+            f"mailbird_kb_search serialization failed: {e}; returning formatted text fallback"
+        )
         return serializable_payload.get("formatted", "")
 
 
@@ -658,12 +694,12 @@ ENHANCED_KB_SEARCH_TOOL = enhanced_mailbird_kb_search
 LEGACY_KB_SEARCH_TOOL = mailbird_kb_search
 
 __all__ = [
-    'enhanced_mailbird_kb_search',
-    'mailbird_kb_search',
-    'enhanced_mailbird_kb_search_call',
-    'enhanced_mailbird_kb_search_structured',
-    'EnhancedKBSearchInput',
-    'SearchResultSummary',
-    'ENHANCED_KB_SEARCH_TOOL',
-    'LEGACY_KB_SEARCH_TOOL'
+    "enhanced_mailbird_kb_search",
+    "mailbird_kb_search",
+    "enhanced_mailbird_kb_search_call",
+    "enhanced_mailbird_kb_search_structured",
+    "EnhancedKBSearchInput",
+    "SearchResultSummary",
+    "ENHANCED_KB_SEARCH_TOOL",
+    "LEGACY_KB_SEARCH_TOOL",
 ]

@@ -27,7 +27,7 @@ from opentelemetry.trace import Status, StatusCode
 from pydantic import ValidationError
 
 # AG-UI Protocol imports
-from ag_ui_langgraph import LangGraphAgent
+from ag_ui_langgraph import LangGraphAgent  # type: ignore[import-untyped]
 from ag_ui.core.types import RunAgentInput
 from ag_ui.core import (
     CustomEvent,
@@ -37,9 +37,9 @@ from ag_ui.core import (
     RunStartedEvent,
 )
 from ag_ui.encoder import EventEncoder
-from ag_ui_langgraph.types import LangGraphEventTypes
-from ag_ui_langgraph.utils import make_json_safe
-from ag_ui_langgraph.utils import agui_messages_to_langchain, get_stream_payload_input
+from ag_ui_langgraph.types import LangGraphEventTypes  # type: ignore[import-untyped]
+from ag_ui_langgraph.utils import make_json_safe  # type: ignore[import-untyped]
+from ag_ui_langgraph.utils import agui_messages_to_langchain, get_stream_payload_input  # type: ignore[import-untyped]
 from langgraph.types import Command
 
 from langchain_core.messages import (
@@ -54,7 +54,11 @@ from app.agents.orchestration.orchestration.graph import app as compiled_graph
 
 # Import for context merge and attachment validation
 from app.agents.orchestration.orchestration.state import Attachment
-from app.core.config import find_model_config, get_models_config, resolve_coordinator_config
+from app.core.config import (
+    find_model_config,
+    get_models_config,
+    resolve_coordinator_config,
+)
 from app.core.settings import get_settings
 
 router = APIRouter()
@@ -63,9 +67,12 @@ router = APIRouter()
 try:  # pragma: no cover - import-time guard
     from app.api.v1.endpoints.auth import get_current_user_id  # type: ignore
 except Exception:  # pragma: no cover
+
     async def get_current_user_id() -> str:  # type: ignore
         from app.core.settings import settings
-        return getattr(settings, 'development_user_id', 'dev-user-12345')
+
+        return getattr(settings, "development_user_id", "dev-user-12345")
+
 
 # OpenTelemetry tracer for this module
 tracer = trace.get_tracer(__name__)
@@ -74,6 +81,7 @@ tracer = trace.get_tracer(__name__)
 # This wraps our compiled graph with AG-UI protocol support
 _langgraph_agent: Optional[LangGraphAgent] = None
 DEFAULT_LANGGRAPH_RECURSION_LIMIT = 120
+
 
 class SparrowLangGraphAgent(LangGraphAgent):
     """LangGraphAgent variant that preserves full message history."""
@@ -137,7 +145,9 @@ class SparrowLangGraphAgent(LangGraphAgent):
             },
         }
 
-    async def prepare_stream(self, input: RunAgentInput, agent_state: Any, config: Dict[str, Any]):
+    async def prepare_stream(
+        self, input: RunAgentInput, agent_state: Any, config: Dict[str, Any]
+    ):
         state_input = input.state or {}
         messages = input.messages or []
         forwarded_props = input.forwarded_props or {}
@@ -146,29 +156,44 @@ class SparrowLangGraphAgent(LangGraphAgent):
         state_input["messages"] = agent_state.values.get("messages", [])
         # Preserve server-side checkpointed thread state ("compressed truth") across runs.
         # Clients do not send this field; it should be maintained by the graph/checkpointer.
-        if "thread_state" not in state_input and agent_state.values.get("thread_state") is not None:
+        if (
+            "thread_state" not in state_input
+            and agent_state.values.get("thread_state") is not None
+        ):
             state_input["thread_state"] = agent_state.values.get("thread_state")
         # Phase 3: Preserve checkpointed internal log notes across runs.
         if (
             "log_analysis_notes" not in state_input
             and agent_state.values.get("log_analysis_notes") is not None
         ):
-            state_input["log_analysis_notes"] = agent_state.values.get("log_analysis_notes")
+            state_input["log_analysis_notes"] = agent_state.values.get(
+                "log_analysis_notes"
+            )
         self.active_run["current_graph_state"] = agent_state.values.copy()
         langchain_messages = agui_messages_to_langchain(messages)
-        state = self.langgraph_default_merge_state(state_input, langchain_messages, input)
+        state = self.langgraph_default_merge_state(
+            state_input, langchain_messages, input
+        )
         self.active_run["current_graph_state"].update(state)
         config["configurable"]["thread_id"] = thread_id
-        interrupts = agent_state.tasks[0].interrupts if agent_state.tasks and len(agent_state.tasks) > 0 else []
+        interrupts = (
+            agent_state.tasks[0].interrupts
+            if agent_state.tasks and len(agent_state.tasks) > 0
+            else []
+        )
         has_active_interrupts = len(interrupts) > 0
         resume_input = forwarded_props.get("command", {}).get("resume", None)
 
         self.active_run["schema_keys"] = self.get_schema_keys(config)
 
-        events_to_dispatch = []
+        events_to_dispatch: list[CustomEvent | RunStartedEvent | RunFinishedEvent] = []
         if has_active_interrupts and not resume_input:
             events_to_dispatch.append(
-                RunStartedEvent(type=EventType.RUN_STARTED, thread_id=thread_id, run_id=self.active_run["id"])
+                RunStartedEvent(
+                    type=EventType.RUN_STARTED,
+                    thread_id=thread_id,
+                    run_id=self.active_run["id"],
+                )
             )
 
             for interrupt in interrupts:
@@ -182,7 +207,11 @@ class SparrowLangGraphAgent(LangGraphAgent):
                 )
 
             events_to_dispatch.append(
-                RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=thread_id, run_id=self.active_run["id"])
+                RunFinishedEvent(
+                    type=EventType.RUN_FINISHED,
+                    thread_id=thread_id,
+                    run_id=self.active_run["id"],
+                )
             )
             return {
                 "stream": None,
@@ -192,8 +221,11 @@ class SparrowLangGraphAgent(LangGraphAgent):
             }
 
         if self.active_run["mode"] == "continue":
-            await self.graph.aupdate_state(config, state, as_node=self.active_run.get("node_name"))
+            await self.graph.aupdate_state(
+                config, state, as_node=self.active_run.get("node_name")
+            )
 
+        stream_input: Command[Any] | dict[str, Any] | None
         if resume_input:
             stream_input = Command(resume=resume_input)
         else:
@@ -202,9 +234,15 @@ class SparrowLangGraphAgent(LangGraphAgent):
                 state=state,
                 schema_keys=self.active_run["schema_keys"],
             )
-            stream_input = {**forwarded_props, **payload_input} if payload_input else None
+            stream_input = (
+                {**forwarded_props, **payload_input} if payload_input else None
+            )
 
-        subgraphs_stream_enabled = input.forwarded_props.get("stream_subgraphs") if input.forwarded_props else False
+        subgraphs_stream_enabled = (
+            input.forwarded_props.get("stream_subgraphs")
+            if input.forwarded_props
+            else False
+        )
 
         kwargs = self.get_stream_kwargs(
             input=stream_input,
@@ -229,9 +267,15 @@ def get_langgraph_agent() -> LangGraphAgent:
         if compiled_graph is None:
             raise RuntimeError("Compiled graph not available")
         settings = get_settings()
-        recur_limit = getattr(settings, "langgraph_recursion_limit", None) or getattr(settings, "agui_recursion_limit", None)
+        recur_limit = getattr(settings, "langgraph_recursion_limit", None) or getattr(
+            settings, "agui_recursion_limit", None
+        )
         try:
-            recur_limit = int(recur_limit) if recur_limit is not None else DEFAULT_LANGGRAPH_RECURSION_LIMIT
+            recur_limit = (
+                int(recur_limit)
+                if recur_limit is not None
+                else DEFAULT_LANGGRAPH_RECURSION_LIMIT
+            )
         except Exception:
             recur_limit = DEFAULT_LANGGRAPH_RECURSION_LIMIT
         _langgraph_agent = SparrowLangGraphAgent(
@@ -275,7 +319,11 @@ def _strip_reasoning_details(value: Any) -> Any:
                 continue
 
             # Attachment payloads can include base64 data URLs.
-            if key in {"data_url", "dataUrl"} and isinstance(item, str) and item.startswith("data:"):
+            if (
+                key in {"data_url", "dataUrl"}
+                and isinstance(item, str)
+                and item.startswith("data:")
+            ):
                 sanitized[key] = f"<redacted data_url len={len(item)}>"
                 continue
 
@@ -345,11 +393,17 @@ def _coerce_message(raw: Any) -> Optional[BaseMessage]:
     response_metadata = data.get("response_metadata") or {}
 
     if role == "user":
-        return HumanMessage(content=_coerce_text(data.get("content")), name=name, additional_kwargs=additional_kwargs)
+        return HumanMessage(
+            content=_coerce_text(data.get("content")),
+            name=name,
+            additional_kwargs=additional_kwargs,
+        )
 
     if role == "assistant":
         tool_calls = data.get("tool_calls") or data.get("toolCalls")
-        invalid_tool_calls = data.get("invalid_tool_calls") or data.get("invalidToolCalls")
+        invalid_tool_calls = data.get("invalid_tool_calls") or data.get(
+            "invalidToolCalls"
+        )
 
         if tool_calls and not isinstance(tool_calls, list):
             tool_calls = [tool_calls]
@@ -371,7 +425,11 @@ def _coerce_message(raw: Any) -> Optional[BaseMessage]:
         )
 
     if role == "system":
-        return SystemMessage(content=_coerce_text(data.get("content")), name=name, additional_kwargs=additional_kwargs)
+        return SystemMessage(
+            content=_coerce_text(data.get("content")),
+            name=name,
+            additional_kwargs=additional_kwargs,
+        )
 
     if role == "tool":
         tool_call_id = data.get("tool_call_id") or data.get("toolCallId")
@@ -500,12 +558,14 @@ def _sanitize_attachments(payload: Any) -> List[Dict[str, Any]]:
 
             # Validate using Attachment model (enforces size, MIME type, data URL format)
             validated = Attachment.model_validate(normalized)
-            attachments.append({
-                "name": validated.name,
-                "mime_type": validated.mime_type,
-                "data_url": validated.data_url,
-                "size": validated.size,
-            })
+            attachments.append(
+                {
+                    "name": validated.name,
+                    "mime_type": validated.mime_type,
+                    "data_url": validated.data_url,
+                    "size": validated.size,
+                }
+            )
             logging.debug(
                 f"Validated attachment: name={validated.name}, mime_type={validated.mime_type}, "
                 f"size={validated.size}"
@@ -540,7 +600,7 @@ def _sanitize_attachments(payload: Any) -> List[Dict[str, Any]]:
                         }
                         for err in errors
                     ],
-                }
+                },
             )
         except Exception as e:
             # Required: fail loudly on validation errors
@@ -552,7 +612,7 @@ def _sanitize_attachments(payload: Any) -> List[Dict[str, Any]]:
                     "error": "attachment_validation_failed",
                     "message": error_detail,
                     "attachment_index": idx,
-                }
+                },
             )
 
     return attachments
@@ -610,7 +670,7 @@ def _merge_agui_context(
     if model:
         model_cfg = find_model_config(models_config, str(model))
         if model_cfg is None:
-            logging.warning("agui_unknown_model_override", model=model)
+            logging.warning("agui_unknown_model_override: %s", model)
             model = None
         else:
             provider = model_cfg.provider
@@ -618,7 +678,7 @@ def _merge_agui_context(
     # Normalize provider override
     provider = (provider or "google").lower()
     if provider not in allowed_providers:
-        logging.warning("agui_unknown_provider_override", provider=provider)
+        logging.warning("agui_unknown_provider_override: %s", provider)
         provider = "google"
 
     # Apply defaults if provider/model not specified
@@ -633,12 +693,16 @@ def _merge_agui_context(
     # Backend default for memory toggle when client is silent
     if use_server_memory is None:
         if settings.should_enable_agent_memory():
-            use_server_memory = bool(getattr(settings, "agent_memory_default_enabled", False))
+            use_server_memory = bool(
+                getattr(settings, "agent_memory_default_enabled", False)
+            )
         else:
             use_server_memory = False
 
     # Validate and sanitize attachments (fails loudly on error)
-    attachments = _sanitize_attachments(properties.get("attachments") or state.get("attachments") or [])
+    attachments = _sanitize_attachments(
+        properties.get("attachments") or state.get("attachments") or []
+    )
 
     # Merge into config.configurable (LangGraph execution context)
     configurable = config.setdefault("configurable", {})
@@ -773,7 +837,7 @@ def _merge_agui_context(
 async def agui_stream(
     input_data: RunAgentInput,
     request: Request,
-    user_id: str = Depends(get_current_user_id)
+    user_id: str = Depends(get_current_user_id),
 ):
     """Auth-protected AG-UI streaming endpoint.
 
@@ -807,7 +871,9 @@ async def agui_stream(
 
         # Extract forwardedProps from AG-UI RunAgentInput
         # These contain custom properties like session_id, trace_id, provider, model, attachments
-        forwarded: Dict[str, Any] = input_data.forwarded_props if input_data.forwarded_props else {}
+        forwarded: Dict[str, Any] = (
+            input_data.forwarded_props if input_data.forwarded_props else {}
+        )
 
         # Extract thread and run IDs from AG-UI input
         thread_id = input_data.thread_id
@@ -821,11 +887,17 @@ async def agui_stream(
                 "run_id": run_id,
                 "message_count": len(input_data.messages) if input_data.messages else 0,
                 "has_forwarded_props": bool(forwarded),
-                "forwarded_keys": list(forwarded.keys()) if isinstance(forwarded, dict) else [],
+                "forwarded_keys": (
+                    list(forwarded.keys()) if isinstance(forwarded, dict) else []
+                ),
                 "session_id_present": "session_id" in forwarded,
                 "trace_id_present": "trace_id" in forwarded,
                 "attachments_present": "attachments" in forwarded,
-                "attachments_count": len(forwarded.get("attachments", [])) if isinstance(forwarded.get("attachments"), list) else 0,
+                "attachments_count": (
+                    len(forwarded.get("attachments", []))
+                    if isinstance(forwarded.get("attachments"), list)
+                    else 0
+                ),
             },
         )
 
@@ -833,14 +905,29 @@ async def agui_stream(
         try:
             span.set_attribute("agui.thread_id", thread_id)
             span.set_attribute("agui.run_id", run_id)
-            span.set_attribute("agui.message_count", len(input_data.messages) if input_data.messages else 0)
+            span.set_attribute(
+                "agui.message_count",
+                len(input_data.messages) if input_data.messages else 0,
+            )
             if isinstance(forwarded, dict):
-                span.set_attribute("agui.session_id", str(forwarded.get("session_id") or ""))
-                span.set_attribute("agui.trace_id", str(forwarded.get("trace_id") or ""))
-                span.set_attribute("agui.provider", str(forwarded.get("provider") or ""))
+                span.set_attribute(
+                    "agui.session_id", str(forwarded.get("session_id") or "")
+                )
+                span.set_attribute(
+                    "agui.trace_id", str(forwarded.get("trace_id") or "")
+                )
+                span.set_attribute(
+                    "agui.provider", str(forwarded.get("provider") or "")
+                )
                 span.set_attribute("agui.model", str(forwarded.get("model") or ""))
-                span.set_attribute("agui.agent_type", str(forwarded.get("agent_type") or ""))
-                att_count = len(forwarded.get("attachments", []) if isinstance(forwarded.get("attachments"), list) else [])
+                span.set_attribute(
+                    "agui.agent_type", str(forwarded.get("agent_type") or "")
+                )
+                att_count = len(
+                    forwarded.get("attachments", [])
+                    if isinstance(forwarded.get("attachments"), list)
+                    else []
+                )
                 span.set_attribute("agui.attachments_count", att_count)
         except Exception:
             # Defensive: never break request flow due to telemetry
@@ -853,16 +940,18 @@ async def agui_stream(
         if input_data.state:
             if isinstance(input_data.state, dict):
                 state_dict = dict(input_data.state)
-            elif hasattr(input_data.state, 'model_dump'):
+            elif hasattr(input_data.state, "model_dump"):
                 state_dict = input_data.state.model_dump()
-            elif hasattr(input_data.state, 'dict'):
+            elif hasattr(input_data.state, "dict"):
                 state_dict = input_data.state.dict()
 
         config_dict: Dict[str, Any] = {"configurable": {}}
 
         # Extract attachments from forwarded props and remove to avoid duplication
         # (attachments will be in state after merge, not in forwardedProps)
-        forwarded_without_attachments = {k: v for k, v in forwarded.items() if k != "attachments"}
+        forwarded_without_attachments = {
+            k: v for k, v in forwarded.items() if k != "attachments"
+        }
 
         try:
             _merge_agui_context(forwarded, state_dict, config_dict)
@@ -885,7 +974,7 @@ async def agui_stream(
                 detail={
                     "error": "context_merge_failed",
                     "message": f"Failed to merge AG-UI context: {str(e)}",
-                }
+                },
             )
 
         configurable = config_dict.setdefault("configurable", {})
@@ -911,15 +1000,17 @@ async def agui_stream(
         if input_data.messages:
             for msg in input_data.messages:
                 # Convert AG-UI message model to dict for _normalize_messages
-                if hasattr(msg, 'model_dump'):
+                if hasattr(msg, "model_dump"):
                     messages_payload.append(msg.model_dump())
-                elif hasattr(msg, 'dict'):
+                elif hasattr(msg, "dict"):
                     messages_payload.append(msg.dict())
                 elif isinstance(msg, dict):
                     messages_payload.append(msg)
 
         normalized_messages = _normalize_messages(messages_payload)
-        merged_messages = _merge_message_history(persisted_messages, normalized_messages)
+        merged_messages = _merge_message_history(
+            persisted_messages, normalized_messages
+        )
 
         # Create enriched graph state with merged context
         graph_state = {
@@ -929,10 +1020,14 @@ async def agui_stream(
             "scratchpad": state_dict.get("scratchpad") or {},
         }
 
-        graph_state.setdefault("session_id", str(configurable.get("session_id") or thread_id))
+        graph_state.setdefault(
+            "session_id", str(configurable.get("session_id") or thread_id)
+        )
         graph_state.setdefault("trace_id", str(configurable.get("trace_id") or run_id))
         graph_state.setdefault("attachments", state_dict.get("attachments") or [])
-        graph_state.setdefault("use_server_memory", configurable.get("use_server_memory", False))
+        graph_state.setdefault(
+            "use_server_memory", configurable.get("use_server_memory", False)
+        )
         # user_id already set in state_dict at line 514, no need for setdefault
 
         # Phase 1: Register this session for the authenticated user and prune
@@ -945,7 +1040,9 @@ async def agui_stream(
                 forwarded_props = graph_state.get("forwarded_props") or {}
                 customer_id = None
                 if isinstance(forwarded_props, dict):
-                    customer_id = forwarded_props.get("customer_id") or forwarded_props.get("customerId")
+                    customer_id = forwarded_props.get(
+                        "customer_id"
+                    ) or forwarded_props.get("customerId")
 
                 workspace_store = SparrowWorkspaceStore(
                     session_id=str(graph_state.get("session_id") or thread_id),
@@ -953,9 +1050,15 @@ async def agui_stream(
                     customer_id=customer_id,
                 )
                 await workspace_store.register_session()
-                await workspace_store.prune_user_sessions(keep=settings.workspace_max_sessions_per_user)
+                await workspace_store.prune_user_sessions(
+                    keep=settings.workspace_max_sessions_per_user
+                )
         except Exception as exc:
-            logging.warning("workspace_session_prune_skipped", exc_info=True, extra={"error": str(exc)})
+            logging.warning(
+                "workspace_session_prune_skipped",
+                exc_info=True,
+                extra={"error": str(exc)},
+            )
 
         logging.info(
             "agui_stream_normalized",
@@ -979,7 +1082,7 @@ async def agui_stream(
         )
 
         # Get Accept header for proper event encoding
-        accept_header = request.headers.get("accept")
+        accept_header = request.headers.get("accept") or "text/event-stream"
         encoder = EventEncoder(accept=accept_header)
 
         async def event_generator():
@@ -990,7 +1093,9 @@ async def agui_stream(
             run_span = tracer.start_span("agui.stream.run")
             try:
                 cfg = config_dict.get("configurable", {})
-                run_span.set_attribute("agui.session_id", str(cfg.get("session_id") or ""))
+                run_span.set_attribute(
+                    "agui.session_id", str(cfg.get("session_id") or "")
+                )
                 run_span.set_attribute("agui.trace_id", str(cfg.get("trace_id") or ""))
                 run_span.set_attribute("agui.provider", str(cfg.get("provider") or ""))
                 run_span.set_attribute("agui.model", str(cfg.get("model") or ""))
@@ -1010,7 +1115,10 @@ async def agui_stream(
                         # Avoid sending large debug payloads (reasoning details, data URLs) to the browser.
                         try:
                             # Drop raw event payloads entirely (they are not used by the UI and can be huge).
-                            if hasattr(event, "raw_event") and getattr(event, "raw_event") is not None:
+                            if (
+                                hasattr(event, "raw_event")
+                                and getattr(event, "raw_event") is not None
+                            ):
                                 update["raw_event"] = None
                             if update:
                                 event = event.model_copy(update=update)
@@ -1041,9 +1149,7 @@ async def agui_stream(
 
         span.set_status(Status(StatusCode.OK))
         return StreamingResponse(
-            event_generator(),
-            status_code=200,
-            media_type=encoder.get_content_type()
+            event_generator(), status_code=200, media_type=encoder.get_content_type()
         )
 
 
@@ -1070,12 +1176,16 @@ async def agui_stream_health():
 
 # --- Subgraphs Support ---
 
+travel_graph: Any | None = None
 try:
-    from app.agents.unified.agent_travel import graph as travel_graph
+    from app.agents.unified.agent_travel import graph as _travel_graph  # type: ignore[import-not-found]
+
+    travel_graph = _travel_graph
 except ImportError:
     travel_graph = None  # type: ignore[assignment]
 
 _travel_agent: Optional[LangGraphAgent] = None
+
 
 def get_travel_agent() -> LangGraphAgent:
     """Get or create the Travel Agent wrapper."""
@@ -1091,11 +1201,12 @@ def get_travel_agent() -> LangGraphAgent:
         )
     return _travel_agent
 
+
 @router.post("/agui/subgraphs/stream")
 async def agui_subgraphs_stream(
     input_data: RunAgentInput,
     request: Request,
-    user_id: str = Depends(get_current_user_id)
+    user_id: str = Depends(get_current_user_id),
 ):
     """Endpoint for Subgraphs demo (Travel Agent)."""
     with tracer.start_as_current_span("agui.subgraphs.stream"):
@@ -1105,7 +1216,7 @@ async def agui_subgraphs_stream(
             return JSONResponse(status_code=500, content={"error": str(e)})
 
         # Basic encoder setup
-        accept_header = request.headers.get("accept")
+        accept_header = request.headers.get("accept") or "text/event-stream"
         encoder = EventEncoder(accept=accept_header)
 
         async def event_generator():
@@ -1113,7 +1224,5 @@ async def agui_subgraphs_stream(
                 yield encoder.encode(event)
 
         return StreamingResponse(
-            event_generator(),
-            status_code=200,
-            media_type=encoder.get_content_type()
+            event_generator(), status_code=200, media_type=encoder.get_content_type()
         )

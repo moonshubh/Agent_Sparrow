@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, Optional
 
 from langchain_core.messages import ToolMessage
 from loguru import logger
@@ -73,7 +73,9 @@ class StateTrackingMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obje
         self._trackers_lock = asyncio.Lock()
         self._active_trackers: Dict[str, LoopStateTracker] = {}
 
-    def _get_session_id(self, state: Any, config: Optional[Dict[str, Any]] = None) -> str:
+    def _get_session_id(
+        self, state: Any, config: Optional[Dict[str, Any]] = None
+    ) -> str:
         """Extract session ID from state or config."""
         session_id = (
             getattr(state, "session_id", None)
@@ -150,7 +152,10 @@ class StateTrackingMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obje
         tracker = await self._get_tracker_async(session_id)
 
         # Transition to streaming/completed if not already in error state
-        if tracker.current_state not in (AgentLoopState.ERRORED, AgentLoopState.COMPLETED):
+        if tracker.current_state not in (
+            AgentLoopState.ERRORED,
+            AgentLoopState.COMPLETED,
+        ):
             tracker.transition_to(AgentLoopState.STREAMING_RESPONSE)
             tracker.complete()
 
@@ -190,7 +195,9 @@ class StateTrackingMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obje
 
         if hasattr(request, "config"):
             config = request.config
-            session_id = (config or {}).get("configurable", {}).get("thread_id", "unknown")
+            session_id = (
+                (config or {}).get("configurable", {}).get("thread_id", "unknown")
+            )
 
         if hasattr(request, "model"):
             model_name = str(request.model)
@@ -223,7 +230,9 @@ class StateTrackingMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obje
 
         if hasattr(request, "config"):
             config = request.config
-            session_id = (config or {}).get("configurable", {}).get("thread_id", "unknown")
+            session_id = (
+                (config or {}).get("configurable", {}).get("thread_id", "unknown")
+            )
 
         if hasattr(request, "tool_name"):
             tool_name = str(request.tool_name)
@@ -245,7 +254,10 @@ class StateTrackingMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obje
         # Transition to processing results
         tracker.transition_to(
             AgentLoopState.PROCESSING_RESULTS,
-            metadata={"tool": tool_name, "success": not getattr(result, "is_error", False)},
+            metadata={
+                "tool": tool_name,
+                "success": not getattr(result, "is_error", False),
+            },
         )
 
         return result

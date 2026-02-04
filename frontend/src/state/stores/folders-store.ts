@@ -1,12 +1,12 @@
 /**
  * Folders Store - Hierarchical Folder Management
- * 
+ *
  * Handles folder operations with hierarchical structure, drag-and-drop support,
  * and conversation assignment workflows.
  */
 
-import { create } from 'zustand'
-import { devtools, subscribeWithSelector } from 'zustand/middleware'
+import { create } from "zustand";
+import { devtools, subscribeWithSelector } from "zustand/middleware";
 import {
   listFolders,
   createFolder as apiCreateFolder,
@@ -17,96 +17,106 @@ import {
   type FeedMeFolder,
   type FolderListResponse,
   type CreateFolderRequest,
-  type UpdateFolderRequest
-} from '@/features/feedme/services/feedme-api'
-import { useUIStore } from '@/state/stores/ui-store'
+  type UpdateFolderRequest,
+} from "@/features/feedme/services/feedme-api";
+import { useUIStore } from "@/state/stores/ui-store";
 
 // Constants
-const UNASSIGNED_FOLDER_ID = 0
+const UNASSIGNED_FOLDER_ID = 0;
 
 // Types
 export interface Folder extends FeedMeFolder {
-  isExpanded?: boolean
-  isSelected?: boolean
-  isDragOver?: boolean
-  children?: Folder[]
-  level?: number
-  conversationCount?: number
-  is_active?: boolean
+  isExpanded?: boolean;
+  isSelected?: boolean;
+  isDragOver?: boolean;
+  children?: Folder[];
+  level?: number;
+  conversationCount?: number;
+  is_active?: boolean;
 }
 
 interface FoldersState {
   // Data State
-  folders: Record<number, Folder>
-  folderTree: Folder[]
-  isLoading: boolean
-  lastUpdated: string | null
+  folders: Record<number, Folder>;
+  folderTree: Folder[];
+  isLoading: boolean;
+  lastUpdated: string | null;
 
   // UI State
-  selectedFolderIds: Set<number>
-  expandedFolderIds: Set<number>
+  selectedFolderIds: Set<number>;
+  expandedFolderIds: Set<number>;
   dragState: {
-    isDragging: boolean
-    draggedFolderId: number | null
-    draggedConversationIds: number[]
-    dragOverFolderId: number | null
-    dragOperation: 'move' | 'copy' | null
-  }
+    isDragging: boolean;
+    draggedFolderId: number | null;
+    draggedConversationIds: number[];
+    dragOverFolderId: number | null;
+    dragOperation: "move" | "copy" | null;
+  };
 
   // Modal State
-  createModalOpen: boolean
-  editModalOpen: boolean
-  deleteModalOpen: boolean
-  targetFolderId: number | null
+  createModalOpen: boolean;
+  editModalOpen: boolean;
+  deleteModalOpen: boolean;
+  targetFolderId: number | null;
 }
 
 interface FoldersActions {
   // Data Operations
-  loadFolders: (forceRefresh?: boolean) => Promise<void>
-  refreshFolders: () => Promise<void>
+  loadFolders: (forceRefresh?: boolean) => Promise<void>;
+  refreshFolders: () => Promise<void>;
 
   // CRUD Operations
-  createFolder: (request: CreateFolderRequest) => Promise<Folder>
-  updateFolder: (id: number, request: UpdateFolderRequest) => Promise<void>
-  deleteFolder: (id: number, moveConversationsTo?: number) => Promise<void>
+  createFolder: (request: CreateFolderRequest) => Promise<Folder>;
+  updateFolder: (id: number, request: UpdateFolderRequest) => Promise<void>;
+  deleteFolder: (id: number, moveConversationsTo?: number) => Promise<void>;
 
   // Tree Operations
-  buildFolderTree: () => void
-  updateFolderInTree: (folderId: number) => void
-  expandFolder: (id: number, expanded?: boolean) => void
-  expandAll: () => void
-  collapseAll: () => void
+  buildFolderTree: () => void;
+  updateFolderInTree: (folderId: number) => void;
+  expandFolder: (id: number, expanded?: boolean) => void;
+  expandAll: () => void;
+  collapseAll: () => void;
 
   // Selection
-  selectFolder: (id: number, selected: boolean, clearOthers?: boolean) => void
-  clearSelection: () => void
+  selectFolder: (id: number, selected: boolean, clearOthers?: boolean) => void;
+  clearSelection: () => void;
 
   // Conversation Assignment
-  assignConversationsToFolder: (conversationIds: number[], folderId: number | null) => Promise<void>
-  moveConversationsBetweenFolders: (conversationIds: number[], fromFolderId: number | null, toFolderId: number | null) => Promise<void>
+  assignConversationsToFolder: (
+    conversationIds: number[],
+    folderId: number | null,
+  ) => Promise<void>;
+  moveConversationsBetweenFolders: (
+    conversationIds: number[],
+    fromFolderId: number | null,
+    toFolderId: number | null,
+  ) => Promise<void>;
 
   // Drag and Drop
-  startDragFolder: (folderId: number) => void
-  startDragConversations: (conversationIds: number[]) => void
-  dragOverFolder: (folderId: number | null) => void
-  dropOnFolder: (targetFolderId: number | null, operation?: 'move' | 'copy') => Promise<void>
-  cancelDrag: () => void
+  startDragFolder: (folderId: number) => void;
+  startDragConversations: (conversationIds: number[]) => void;
+  dragOverFolder: (folderId: number | null) => void;
+  dropOnFolder: (
+    targetFolderId: number | null,
+    operation?: "move" | "copy",
+  ) => Promise<void>;
+  cancelDrag: () => void;
 
   // Modal Management
-  openCreateModal: (parentFolderId?: number) => void
-  openEditModal: (folderId: number) => void
-  openDeleteModal: (folderId: number) => void
-  closeModals: () => void
+  openCreateModal: (parentFolderId?: number) => void;
+  openEditModal: (folderId: number) => void;
+  openDeleteModal: (folderId: number) => void;
+  closeModals: () => void;
 
   // Utilities
-  getFolderPath: (folderId: number) => Folder[]
-  getFolderDepth: (folderId: number) => number
-  getChildFolders: (parentId: number | null) => Folder[]
-  updateConversationCounts: (counts: Record<number, number>) => void
+  getFolderPath: (folderId: number) => Folder[];
+  getFolderDepth: (folderId: number) => number;
+  getChildFolders: (parentId: number | null) => Folder[];
+  updateConversationCounts: (counts: Record<number, number>) => void;
 }
 
 export interface FoldersStore extends FoldersState {
-  actions: FoldersActions
+  actions: FoldersActions;
 }
 
 // Store Implementation
@@ -127,7 +137,7 @@ export const useFoldersStore = create<FoldersStore>()(
         draggedFolderId: null,
         draggedConversationIds: [],
         dragOverFolderId: null,
-        dragOperation: null
+        dragOperation: null,
       },
 
       createModalOpen: false,
@@ -141,44 +151,43 @@ export const useFoldersStore = create<FoldersStore>()(
         // ===========================
 
         loadFolders: async (forceRefresh = false) => {
-          const state = get()
+          const state = get();
 
           if (!forceRefresh && Object.keys(state.folders).length > 0) {
-            return
+            return;
           }
 
-          set({ isLoading: true })
+          set({ isLoading: true });
 
           try {
-            const response: FolderListResponse = await listFolders()
+            const response: FolderListResponse = await listFolders();
 
-            const foldersMap: Record<number, Folder> = {}
-            response.folders.forEach(folder => {
+            const foldersMap: Record<number, Folder> = {};
+            response.folders.forEach((folder) => {
               foldersMap[folder.id] = {
                 ...folder,
                 isExpanded: state.expandedFolderIds.has(folder.id),
                 isSelected: state.selectedFolderIds.has(folder.id),
-                conversationCount: folder.conversation_count ?? 0
-              }
-            })
+                conversationCount: folder.conversation_count ?? 0,
+              };
+            });
 
             set({
               folders: foldersMap,
               isLoading: false,
-              lastUpdated: new Date().toISOString()
-            })
+              lastUpdated: new Date().toISOString(),
+            });
 
             // Build tree structure
-            get().actions.buildFolderTree()
-
+            get().actions.buildFolderTree();
           } catch (error) {
-            console.warn('Folders: service unreachable; using empty list')
-            set({ isLoading: false, folders: {}, folderTree: [] })
+            console.warn("Folders: service unreachable; using empty list");
+            set({ isLoading: false, folders: {}, folderTree: [] });
           }
         },
 
         refreshFolders: async () => {
-          await get().actions.loadFolders(true)
+          await get().actions.loadFolders(true);
         },
 
         // ===========================
@@ -188,118 +197,118 @@ export const useFoldersStore = create<FoldersStore>()(
         createFolder: async (request) => {
           try {
             // Call Supabase-enabled endpoint
-            const folder = await feedMeApi.createFolderSupabase(request)
+            const folder = await feedMeApi.createFolderSupabase(request);
 
             const newFolder: Folder = {
               ...folder,
               parent_id: folder.parent_id ?? null,
               isExpanded: true,
               isSelected: false,
-              conversationCount: 0
-            }
+              conversationCount: 0,
+            };
 
-            set(state => ({
+            set((state) => ({
               folders: {
                 ...state.folders,
-                [newFolder.id]: newFolder
-              }
-            }))
+                [newFolder.id]: newFolder,
+              },
+            }));
 
             // Update tree incrementally
-            get().actions.updateFolderInTree(newFolder.id)
+            get().actions.updateFolderInTree(newFolder.id);
 
             // Expand parent if exists
             if (newFolder.parent_id) {
-              get().actions.expandFolder(newFolder.parent_id, true)
+              get().actions.expandFolder(newFolder.parent_id, true);
             }
 
             // Show Supabase sync status
             useUIStore.getState().actions.showToast({
-              type: 'success',
-              title: 'Folder Created',
+              type: "success",
+              title: "Folder Created",
               message: `Folder "${newFolder.name}" created successfully`,
-              duration: 3000
-            })
+              duration: 3000,
+            });
 
-            return newFolder
-
+            return newFolder;
           } catch (error) {
-            console.error('Failed to create folder:', error)
-            throw error
+            console.error("Failed to create folder:", error);
+            throw error;
           }
         },
 
         updateFolder: async (id, request) => {
           try {
             // Call Supabase-enabled endpoint
-            const response = await feedMeApi.updateFolderSupabase(id, request)
+            const response = await feedMeApi.updateFolderSupabase(id, request);
 
-            set(state => ({
+            set((state) => ({
               folders: {
                 ...state.folders,
                 [id]: {
                   ...state.folders[id],
                   ...response,
-                  parent_id: response.parent_id ?? null
-                }
-              }
-            }))
+                  parent_id: response.parent_id ?? null,
+                },
+              },
+            }));
 
             // Update tree incrementally if parent changed
-            get().actions.updateFolderInTree(id)
+            get().actions.updateFolderInTree(id);
 
             // Show Supabase sync status
             useUIStore.getState().actions.showToast({
-              type: 'success',
-              title: 'Folder Updated',
+              type: "success",
+              title: "Folder Updated",
               message: `Folder updated successfully`,
-              duration: 3000
-            })
-
+              duration: 3000,
+            });
           } catch (error) {
-            console.error(`Failed to update folder ${id}:`, error)
-            throw error
+            console.error(`Failed to update folder ${id}:`, error);
+            throw error;
           }
         },
 
         deleteFolder: async (id, moveConversationsTo) => {
           try {
             // Call Supabase-enabled endpoint
-            const response = await feedMeApi.deleteFolderSupabase(id, moveConversationsTo)
+            const response = await feedMeApi.deleteFolderSupabase(
+              id,
+              moveConversationsTo,
+            );
 
             // Remove from state
-            set(state => {
-              const folders = { ...state.folders }
-              delete folders[id]
+            set((state) => {
+              const folders = { ...state.folders };
+              delete folders[id];
 
-              const selectedFolderIds = new Set(state.selectedFolderIds)
-              selectedFolderIds.delete(id)
+              const selectedFolderIds = new Set(state.selectedFolderIds);
+              selectedFolderIds.delete(id);
 
-              const expandedFolderIds = new Set(state.expandedFolderIds)
-              expandedFolderIds.delete(id)
+              const expandedFolderIds = new Set(state.expandedFolderIds);
+              expandedFolderIds.delete(id);
 
               return {
                 folders,
                 selectedFolderIds,
-                expandedFolderIds
-              }
-            })
+                expandedFolderIds,
+              };
+            });
 
             // For deletion, we need to rebuild the tree since the folder no longer exists
             // and we can't use updateFolderInTree for non-existent folders
-            get().actions.buildFolderTree()
+            get().actions.buildFolderTree();
 
             // Show Supabase sync status
             useUIStore.getState().actions.showToast({
-              type: 'success',
-              title: 'Folder Deleted',
-              message: response.message || 'Folder deleted successfully',
-              duration: 3000
-            })
-
+              type: "success",
+              title: "Folder Deleted",
+              message: response.message || "Folder deleted successfully",
+              duration: 3000,
+            });
           } catch (error) {
-            console.error(`Failed to delete folder ${id}:`, error)
-            throw error
+            console.error(`Failed to delete folder ${id}:`, error);
+            throw error;
           }
         },
 
@@ -308,21 +317,21 @@ export const useFoldersStore = create<FoldersStore>()(
         // ===========================
 
         buildFolderTree: () => {
-          const state = get()
-          const folders = Object.values(state.folders)
+          const state = get();
+          const folders = Object.values(state.folders);
 
           // Build hierarchy
-          const folderMap = new Map<number, Folder>()
-          const rootFolders: Folder[] = []
+          const folderMap = new Map<number, Folder>();
+          const rootFolders: Folder[] = [];
 
           // Create pseudo-folder for unassigned conversations
           const unassignedFolder: Folder = {
             id: UNASSIGNED_FOLDER_ID,
-            name: 'All Conversations',
-            color: '#6b7280',
-            description: 'Conversations not assigned to any folder',
+            name: "All Conversations",
+            color: "#6b7280",
+            description: "Conversations not assigned to any folder",
             parent_id: null,
-            created_by: 'system',
+            created_by: "system",
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             is_active: true,
@@ -330,95 +339,100 @@ export const useFoldersStore = create<FoldersStore>()(
             children: [],
             level: 0,
             isExpanded: true,
-            isSelected: false
-          }
+            isSelected: false,
+          };
 
           // Add unassigned folder to the map and root
-          folderMap.set(UNASSIGNED_FOLDER_ID, unassignedFolder)
-          rootFolders.push(unassignedFolder)
+          folderMap.set(UNASSIGNED_FOLDER_ID, unassignedFolder);
+          rootFolders.push(unassignedFolder);
 
           // Initialize all real folders
-          folders.forEach(folder => {
+          folders.forEach((folder) => {
             folderMap.set(folder.id, {
               ...folder,
               children: [],
-              level: 0
-            })
-          })
+              level: 0,
+            });
+          });
 
           // Build parent-child relationships for real folders only
-          folders.forEach(folder => {
-            const folderNode = folderMap.get(folder.id)!
+          folders.forEach((folder) => {
+            const folderNode = folderMap.get(folder.id)!;
 
             if (folder.parent_id != null && folderMap.has(folder.parent_id)) {
-              const parent = folderMap.get(folder.parent_id)!
-              parent.children!.push(folderNode)
-              folderNode.level = (parent.level || 0) + 1
+              const parent = folderMap.get(folder.parent_id)!;
+              parent.children!.push(folderNode);
+              folderNode.level = (parent.level || 0) + 1;
             } else {
-              rootFolders.push(folderNode)
+              rootFolders.push(folderNode);
             }
-          })
+          });
 
           // Sort folders by name (keep unassigned at top)
           const sortFolders = (folders: Folder[]) => {
             folders.sort((a, b) => {
               // Keep unassigned folder at the top
-              if (a.id === UNASSIGNED_FOLDER_ID) return -1
-              if (b.id === UNASSIGNED_FOLDER_ID) return 1
-              return a.name.localeCompare(b.name)
-            })
-            folders.forEach(folder => {
+              if (a.id === UNASSIGNED_FOLDER_ID) return -1;
+              if (b.id === UNASSIGNED_FOLDER_ID) return 1;
+              return a.name.localeCompare(b.name);
+            });
+            folders.forEach((folder) => {
               if (folder.children) {
-                sortFolders(folder.children)
+                sortFolders(folder.children);
               }
-            })
-          }
+            });
+          };
 
-          sortFolders(rootFolders)
+          sortFolders(rootFolders);
 
-          set({ folderTree: rootFolders })
+          set({ folderTree: rootFolders });
         },
 
         updateFolderInTree: (folderId: number) => {
-          const state = get()
-          const folder = state.folders[folderId]
+          const state = get();
+          const folder = state.folders[folderId];
 
           if (!folder) {
             // Folder no longer exists, do full rebuild
-            get().actions.buildFolderTree()
-            return
+            get().actions.buildFolderTree();
+            return;
           }
 
           // Find current folder in tree to check if parent changed
-          const findFolderInTree = (nodes: Folder[], targetId: number): { folder: Folder | null, parentId: number | null } => {
+          const findFolderInTree = (
+            nodes: Folder[],
+            targetId: number,
+          ): { folder: Folder | null; parentId: number | null } => {
             for (const node of nodes) {
               if (node.id === targetId) {
-                return { folder: node, parentId: null } // Found at root level
+                return { folder: node, parentId: null }; // Found at root level
               }
               if (node.children && node.children.length > 0) {
                 for (const child of node.children) {
                   if (child.id === targetId) {
-                    return { folder: child, parentId: node.id }
+                    return { folder: child, parentId: node.id };
                   }
                 }
-                const result = findFolderInTree(node.children, targetId)
-                if (result.folder) return result
+                const result = findFolderInTree(node.children, targetId);
+                if (result.folder) return result;
               }
             }
-            return { folder: null, parentId: null }
-          }
+            return { folder: null, parentId: null };
+          };
 
-          const currentInTree = findFolderInTree(state.folderTree, folderId)
-          const parentChanged = currentInTree.folder && (
-            (currentInTree.parentId ?? null) !== (folder.parent_id ?? null)
-          )
+          const currentInTree = findFolderInTree(state.folderTree, folderId);
+          const parentChanged =
+            currentInTree.folder &&
+            (currentInTree.parentId ?? null) !== (folder.parent_id ?? null);
 
           // Helper function to update folder in place, preserving children and other properties
-          const updateFolderInPlace = (nodes: Folder[]): { nodes: Folder[], found: boolean } => {
-            let found = false
-            const updatedNodes = nodes.map(node => {
+          const updateFolderInPlace = (
+            nodes: Folder[],
+          ): { nodes: Folder[]; found: boolean } => {
+            let found = false;
+            const updatedNodes = nodes.map((node) => {
               if (node.id === folderId) {
-                found = true
+                found = true;
                 // Update folder while preserving tree-specific properties
                 return {
                   ...folder,
@@ -426,62 +440,62 @@ export const useFoldersStore = create<FoldersStore>()(
                   level: node.level,
                   isExpanded: node.isExpanded,
                   isSelected: node.isSelected,
-                  isDragOver: node.isDragOver
-                }
+                  isDragOver: node.isDragOver,
+                };
               }
               if (node.children && node.children.length > 0) {
-                const result = updateFolderInPlace(node.children)
+                const result = updateFolderInPlace(node.children);
                 if (result.found) {
-                  found = true
+                  found = true;
                   return {
                     ...node,
-                    children: result.nodes
-                  }
+                    children: result.nodes,
+                  };
                 }
               }
-              return node
-            })
-            return { nodes: updatedNodes, found }
-          }
+              return node;
+            });
+            return { nodes: updatedNodes, found };
+          };
 
           // If parent changed or folder not found, do full rebuild
           if (parentChanged) {
-            get().actions.buildFolderTree()
-            return
+            get().actions.buildFolderTree();
+            return;
           }
 
           // Try to update in place
-          const result = updateFolderInPlace(state.folderTree)
+          const result = updateFolderInPlace(state.folderTree);
 
           if (!result.found) {
             // Folder not in tree (new folder), do full rebuild
-            get().actions.buildFolderTree()
-            return
+            get().actions.buildFolderTree();
+            return;
           }
 
           // Sort root level if a root folder's name changed
-          let updatedTree = result.nodes
+          let updatedTree = result.nodes;
           if (currentInTree.parentId === null) {
             // Re-sort root level (keep unassigned folder at top)
             updatedTree = [...result.nodes].sort((a, b) => {
-              if (a.id === 0) return -1 // UNASSIGNED_FOLDER_ID
-              if (b.id === 0) return 1
-              return a.name.localeCompare(b.name)
-            })
+              if (a.id === 0) return -1; // UNASSIGNED_FOLDER_ID
+              if (b.id === 0) return 1;
+              return a.name.localeCompare(b.name);
+            });
           }
 
-          set({ folderTree: updatedTree })
+          set({ folderTree: updatedTree });
         },
 
         expandFolder: (id, expanded) => {
-          set(state => {
-            const expandedFolderIds = new Set(state.expandedFolderIds)
-            const newExpanded = expanded ?? !expandedFolderIds.has(id)
+          set((state) => {
+            const expandedFolderIds = new Set(state.expandedFolderIds);
+            const newExpanded = expanded ?? !expandedFolderIds.has(id);
 
             if (newExpanded) {
-              expandedFolderIds.add(id)
+              expandedFolderIds.add(id);
             } else {
-              expandedFolderIds.delete(id)
+              expandedFolderIds.delete(id);
             }
 
             return {
@@ -490,45 +504,47 @@ export const useFoldersStore = create<FoldersStore>()(
                 ...state.folders,
                 [id]: {
                   ...state.folders[id],
-                  isExpanded: newExpanded
-                }
-              }
-            }
-          })
+                  isExpanded: newExpanded,
+                },
+              },
+            };
+          });
         },
 
         expandAll: () => {
-          set(state => {
-            const expandedFolderIds = new Set(Object.keys(state.folders).map(Number))
-            const folders = { ...state.folders }
+          set((state) => {
+            const expandedFolderIds = new Set(
+              Object.keys(state.folders).map(Number),
+            );
+            const folders = { ...state.folders };
 
-            Object.keys(folders).forEach(id => {
+            Object.keys(folders).forEach((id) => {
               folders[Number(id)] = {
                 ...folders[Number(id)],
-                isExpanded: true
-              }
-            })
+                isExpanded: true,
+              };
+            });
 
-            return { expandedFolderIds, folders }
-          })
+            return { expandedFolderIds, folders };
+          });
         },
 
         collapseAll: () => {
-          set(state => {
-            const folders = { ...state.folders }
+          set((state) => {
+            const folders = { ...state.folders };
 
-            Object.keys(folders).forEach(id => {
+            Object.keys(folders).forEach((id) => {
               folders[Number(id)] = {
                 ...folders[Number(id)],
-                isExpanded: false
-              }
-            })
+                isExpanded: false,
+              };
+            });
 
             return {
               expandedFolderIds: new Set(),
-              folders
-            }
-          })
+              folders,
+            };
+          });
         },
 
         // ===========================
@@ -536,49 +552,49 @@ export const useFoldersStore = create<FoldersStore>()(
         // ===========================
 
         selectFolder: (id, selected, clearOthers = false) => {
-          set(state => {
-            let selectedFolderIds = new Set(state.selectedFolderIds)
+          set((state) => {
+            let selectedFolderIds = new Set(state.selectedFolderIds);
 
             if (clearOthers) {
-              selectedFolderIds = new Set()
+              selectedFolderIds = new Set();
             }
 
             if (selected) {
-              selectedFolderIds.add(id)
+              selectedFolderIds.add(id);
             } else {
-              selectedFolderIds.delete(id)
+              selectedFolderIds.delete(id);
             }
 
-            const folders = { ...state.folders }
+            const folders = { ...state.folders };
             if (folders[id]) {
               folders[id] = {
                 ...folders[id],
-                isSelected: selected
-              }
+                isSelected: selected,
+              };
             }
 
-            return { selectedFolderIds, folders }
-          })
+            return { selectedFolderIds, folders };
+          });
         },
 
         clearSelection: () => {
-          set(state => {
-            const folders = { ...state.folders }
+          set((state) => {
+            const folders = { ...state.folders };
 
-            state.selectedFolderIds.forEach(id => {
+            state.selectedFolderIds.forEach((id) => {
               if (folders[id]) {
                 folders[id] = {
                   ...folders[id],
-                  isSelected: false
-                }
+                  isSelected: false,
+                };
               }
-            })
+            });
 
             return {
               selectedFolderIds: new Set(),
-              folders
-            }
-          })
+              folders,
+            };
+          });
         },
 
         // ===========================
@@ -588,53 +604,75 @@ export const useFoldersStore = create<FoldersStore>()(
         assignConversationsToFolder: async (conversationIds, folderId) => {
           try {
             // Use Supabase-enabled endpoint
-            const response = await feedMeApi.assignConversationsToFolderSupabase(folderId, conversationIds)
+            const response =
+              await feedMeApi.assignConversationsToFolderSupabase(
+                folderId,
+                conversationIds,
+              );
 
             // The conversation store will handle updating conversation folder assignments
-            console.log(`Assigned ${conversationIds.length} conversations to folder ${folderId}`)
+            console.log(
+              `Assigned ${conversationIds.length} conversations to folder ${folderId}`,
+            );
 
             // Show Supabase sync status
             useUIStore.getState().actions.showToast({
-              type: 'success',
-              title: 'Conversations Assigned',
-              message: response.message || `${conversationIds.length} conversation(s) assigned`,
-              duration: 3000
-            })
-
+              type: "success",
+              title: "Conversations Assigned",
+              message:
+                response.message ||
+                `${conversationIds.length} conversation(s) assigned`,
+              duration: 3000,
+            });
           } catch (error) {
-            console.error('Failed to assign conversations to folder:', error)
-            throw error
+            console.error("Failed to assign conversations to folder:", error);
+            throw error;
           }
         },
 
-        moveConversationsBetweenFolders: async (conversationIds, fromFolderId, toFolderId) => {
+        moveConversationsBetweenFolders: async (
+          conversationIds,
+          fromFolderId,
+          toFolderId,
+        ) => {
           try {
-            await get().actions.assignConversationsToFolder(conversationIds, toFolderId)
+            await get().actions.assignConversationsToFolder(
+              conversationIds,
+              toFolderId,
+            );
 
             // Update conversation counts
-            set(state => {
-              const folders = { ...state.folders }
+            set((state) => {
+              const folders = { ...state.folders };
 
               if (fromFolderId && folders[fromFolderId]) {
                 folders[fromFolderId] = {
                   ...folders[fromFolderId],
-                  conversationCount: Math.max(0, (folders[fromFolderId].conversationCount || 0) - conversationIds.length)
-                }
+                  conversationCount: Math.max(
+                    0,
+                    (folders[fromFolderId].conversationCount || 0) -
+                      conversationIds.length,
+                  ),
+                };
               }
 
               if (toFolderId && folders[toFolderId]) {
                 folders[toFolderId] = {
                   ...folders[toFolderId],
-                  conversationCount: (folders[toFolderId].conversationCount || 0) + conversationIds.length
-                }
+                  conversationCount:
+                    (folders[toFolderId].conversationCount || 0) +
+                    conversationIds.length,
+                };
               }
 
-              return { folders }
-            })
-
+              return { folders };
+            });
           } catch (error) {
-            console.error('Failed to move conversations between folders:', error)
-            throw error
+            console.error(
+              "Failed to move conversations between folders:",
+              error,
+            );
+            throw error;
           }
         },
 
@@ -649,9 +687,9 @@ export const useFoldersStore = create<FoldersStore>()(
               draggedFolderId: folderId,
               draggedConversationIds: [],
               dragOverFolderId: null,
-              dragOperation: 'move'
-            }
-          })
+              dragOperation: "move",
+            },
+          });
         },
 
         startDragConversations: (conversationIds) => {
@@ -661,64 +699,68 @@ export const useFoldersStore = create<FoldersStore>()(
               draggedFolderId: null,
               draggedConversationIds: conversationIds,
               dragOverFolderId: null,
-              dragOperation: 'move'
-            }
-          })
+              dragOperation: "move",
+            },
+          });
         },
 
         dragOverFolder: (folderId) => {
-          set(state => ({
+          set((state) => ({
             dragState: {
               ...state.dragState,
-              dragOverFolderId: folderId
+              dragOverFolderId: folderId,
             },
             folders: {
               ...state.folders,
-              ...(folderId && state.folders[folderId] ? {
-                [folderId]: {
-                  ...state.folders[folderId],
-                  isDragOver: true
-                }
-              } : {})
-            }
-          }))
+              ...(folderId && state.folders[folderId]
+                ? {
+                    [folderId]: {
+                      ...state.folders[folderId],
+                      isDragOver: true,
+                    },
+                  }
+                : {}),
+            },
+          }));
         },
 
-        dropOnFolder: async (targetFolderId, operation = 'move') => {
-          const state = get()
+        dropOnFolder: async (targetFolderId, operation = "move") => {
+          const state = get();
 
           try {
             if (state.dragState.draggedConversationIds.length > 0) {
               // Drop conversations on folder
               await get().actions.assignConversationsToFolder(
                 state.dragState.draggedConversationIds,
-                targetFolderId
-              )
+                targetFolderId,
+              );
 
               // Set as active folder in UI store
-              useUIStore.getState().actions.setActiveFolder(targetFolderId)
+              useUIStore.getState().actions.setActiveFolder(targetFolderId);
             }
 
             // Handle folder drag-drop operations here if needed
-
           } catch (error) {
-            console.error('Drop operation failed:', error)
-            throw error
+            console.error("Drop operation failed:", error);
+            throw error;
           } finally {
-            get().actions.cancelDrag()
+            get().actions.cancelDrag();
           }
         },
 
         cancelDrag: () => {
-          set(state => {
-            const folders = { ...state.folders }
+          set((state) => {
+            const folders = { ...state.folders };
 
             // Clear drag over state only for the specific folder that has it
-            if (state.dragState.dragOverFolderId !== null && folders[state.dragState.dragOverFolderId]) {
+            if (
+              state.dragState.dragOverFolderId !== null &&
+              folders[state.dragState.dragOverFolderId]
+            ) {
               folders[state.dragState.dragOverFolderId] = {
                 ...folders[state.dragState.dragOverFolderId],
-                isDragOver: false
-              }
+                isDragOver: false,
+              };
             }
 
             return {
@@ -727,11 +769,11 @@ export const useFoldersStore = create<FoldersStore>()(
                 draggedFolderId: null,
                 draggedConversationIds: [],
                 dragOverFolderId: null,
-                dragOperation: null
+                dragOperation: null,
               },
-              folders
-            }
-          })
+              folders,
+            };
+          });
         },
 
         // ===========================
@@ -741,22 +783,22 @@ export const useFoldersStore = create<FoldersStore>()(
         openCreateModal: (parentFolderId) => {
           set({
             createModalOpen: true,
-            targetFolderId: parentFolderId || null
-          })
+            targetFolderId: parentFolderId || null,
+          });
         },
 
         openEditModal: (folderId) => {
           set({
             editModalOpen: true,
-            targetFolderId: folderId
-          })
+            targetFolderId: folderId,
+          });
         },
 
         openDeleteModal: (folderId) => {
           set({
             deleteModalOpen: true,
-            targetFolderId: folderId
-          })
+            targetFolderId: folderId,
+          });
         },
 
         closeModals: () => {
@@ -764,8 +806,8 @@ export const useFoldersStore = create<FoldersStore>()(
             createModalOpen: false,
             editModalOpen: false,
             deleteModalOpen: false,
-            targetFolderId: null
-          })
+            targetFolderId: null,
+          });
         },
 
         // ===========================
@@ -773,90 +815,94 @@ export const useFoldersStore = create<FoldersStore>()(
         // ===========================
 
         getFolderPath: (folderId) => {
-          const state = get()
-          const path: Folder[] = []
-          let currentId: number | null = folderId
+          const state = get();
+          const path: Folder[] = [];
+          let currentId: number | null = folderId;
 
           while (currentId && state.folders[currentId]) {
-            const folder: Folder = state.folders[currentId]!
-            path.unshift(folder)
-            currentId = folder.parent_id ?? null
+            const folder: Folder = state.folders[currentId]!;
+            path.unshift(folder);
+            currentId = folder.parent_id ?? null;
           }
 
-          return path
+          return path;
         },
 
         getFolderDepth: (folderId) => {
-          return get().actions.getFolderPath(folderId).length
+          return get().actions.getFolderPath(folderId).length;
         },
 
         getChildFolders: (parentId) => {
-          const state = get()
-          return Object.values(state.folders).filter(folder => folder.parent_id === parentId)
+          const state = get();
+          return Object.values(state.folders).filter(
+            (folder) => folder.parent_id === parentId,
+          );
         },
 
         updateConversationCounts: (counts) => {
-          set(state => {
-            const folders = { ...state.folders }
+          set((state) => {
+            const folders = { ...state.folders };
 
             Object.entries(counts).forEach(([folderId, count]) => {
-              const id = Number(folderId)
+              const id = Number(folderId);
               if (folders[id]) {
                 folders[id] = {
                   ...folders[id],
-                  conversationCount: count
-                }
+                  conversationCount: count,
+                };
               }
-            })
+            });
 
-            return { folders }
-          })
-        }
-      }
+            return { folders };
+          });
+        },
+      },
     })),
     {
-      name: 'feedme-folders-store'
-    }
-  )
-)
+      name: "feedme-folders-store",
+    },
+  ),
+);
 
 // Stable selectors
-const selectFolders = (state: FoldersStore) => state.folders
-const selectFolderTree = (state: FoldersStore) => state.folderTree
-const selectIsLoading = (state: FoldersStore) => state.isLoading
-const selectLastUpdated = (state: FoldersStore) => state.lastUpdated
-const selectSelectedFolderIds = (state: FoldersStore) => state.selectedFolderIds
-const selectExpandedFolderIds = (state: FoldersStore) => state.expandedFolderIds
-const selectDragState = (state: FoldersStore) => state.dragState
-const selectCreateModalOpen = (state: FoldersStore) => state.createModalOpen
-const selectEditModalOpen = (state: FoldersStore) => state.editModalOpen
-const selectDeleteModalOpen = (state: FoldersStore) => state.deleteModalOpen
-const selectTargetFolderId = (state: FoldersStore) => state.targetFolderId
-const selectActions = (state: FoldersStore) => state.actions
+const selectFolders = (state: FoldersStore) => state.folders;
+const selectFolderTree = (state: FoldersStore) => state.folderTree;
+const selectIsLoading = (state: FoldersStore) => state.isLoading;
+const selectLastUpdated = (state: FoldersStore) => state.lastUpdated;
+const selectSelectedFolderIds = (state: FoldersStore) =>
+  state.selectedFolderIds;
+const selectExpandedFolderIds = (state: FoldersStore) =>
+  state.expandedFolderIds;
+const selectDragState = (state: FoldersStore) => state.dragState;
+const selectCreateModalOpen = (state: FoldersStore) => state.createModalOpen;
+const selectEditModalOpen = (state: FoldersStore) => state.editModalOpen;
+const selectDeleteModalOpen = (state: FoldersStore) => state.deleteModalOpen;
+const selectTargetFolderId = (state: FoldersStore) => state.targetFolderId;
+const selectActions = (state: FoldersStore) => state.actions;
 
 // Convenience hooks with stable selectors
 export const useFolders = () => {
-  const folders = useFoldersStore(selectFolders)
-  const folderTree = useFoldersStore(selectFolderTree)
-  const isLoading = useFoldersStore(selectIsLoading)
-  const lastUpdated = useFoldersStore(selectLastUpdated)
-  return { folders, folderTree, isLoading, lastUpdated }
-}
+  const folders = useFoldersStore(selectFolders);
+  const folderTree = useFoldersStore(selectFolderTree);
+  const isLoading = useFoldersStore(selectIsLoading);
+  const lastUpdated = useFoldersStore(selectLastUpdated);
+  return { folders, folderTree, isLoading, lastUpdated };
+};
 
 export const useFolderSelection = () => {
-  const selectedFolderIds = useFoldersStore(selectSelectedFolderIds)
-  const expandedFolderIds = useFoldersStore(selectExpandedFolderIds)
-  return { selectedFolderIds, expandedFolderIds }
-}
+  const selectedFolderIds = useFoldersStore(selectSelectedFolderIds);
+  const expandedFolderIds = useFoldersStore(selectExpandedFolderIds);
+  return { selectedFolderIds, expandedFolderIds };
+};
 
-export const useFolderDragState = () => useFoldersStore(selectDragState)
+export const useFolderDragState = () => useFoldersStore(selectDragState);
 
 export const useFolderModals = () => {
-  const createModalOpen = useFoldersStore(selectCreateModalOpen)
-  const editModalOpen = useFoldersStore(selectEditModalOpen)
-  const deleteModalOpen = useFoldersStore(selectDeleteModalOpen)
-  const targetFolderId = useFoldersStore(selectTargetFolderId)
-  return { createModalOpen, editModalOpen, deleteModalOpen, targetFolderId }
-}
+  const createModalOpen = useFoldersStore(selectCreateModalOpen);
+  const editModalOpen = useFoldersStore(selectEditModalOpen);
+  const deleteModalOpen = useFoldersStore(selectDeleteModalOpen);
+  const targetFolderId = useFoldersStore(selectTargetFolderId);
+  return { createModalOpen, editModalOpen, deleteModalOpen, targetFolderId };
+};
 
-export const useFoldersActions = () => useFoldersStore(selectActions)
+export const useFoldersActions = () => useFoldersStore(selectActions);

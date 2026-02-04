@@ -5,9 +5,9 @@
  * Uses the existing APIClient pattern for consistency.
  */
 
-import { apiClient, APIRequestError } from '@/services/api/api-client';
-import { supabase } from '@/services/supabase';
-import { ENTITY_COLORS } from '../types';
+import { apiClient, APIRequestError } from "@/services/api/api-client";
+import { supabase } from "@/services/supabase";
+import { ENTITY_COLORS } from "../types";
 import type {
   Memory,
   MemoryEntity,
@@ -52,7 +52,7 @@ import type {
   SplitRelationshipCommitResponse,
   RelationshipAnalysisRequest,
   RelationshipAnalysisResponse,
-} from '../types';
+} from "../types";
 
 // =============================================================================
 // Constants
@@ -63,7 +63,7 @@ import type {
  * @default '/api/v1/memory'
  */
 const MEMORY_API_BASE =
-  process.env.NEXT_PUBLIC_MEMORY_API_BASE || '/api/v1/memory';
+  process.env.NEXT_PUBLIC_MEMORY_API_BASE || "/api/v1/memory";
 
 /**
  * In local/dev auth bypass modes, the frontend may not have a real Supabase
@@ -71,16 +71,19 @@ const MEMORY_API_BASE =
  * In those cases, use backend read endpoints instead of direct Supabase reads.
  */
 const USE_BACKEND_READS =
-  process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true' ||
-  (process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true' &&
-    process.env.NEXT_PUBLIC_DEV_MODE === 'true');
+  process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === "true" ||
+  (process.env.NEXT_PUBLIC_BYPASS_AUTH === "true" &&
+    process.env.NEXT_PUBLIC_DEV_MODE === "true");
 
 function hasAdminRole(value: unknown): boolean {
-  if (typeof value === 'string') {
-    return value.trim().toLowerCase() === 'admin';
+  if (typeof value === "string") {
+    return value.trim().toLowerCase() === "admin";
   }
   if (Array.isArray(value)) {
-    return value.some((item) => typeof item === 'string' && item.trim().toLowerCase() === 'admin');
+    return value.some(
+      (item) =>
+        typeof item === "string" && item.trim().toLowerCase() === "admin",
+    );
   }
   return false;
 }
@@ -140,7 +143,7 @@ export const TIMING = {
  * Supabase PostgREST supports selecting explicit columns.
  */
 const MEMORY_SELECT_COLUMNS =
-  'id,content,metadata,source_type,review_status,reviewed_by,reviewed_at,confidence_score,retrieval_count,last_retrieved_at,feedback_positive,feedback_negative,resolution_success_count,resolution_failure_count,agent_id,tenant_id,created_at,updated_at';
+  "id,content,metadata,source_type,review_status,reviewed_by,reviewed_at,confidence_score,retrieval_count,last_retrieved_at,feedback_positive,feedback_negative,resolution_success_count,resolution_failure_count,agent_id,tenant_id,created_at,updated_at";
 
 // =============================================================================
 // Utility Functions
@@ -152,11 +155,11 @@ const MEMORY_SELECT_COLUMNS =
  * can still cause unexpected behavior or performance issues
  */
 function escapeLikePattern(input: string): string {
-  return input.replace(/[%_\\]/g, '\\$&');
+  return input.replace(/[%_\\]/g, "\\$&");
 }
 
 function buildQueryString(
-  params: Record<string, string | number | boolean | null | undefined>
+  params: Record<string, string | number | boolean | null | undefined>,
 ): string {
   const qs = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -164,7 +167,7 @@ function buildQueryString(
     qs.set(key, String(value));
   });
   const out = qs.toString();
-  return out ? `?${out}` : '';
+  return out ? `?${out}` : "";
 }
 
 /**
@@ -172,11 +175,11 @@ function buildQueryString(
  */
 export function escapeHtml(str: string): string {
   const escapeMap: Record<string, string> = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
   };
   return str.replace(/[&<>"']/g, (char) => escapeMap[char] || char);
 }
@@ -189,11 +192,11 @@ export function escapeHtml(str: string): string {
  * Add a new memory
  */
 export async function addMemory(
-  request: AddMemoryRequest
+  request: AddMemoryRequest,
 ): Promise<AddMemoryResponse> {
   return apiClient.post<AddMemoryResponse, AddMemoryRequest>(
     `${MEMORY_API_BASE}/add`,
-    request
+    request,
   );
 }
 
@@ -202,11 +205,11 @@ export async function addMemory(
  */
 export async function updateMemory(
   memoryId: string,
-  request: UpdateMemoryRequest
+  request: UpdateMemoryRequest,
 ): Promise<UpdateMemoryResponse> {
   return apiClient.put<UpdateMemoryResponse, UpdateMemoryRequest>(
     `${MEMORY_API_BASE}/${memoryId}`,
-    request
+    request,
   );
 }
 
@@ -214,19 +217,21 @@ export async function updateMemory(
  * Delete a memory (admin only)
  */
 export async function deleteMemory(
-  memoryId: string
+  memoryId: string,
 ): Promise<DeleteMemoryResponse> {
-  return apiClient.delete<DeleteMemoryResponse>(`${MEMORY_API_BASE}/${memoryId}`);
+  return apiClient.delete<DeleteMemoryResponse>(
+    `${MEMORY_API_BASE}/${memoryId}`,
+  );
 }
 
 /**
  * Delete a relationship (admin only)
  */
 export async function deleteRelationship(
-  relationshipId: string
+  relationshipId: string,
 ): Promise<DeleteRelationshipResponse> {
   return apiClient.delete<DeleteRelationshipResponse>(
-    `${MEMORY_API_BASE}/relationships/${relationshipId}`
+    `${MEMORY_API_BASE}/relationships/${relationshipId}`,
   );
 }
 
@@ -234,11 +239,11 @@ export async function deleteRelationship(
  * Merge duplicate memories (admin only)
  */
 export async function mergeMemories(
-  request: MergeMemoriesRequest
+  request: MergeMemoriesRequest,
 ): Promise<MergeMemoriesResponse> {
   return apiClient.post<MergeMemoriesResponse, MergeMemoriesRequest>(
     `${MEMORY_API_BASE}/merge`,
-    request
+    request,
   );
 }
 
@@ -246,7 +251,7 @@ export async function mergeMemories(
  * Merge explicit memory IDs (admin only)
  */
 export async function mergeMemoriesArbitrary(
-  request: MergeMemoriesArbitraryRequest
+  request: MergeMemoriesArbitraryRequest,
 ): Promise<MergeMemoriesArbitraryResponse> {
   return apiClient.post<
     MergeMemoriesArbitraryResponse,
@@ -266,11 +271,11 @@ export async function getMemoryMe(): Promise<MemoryMeResponse> {
  */
 export async function submitFeedback(
   memoryId: string,
-  request: SubmitFeedbackRequest
+  request: SubmitFeedbackRequest,
 ): Promise<SubmitFeedbackResponse> {
   return apiClient.post<SubmitFeedbackResponse, SubmitFeedbackRequest>(
     `${MEMORY_API_BASE}/${memoryId}/feedback`,
-    request
+    request,
   );
 }
 
@@ -278,11 +283,11 @@ export async function submitFeedback(
  * Export memories (admin only)
  */
 export async function exportMemories(
-  request: ExportMemoriesRequest
+  request: ExportMemoriesRequest,
 ): Promise<ExportMemoriesResponse> {
   return apiClient.post<ExportMemoriesResponse, ExportMemoriesRequest>(
     `${MEMORY_API_BASE}/export`,
-    request
+    request,
   );
 }
 
@@ -290,22 +295,22 @@ export async function exportMemories(
  * Import solved Zendesk tickets tagged for MB_playbook learning (admin only)
  */
 export async function importZendeskTagged(
-  request: ImportZendeskTaggedRequest = {}
+  request: ImportZendeskTaggedRequest = {},
 ): Promise<ImportZendeskTaggedResponse> {
-  return apiClient.post<ImportZendeskTaggedResponse, ImportZendeskTaggedRequest>(
-    `${MEMORY_API_BASE}/import/zendesk-tagged`,
-    request
-  );
+  return apiClient.post<
+    ImportZendeskTaggedResponse,
+    ImportZendeskTaggedRequest
+  >(`${MEMORY_API_BASE}/import/zendesk-tagged`, request);
 }
 
 /**
  * Approve a pending-review memory (admin only)
  */
 export async function approveMemory(
-  memoryId: string
+  memoryId: string,
 ): Promise<ApproveMemoryResponse> {
   return apiClient.post<ApproveMemoryResponse>(
-    `${MEMORY_API_BASE}/${encodeURIComponent(memoryId)}/approve`
+    `${MEMORY_API_BASE}/${encodeURIComponent(memoryId)}/approve`,
   );
 }
 
@@ -314,11 +319,11 @@ export async function approveMemory(
  */
 export async function dismissDuplicate(
   candidateId: string,
-  request: DismissDuplicateRequest
+  request: DismissDuplicateRequest,
 ): Promise<DismissDuplicateResponse> {
   return apiClient.post<DismissDuplicateResponse, DismissDuplicateRequest>(
     `${MEMORY_API_BASE}/duplicate/${candidateId}/dismiss`,
-    request
+    request,
   );
 }
 
@@ -326,12 +331,12 @@ export async function dismissDuplicate(
  * Import existing knowledge sources into the Memory UI schema (admin only)
  */
 export async function importMemorySources(
-  request: ImportMemorySourcesRequest
+  request: ImportMemorySourcesRequest,
 ): Promise<ImportMemorySourcesResponse> {
-  return apiClient.post<ImportMemorySourcesResponse, ImportMemorySourcesRequest>(
-    `${MEMORY_API_BASE}/import`,
-    request
-  );
+  return apiClient.post<
+    ImportMemorySourcesResponse,
+    ImportMemorySourcesRequest
+  >(`${MEMORY_API_BASE}/import`, request);
 }
 
 /**
@@ -339,11 +344,11 @@ export async function importMemorySources(
  */
 export async function updateRelationship(
   relationshipId: string,
-  request: UpdateRelationshipRequest
+  request: UpdateRelationshipRequest,
 ): Promise<MemoryRelationship> {
   return apiClient.put<MemoryRelationship, UpdateRelationshipRequest>(
     `${MEMORY_API_BASE}/relationships/${relationshipId}`,
-    request
+    request,
   );
 }
 
@@ -351,11 +356,11 @@ export async function updateRelationship(
  * Merge multiple relationships into one (admin only)
  */
 export async function mergeRelationships(
-  request: MergeRelationshipsRequest
+  request: MergeRelationshipsRequest,
 ): Promise<MergeRelationshipsResponse> {
   return apiClient.post<MergeRelationshipsResponse, MergeRelationshipsRequest>(
     `${MEMORY_API_BASE}/relationships/merge`,
-    request
+    request,
   );
 }
 
@@ -364,11 +369,14 @@ export async function mergeRelationships(
  */
 export async function splitRelationshipPreview(
   relationshipId: string,
-  request: SplitRelationshipPreviewRequest
+  request: SplitRelationshipPreviewRequest,
 ): Promise<SplitRelationshipPreviewResponse> {
-  return apiClient.post<SplitRelationshipPreviewResponse, SplitRelationshipPreviewRequest>(
+  return apiClient.post<
+    SplitRelationshipPreviewResponse,
+    SplitRelationshipPreviewRequest
+  >(
     `${MEMORY_API_BASE}/relationships/${encodeURIComponent(relationshipId)}/split/preview`,
-    request
+    request,
   );
 }
 
@@ -377,11 +385,14 @@ export async function splitRelationshipPreview(
  */
 export async function splitRelationshipCommit(
   relationshipId: string,
-  request: SplitRelationshipCommitRequest
+  request: SplitRelationshipCommitRequest,
 ): Promise<SplitRelationshipCommitResponse> {
-  return apiClient.post<SplitRelationshipCommitResponse, SplitRelationshipCommitRequest>(
+  return apiClient.post<
+    SplitRelationshipCommitResponse,
+    SplitRelationshipCommitRequest
+  >(
     `${MEMORY_API_BASE}/relationships/${encodeURIComponent(relationshipId)}/split/commit`,
-    request
+    request,
   );
 }
 
@@ -390,20 +401,25 @@ export async function splitRelationshipCommit(
  */
 export async function analyzeRelationship(
   relationshipId: string,
-  request: RelationshipAnalysisRequest
+  request: RelationshipAnalysisRequest,
 ): Promise<RelationshipAnalysisResponse> {
-  return apiClient.post<RelationshipAnalysisResponse, RelationshipAnalysisRequest>(
+  return apiClient.post<
+    RelationshipAnalysisResponse,
+    RelationshipAnalysisRequest
+  >(
     `${MEMORY_API_BASE}/relationships/${encodeURIComponent(relationshipId)}/analysis`,
-    request
+    request,
   );
 }
 
 /**
  * Mark an entity as acknowledged/reviewed.
  */
-export async function acknowledgeEntity(entityId: string): Promise<MemoryEntity> {
+export async function acknowledgeEntity(
+  entityId: string,
+): Promise<MemoryEntity> {
   return apiClient.post<MemoryEntity>(
-    `${MEMORY_API_BASE}/entities/${entityId}/acknowledge`
+    `${MEMORY_API_BASE}/entities/${entityId}/acknowledge`,
   );
 }
 
@@ -411,10 +427,10 @@ export async function acknowledgeEntity(entityId: string): Promise<MemoryEntity>
  * Mark a relationship as acknowledged/reviewed.
  */
 export async function acknowledgeRelationship(
-  relationshipId: string
+  relationshipId: string,
 ): Promise<MemoryRelationship> {
   return apiClient.post<MemoryRelationship>(
-    `${MEMORY_API_BASE}/relationships/${relationshipId}/acknowledge`
+    `${MEMORY_API_BASE}/relationships/${relationshipId}/acknowledge`,
   );
 }
 
@@ -433,7 +449,7 @@ export async function getMemoryStats(): Promise<MemoryStats> {
  * List memories with optional filters and pagination
  */
 export async function listMemories(
-  params: ListMemoriesRequest = {}
+  params: ListMemoriesRequest = {},
 ): Promise<ListMemoriesResponse> {
   const {
     limit = API_LIMITS.DEFAULT_MEMORIES,
@@ -442,7 +458,7 @@ export async function listMemories(
     tenant_id,
     source_type,
     review_status,
-    sort_order = 'desc',
+    sort_order = "desc",
   } = params;
 
   // For review_status filtering (e.g., pending_review) always use backend reads so
@@ -458,52 +474,52 @@ export async function listMemories(
       sort_order,
     });
     const response = await apiClient.get<ListMemoriesResponse>(
-      `${MEMORY_API_BASE}/list${qs}`
+      `${MEMORY_API_BASE}/list${qs}`,
     );
 
-    if (!Array.isArray(response.items) || typeof response.total !== 'number') {
-      throw new Error('Unexpected memory list response shape');
+    if (!Array.isArray(response.items) || typeof response.total !== "number") {
+      throw new Error("Unexpected memory list response shape");
     }
 
     return {
       items: response.items,
       total: response.total,
-      limit: typeof response.limit === 'number' ? response.limit : limit,
-      offset: typeof response.offset === 'number' ? response.offset : offset,
+      limit: typeof response.limit === "number" ? response.limit : limit,
+      offset: typeof response.offset === "number" ? response.offset : offset,
     };
   }
 
-  const ascending = sort_order === 'asc';
+  const ascending = sort_order === "asc";
 
   let query = supabase
-    .from('memories')
-    .select(MEMORY_SELECT_COLUMNS, { count: 'exact' })
-    .order('created_at', { ascending })
+    .from("memories")
+    .select(MEMORY_SELECT_COLUMNS, { count: "exact" })
+    .order("created_at", { ascending })
     .range(offset, offset + limit - 1);
 
   if (agent_id) {
-    query = query.eq('agent_id', agent_id);
+    query = query.eq("agent_id", agent_id);
   }
   if (tenant_id) {
-    query = query.eq('tenant_id', tenant_id);
+    query = query.eq("tenant_id", tenant_id);
   }
   if (source_type) {
-    query = query.eq('source_type', source_type);
+    query = query.eq("source_type", source_type);
   }
   if (review_status) {
-    query = query.eq('review_status', review_status);
+    query = query.eq("review_status", review_status);
   }
 
   const { data, error, count } = await query;
 
   if (error) {
-    console.error('Error listing memories:', error);
+    console.error("Error listing memories:", error);
     throw new Error(error.message);
   }
 
   return {
     items: (data || []) as Memory[],
-    total: typeof count === 'number' ? count : (data || []).length,
+    total: typeof count === "number" ? count : (data || []).length,
     limit,
     offset,
   };
@@ -516,7 +532,7 @@ export async function getMemoryById(memoryId: string): Promise<Memory | null> {
   if (await shouldUseBackendReads()) {
     try {
       return await apiClient.get<Memory>(
-        `${MEMORY_API_BASE}/${encodeURIComponent(memoryId)}`
+        `${MEMORY_API_BASE}/${encodeURIComponent(memoryId)}`,
       );
     } catch (err: unknown) {
       if (err instanceof APIRequestError && err.status === 404) {
@@ -527,13 +543,13 @@ export async function getMemoryById(memoryId: string): Promise<Memory | null> {
   }
 
   const { data, error } = await supabase
-    .from('memories')
+    .from("memories")
     .select(MEMORY_SELECT_COLUMNS)
-    .eq('id', memoryId)
+    .eq("id", memoryId)
     .maybeSingle();
 
   if (error) {
-    console.error('Error getting memory:', error);
+    console.error("Error getting memory:", error);
     throw new Error(error.message);
   }
 
@@ -547,9 +563,9 @@ export async function searchMemories(
   query: string,
   limit: number = API_LIMITS.SEARCH_RESULTS,
   minConfidence: number = 0,
-  reviewStatus?: ReviewStatus
+  reviewStatus?: ReviewStatus,
 ): Promise<Memory[]> {
-  const trimmed = (query || '').trim();
+  const trimmed = (query || "").trim();
   if (!trimmed) {
     return [];
   }
@@ -567,16 +583,16 @@ export async function searchMemories(
   const escapedQuery = escapeLikePattern(trimmed);
 
   const { data, error } = await supabase
-    .from('memories')
+    .from("memories")
     .select(MEMORY_SELECT_COLUMNS)
-    .ilike('content', `%${escapedQuery}%`)
-    .eq('review_status', reviewStatus || 'approved')
-    .gte('confidence_score', minConfidence)
-    .order('confidence_score', { ascending: false })
+    .ilike("content", `%${escapedQuery}%`)
+    .eq("review_status", reviewStatus || "approved")
+    .gte("confidence_score", minConfidence)
+    .order("confidence_score", { ascending: false })
     .limit(limit);
 
   if (error) {
-    console.error('Error searching memories:', error);
+    console.error("Error searching memories:", error);
     throw new Error(error.message);
   }
 
@@ -588,33 +604,33 @@ export async function searchMemories(
  */
 export async function getEntities(
   entityTypes?: EntityType[],
-  limit: number = API_LIMITS.MAX_ENTITIES
+  limit: number = API_LIMITS.MAX_ENTITIES,
 ): Promise<MemoryEntity[]> {
   if (await shouldUseBackendReads()) {
     const qs = new URLSearchParams();
-    qs.set('limit', String(limit));
+    qs.set("limit", String(limit));
     if (entityTypes && entityTypes.length > 0) {
-      entityTypes.forEach((type) => qs.append('entity_types', type));
+      entityTypes.forEach((type) => qs.append("entity_types", type));
     }
     return apiClient.get<MemoryEntity[]>(
-      `${MEMORY_API_BASE}/entities?${qs.toString()}`
+      `${MEMORY_API_BASE}/entities?${qs.toString()}`,
     );
   }
 
   let query = supabase
-    .from('memory_entities')
-    .select('*')
-    .order('occurrence_count', { ascending: false })
+    .from("memory_entities")
+    .select("*")
+    .order("occurrence_count", { ascending: false })
     .limit(limit);
 
   if (entityTypes && entityTypes.length > 0) {
-    query = query.in('entity_type', entityTypes);
+    query = query.in("entity_type", entityTypes);
   }
 
   const { data, error } = await query;
 
   if (error) {
-    console.error('Error getting entities:', error);
+    console.error("Error getting entities:", error);
     throw new Error(error.message);
   }
 
@@ -625,23 +641,23 @@ export async function getEntities(
  * Get all relationships
  */
 export async function getRelationships(
-  limit: number = API_LIMITS.MAX_RELATIONSHIPS
+  limit: number = API_LIMITS.MAX_RELATIONSHIPS,
 ): Promise<MemoryRelationship[]> {
   if (await shouldUseBackendReads()) {
     const qs = buildQueryString({ limit });
     return apiClient.get<MemoryRelationship[]>(
-      `${MEMORY_API_BASE}/relationships${qs}`
+      `${MEMORY_API_BASE}/relationships${qs}`,
     );
   }
 
   const { data, error } = await supabase
-    .from('memory_relationships')
-    .select('*')
-    .order('occurrence_count', { ascending: false })
+    .from("memory_relationships")
+    .select("*")
+    .order("occurrence_count", { ascending: false })
     .limit(limit);
 
   if (error) {
-    console.error('Error getting relationships:', error);
+    console.error("Error getting relationships:", error);
     throw new Error(error.message);
   }
 
@@ -653,28 +669,28 @@ export async function getRelationships(
  */
 export async function getEntityRelatedMemories(
   entityId: string,
-  limit: number = 20
+  limit: number = 20,
 ): Promise<Memory[]> {
-  const trimmed = (entityId || '').trim();
+  const trimmed = (entityId || "").trim();
   if (!trimmed) return [];
 
   if (await shouldUseBackendReads()) {
     const qs = buildQueryString({ limit });
     return apiClient.get<Memory[]>(
-      `${MEMORY_API_BASE}/entities/${encodeURIComponent(trimmed)}/memories${qs}`
+      `${MEMORY_API_BASE}/entities/${encodeURIComponent(trimmed)}/memories${qs}`,
     );
   }
 
   const { data: relationships, error: relError } = await supabase
-    .from('memory_relationships')
-    .select('source_memory_id,last_seen_at')
+    .from("memory_relationships")
+    .select("source_memory_id,last_seen_at")
     .or(`source_entity_id.eq.${trimmed},target_entity_id.eq.${trimmed}`)
-    .not('source_memory_id', 'is', null)
-    .order('last_seen_at', { ascending: false })
+    .not("source_memory_id", "is", null)
+    .order("last_seen_at", { ascending: false })
     .limit(1000);
 
   if (relError) {
-    console.error('Error getting entity relationships:', relError);
+    console.error("Error getting entity relationships:", relError);
     throw new Error(relError.message);
   }
 
@@ -697,12 +713,12 @@ export async function getEntityRelatedMemories(
   if (limitedIds.length === 0) return [];
 
   const { data: memories, error: memError } = await supabase
-    .from('memories')
+    .from("memories")
     .select(MEMORY_SELECT_COLUMNS)
-    .in('id', limitedIds);
+    .in("id", limitedIds);
 
   if (memError) {
-    console.error('Error getting related memories:', memError);
+    console.error("Error getting related memories:", memError);
     throw new Error(memError.message);
   }
 
@@ -717,30 +733,30 @@ export async function getEntityRelatedMemories(
  * Get duplicate candidates for review
  */
 export async function getDuplicateCandidates(
-  status: 'pending' | 'all' = 'pending',
-  limit: number = API_LIMITS.DUPLICATE_CANDIDATES
+  status: "pending" | "all" = "pending",
+  limit: number = API_LIMITS.DUPLICATE_CANDIDATES,
 ): Promise<DuplicateCandidate[]> {
   if (await shouldUseBackendReads()) {
     const qs = buildQueryString({ status, limit });
     return apiClient.get<DuplicateCandidate[]>(
-      `${MEMORY_API_BASE}/duplicates${qs}`
+      `${MEMORY_API_BASE}/duplicates${qs}`,
     );
   }
 
   let query = supabase
-    .from('memory_duplicate_candidates')
-    .select('*')
-    .order('similarity_score', { ascending: false })
+    .from("memory_duplicate_candidates")
+    .select("*")
+    .order("similarity_score", { ascending: false })
     .limit(limit);
 
-  if (status === 'pending') {
-    query = query.eq('status', 'pending');
+  if (status === "pending") {
+    query = query.eq("status", "pending");
   }
 
   const { data, error } = await query;
 
   if (error) {
-    console.error('Error getting duplicate candidates:', error);
+    console.error("Error getting duplicate candidates:", error);
     throw new Error(error.message);
   }
 
@@ -754,9 +770,9 @@ export async function getDuplicateCandidates(
 
   if (memoryIds.size > 0) {
     const { data: memories, error: memError } = await supabase
-      .from('memories')
+      .from("memories")
       .select(MEMORY_SELECT_COLUMNS)
-      .in('id', Array.from(memoryIds));
+      .in("id", Array.from(memoryIds));
 
     if (!memError && memories) {
       const memoryMap = new Map(memories.map((m) => [m.id, m as Memory]));
@@ -778,7 +794,7 @@ export async function getDuplicateCandidates(
  * Build graph data from entities and relationships
  */
 export async function getGraphData(
-  entityTypes?: EntityType[]
+  entityTypes?: EntityType[],
 ): Promise<GraphData> {
   const [entities, relationships] = await Promise.all([
     getEntities(entityTypes),
@@ -800,7 +816,7 @@ export async function getGraphData(
     lastModifiedAt: entity.last_modified_at ?? null,
     createdAt: entity.created_at,
     updatedAt: entity.updated_at,
-    color: ENTITY_COLORS[entity.entity_type] || '#6B7280',
+    color: ENTITY_COLORS[entity.entity_type] || "#6B7280",
     size: Math.max(4, Math.min(20, entity.occurrence_count * 2)),
   }));
 
@@ -808,7 +824,7 @@ export async function getGraphData(
     .filter(
       (rel) =>
         entityIds.has(rel.source_entity_id) &&
-        entityIds.has(rel.target_entity_id)
+        entityIds.has(rel.target_entity_id),
     )
     .map((rel) => ({
       id: rel.id,
@@ -833,9 +849,19 @@ export async function getEntityWithRelationships(entityId: string): Promise<{
   outgoingRelationships: MemoryRelationship[];
 } | null> {
   const [entityResult, incomingResult, outgoingResult] = await Promise.all([
-    supabase.from('memory_entities').select('*').eq('id', entityId).maybeSingle(),
-    supabase.from('memory_relationships').select('*').eq('target_entity_id', entityId),
-    supabase.from('memory_relationships').select('*').eq('source_entity_id', entityId),
+    supabase
+      .from("memory_entities")
+      .select("*")
+      .eq("id", entityId)
+      .maybeSingle(),
+    supabase
+      .from("memory_relationships")
+      .select("*")
+      .eq("target_entity_id", entityId),
+    supabase
+      .from("memory_relationships")
+      .select("*")
+      .eq("source_entity_id", entityId),
   ]);
 
   if (entityResult.error || !entityResult.data) {

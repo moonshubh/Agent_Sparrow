@@ -28,7 +28,7 @@ def _to_serializable(value: Any) -> Any:
             return value.dict()
         except Exception:
             pass
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return asdict(value)
     if isinstance(value, dict):
         return {k: _to_serializable(v) for k, v in value.items()}
@@ -152,6 +152,7 @@ async def run_graph(request: GraphRunRequest) -> GraphRunResponse:
     thread_id = request.thread_id or f"thread-{uuid.uuid4().hex}"
     config = {"configurable": {"thread_id": thread_id}}
 
+    run_input: Command[Any] | Dict[str, Any]
     if request.resume:
         human_response = _decision_to_human_response(request.resume)
         run_input = Command(resume=[human_response])
@@ -178,7 +179,9 @@ async def run_graph(request: GraphRunRequest) -> GraphRunResponse:
 class GraphStateResponse(BaseModel):
     """Current snapshot for a graph thread."""
 
-    thread_id: str = Field(description="Thread identifier associated with the snapshot.")
+    thread_id: str = Field(
+        description="Thread identifier associated with the snapshot."
+    )
     state: Optional[Dict[str, Any]] = Field(
         default=None, description="Serialized state values stored in the checkpoint."
     )

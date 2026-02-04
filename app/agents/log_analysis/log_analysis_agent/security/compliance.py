@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 class ComplianceStatus(Enum):
     """Compliance check status with severity ordering."""
+
     COMPLIANT = "compliant"
     WARNING = "warning"
     NON_COMPLIANT = "non_compliant"
@@ -44,13 +45,14 @@ class ComplianceStatus(Enum):
             ComplianceStatus.COMPLIANT: 0,
             ComplianceStatus.WARNING: 1,
             ComplianceStatus.NON_COMPLIANT: 2,
-            ComplianceStatus.UNKNOWN: 3
+            ComplianceStatus.UNKNOWN: 3,
         }
         return severity_map.get(self, 3)
 
 
 class DataClassification(Enum):
     """Data classification levels."""
+
     PUBLIC = "public"
     INTERNAL = "internal"
     CONFIDENTIAL = "confidential"
@@ -60,6 +62,7 @@ class DataClassification(Enum):
 @dataclass
 class ComplianceConfig:
     """Configuration for compliance manager."""
+
     enforce_zero_log_storage: bool = True  # Never store raw logs
     max_metadata_retention_days: int = 90  # Metadata retention period
     require_encryption_at_rest: bool = True
@@ -67,16 +70,27 @@ class ComplianceConfig:
     enable_automated_checks: bool = True
     check_interval_seconds: int = 3600  # How often to run checks
     max_session_data_size: int = 1024 * 1024  # 1MB max for session data
-    prohibited_fields: Set[str] = field(default_factory=lambda: {
-        'password', 'secret', 'token', 'api_key', 'credit_card',
-        'ssn', 'email', 'ip_address', 'raw_log', 'log_content'
-    })
+    prohibited_fields: Set[str] = field(
+        default_factory=lambda: {
+            "password",
+            "secret",
+            "token",
+            "api_key",
+            "credit_card",
+            "ssn",
+            "email",
+            "ip_address",
+            "raw_log",
+            "log_content",
+        }
+    )
     paranoid_mode: bool = True
 
 
 @dataclass
 class ComplianceReport:
     """Compliance check report."""
+
     timestamp: datetime
     status: ComplianceStatus
     checks_performed: List[str]
@@ -101,8 +115,8 @@ class ComplianceManager:
             config: Optional configuration
         """
         self.config = config or ComplianceConfig()
-        self._audit_trail = deque(maxlen=10000)
-        self._compliance_cache = {}
+        self._audit_trail: deque[dict[str, Any]] = deque(maxlen=10000)
+        self._compliance_cache: dict[str, ComplianceReport] = {}
         self._automated_check_task = None
         self._violation_count = 0
         self._background_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -115,13 +129,16 @@ class ComplianceManager:
 
     def _start_automated_checks(self):
         """Start automated compliance monitoring."""
+
         async def run_checks():
             while True:
                 try:
                     await asyncio.sleep(self.config.check_interval_seconds)
                     report = self.run_compliance_check()
                     if report.status == ComplianceStatus.NON_COMPLIANT:
-                        logger.error(f"Compliance violation detected: {report.issues_found}")
+                        logger.error(
+                            f"Compliance violation detected: {report.issues_found}"
+                        )
                         self._violation_count += 1
                 except asyncio.CancelledError:
                     logger.info("Automated compliance checks cancelled")
@@ -168,7 +185,9 @@ class ComplianceManager:
         normalized_data: Dict[str, Any]
         if isinstance(data, str):
             parsed = extract_json_payload(data, logger_instance=logger)
-            normalized_data = parsed if isinstance(parsed, dict) else {"raw_input": data}
+            normalized_data = (
+                parsed if isinstance(parsed, dict) else {"raw_input": data}
+            )
         elif isinstance(data, dict):
             normalized_data = data
         else:
@@ -216,7 +235,9 @@ class ComplianceManager:
 
             # Recursively check nested structures
             if isinstance(value, dict):
-                prohibited_found.extend(self._check_prohibited_fields(value, current_path))
+                prohibited_found.extend(
+                    self._check_prohibited_fields(value, current_path)
+                )
             elif isinstance(value, list):
                 for i, item in enumerate(value):
                     if isinstance(item, dict):
@@ -231,10 +252,10 @@ class ComplianceManager:
         if isinstance(data, str):
             # Check for log-like patterns
             log_patterns = [
-                r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}',  # Timestamps
-                r'(?:ERROR|WARN|INFO|DEBUG|TRACE)\s*:',  # Log levels
-                r'at\s+\w+\.\w+\(',  # Stack traces
-                r'Exception|Error|Traceback',  # Error indicators
+                r"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}",  # Timestamps
+                r"(?:ERROR|WARN|INFO|DEBUG|TRACE)\s*:",  # Log levels
+                r"at\s+\w+\.\w+\(",  # Stack traces
+                r"Exception|Error|Traceback",  # Error indicators
             ]
 
             # If multiple log patterns match, likely raw log
@@ -259,11 +280,11 @@ class ComplianceManager:
 
         def check_string(s: str, location: str):
             patterns = {
-                'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-                'api_key': r'(?i)(?:api[_-]?key|token)\s*[:=]\s*["\']?[A-Za-z0-9+/=_-]{20,}',
-                'credit_card': r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b',
-                'ssn': r'\b\d{3}-\d{2}-\d{4}\b',
-                'ip_address': r'\b(?:\d{1,3}\.){3}\d{1,3}\b',
+                "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+                "api_key": r'(?i)(?:api[_-]?key|token)\s*[:=]\s*["\']?[A-Za-z0-9+/=_-]{20,}',
+                "credit_card": r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b",
+                "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
+                "ip_address": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
             }
 
             for pattern_name, pattern in patterns.items():
@@ -297,60 +318,88 @@ class ComplianceManager:
 
         # Whitelist of safe fields
         safe_fields = {
-            'session_id', 'user_id', 'timestamp', 'status',
-            'error_count', 'warning_count', 'info_count',
-            'analysis_complete', 'quality_score', 'response_format'
+            "session_id",
+            "user_id",
+            "timestamp",
+            "status",
+            "error_count",
+            "warning_count",
+            "info_count",
+            "analysis_complete",
+            "quality_score",
+            "response_format",
         }
 
         # Copy only safe fields
-        for field in safe_fields:
-            if field in session_data:
-                sanitized[field] = session_data[field]
+        for field_name in safe_fields:
+            if field_name in session_data:
+                sanitized[field_name] = session_data[field_name]
 
         # Add metadata hash instead of raw content
-        if 'log_content' in session_data:
-            serialized_content = self._serialize_log_content(session_data['log_content'])
-            sanitized['content_hash'] = hashlib.sha256(serialized_content).hexdigest()[:16]
-            sanitized['content_size'] = len(serialized_content)
+        if "log_content" in session_data:
+            serialized_content = self._serialize_log_content(
+                session_data["log_content"]
+            )
+            sanitized["content_hash"] = hashlib.sha256(serialized_content).hexdigest()[
+                :16
+            ]
+            sanitized["content_size"] = len(serialized_content)
 
         # Add sanitized summary
-        if 'analysis_result' in session_data:
-            sanitized['analysis_summary'] = self._create_safe_summary(
-                session_data['analysis_result']
+        if "analysis_result" in session_data:
+            sanitized["analysis_summary"] = self._create_safe_summary(
+                session_data["analysis_result"]
             )
 
         return sanitized
 
+    def _serialize_log_content(self, log_content: Any) -> bytes:
+        """Serialize log content safely without persisting raw log data."""
+        if isinstance(log_content, bytes):
+            return log_content
+        if isinstance(log_content, bytearray):
+            return bytes(log_content)
+        if isinstance(log_content, str):
+            return log_content.encode("utf-8", errors="ignore")
+        try:
+            return json.dumps(log_content, default=str).encode("utf-8", errors="ignore")
+        except Exception:
+            return str(log_content).encode("utf-8", errors="ignore")
+
     def _create_safe_summary(self, analysis_result: Any) -> Dict[str, Any]:
         """Create a safe summary of analysis results."""
         summary = {
-            'timestamp': datetime.now().isoformat(),
-            'has_errors': False,
-            'has_warnings': False,
-            'issue_categories': [],
-            'recommendation_count': 0
+            "timestamp": datetime.now().isoformat(),
+            "has_errors": False,
+            "has_warnings": False,
+            "issue_categories": [],
+            "recommendation_count": 0,
         }
 
         if isinstance(analysis_result, dict):
             # Extract safe metadata
-            if 'errors' in analysis_result:
-                summary['has_errors'] = len(analysis_result['errors']) > 0
-                summary['error_count'] = len(analysis_result['errors'])
+            if "errors" in analysis_result:
+                summary["has_errors"] = len(analysis_result["errors"]) > 0
+                summary["error_count"] = len(analysis_result["errors"])
 
-            if 'warnings' in analysis_result:
-                summary['has_warnings'] = len(analysis_result['warnings']) > 0
-                summary['warning_count'] = len(analysis_result['warnings'])
+            if "warnings" in analysis_result:
+                summary["has_warnings"] = len(analysis_result["warnings"]) > 0
+                summary["warning_count"] = len(analysis_result["warnings"])
 
-            if 'categories' in analysis_result:
+            if "categories" in analysis_result:
                 # Store only category names, not content
-                summary['issue_categories'] = list(analysis_result['categories'])
+                summary["issue_categories"] = list(analysis_result["categories"])
 
-            if 'recommendations' in analysis_result:
-                summary['recommendation_count'] = len(analysis_result['recommendations'])
+            if "recommendations" in analysis_result:
+                summary["recommendation_count"] = len(
+                    analysis_result["recommendations"]
+                )
 
         return summary
 
-    def validate_attachment_handling(self, attachment_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    def validate_attachment_handling(
+        self, attachment_data: Dict[str, Any]
+    ) -> Tuple[bool, List[str]]:
         """
         Validate attachment handling for compliance.
 
@@ -363,22 +412,21 @@ class ComplianceManager:
         issues = []
 
         # Ensure no raw attachment data
-        if 'raw_data' in attachment_data or 'file_content' in attachment_data:
+        if "raw_data" in attachment_data or "file_content" in attachment_data:
             issues.append("Raw attachment data found")
 
         # Ensure no full file paths (privacy concern)
-        if 'file_path' in attachment_data:
-            path = str(attachment_data['file_path'])
+        if "file_path" in attachment_data:
+            path = str(attachment_data["file_path"])
             lowered = path.lower()
             risky_segments = (
-                '/home/',
-                '/users/',
-                '\\users\\',
-                ':\\users\\',
+                "/home/",
+                "/users/",
+                "\\users\\",
+                ":\\users\\",
             )
-            if (
-                any(segment in lowered for segment in risky_segments)
-                or path.startswith('\\\\')
+            if any(segment in lowered for segment in risky_segments) or path.startswith(
+                "\\\\"
             ):
                 issues.append("Full file path with user information detected")
 
@@ -386,7 +434,7 @@ class ComplianceManager:
         for value in attachment_data.values():
             # Only check string values
             if isinstance(value, str):
-                if len(value) > 1000 and re.search(r'[A-Za-z0-9+/]+=*', value):
+                if len(value) > 1000 and re.search(r"[A-Za-z0-9+/]+=*", value):
                     issues.append("Possible base64 encoded content detected")
                     break
 
@@ -405,7 +453,9 @@ class ComplianceManager:
                 else:
                     task.cancel()
             except Exception:
-                logger.debug("Failed to cancel automated compliance task", exc_info=True)
+                logger.debug(
+                    "Failed to cancel automated compliance task", exc_info=True
+                )
 
             if hasattr(task, "result"):
                 try:
@@ -427,7 +477,9 @@ class ComplianceManager:
         except Exception:
             pass
 
-    def _escalate_status(self, current: ComplianceStatus, new: ComplianceStatus) -> ComplianceStatus:
+    def _escalate_status(
+        self, current: ComplianceStatus, new: ComplianceStatus
+    ) -> ComplianceStatus:
         """
         Escalate compliance status monotonically.
 
@@ -491,7 +543,9 @@ class ComplianceManager:
         # Check 4: Retention policy
         checks_performed.append("Data retention policy")
         if self.config.max_metadata_retention_days > 365:
-            issues_found.append(f"Retention period too long: {self.config.max_metadata_retention_days} days")
+            issues_found.append(
+                f"Retention period too long: {self.config.max_metadata_retention_days} days"
+            )
             recommendations.append("Reduce retention period to minimize data exposure")
             status = self._escalate_status(status, ComplianceStatus.WARNING)
 
@@ -515,9 +569,9 @@ class ComplianceManager:
             issues_found=issues_found,
             recommendations=recommendations,
             metadata={
-                'violation_count': self._violation_count,
-                'config_hash': self._get_config_hash()
-            }
+                "violation_count": self._violation_count,
+                "config_hash": self._get_config_hash(),
+            },
         )
 
         # Audit the compliance check
@@ -534,11 +588,11 @@ class ComplianceManager:
     def _audit_validation(self, data: Dict[str, Any], issues: List[str]):
         """Audit data validation event."""
         audit_entry = {
-            'timestamp': datetime.now().isoformat(),
-            'event': 'data_validation',
-            'data_hash': hashlib.sha256(str(data).encode()).hexdigest()[:16],
-            'compliant': len(issues) == 0,
-            'issues': issues
+            "timestamp": datetime.now().isoformat(),
+            "event": "data_validation",
+            "data_hash": hashlib.sha256(str(data).encode()).hexdigest()[:16],
+            "compliant": len(issues) == 0,
+            "issues": issues,
         }
         self._audit_trail.append(audit_entry)
 
@@ -548,11 +602,11 @@ class ComplianceManager:
     def _audit_compliance_check(self, report: ComplianceReport):
         """Audit compliance check event."""
         audit_entry = {
-            'timestamp': report.timestamp.isoformat(),
-            'event': 'compliance_check',
-            'status': report.status.value,
-            'issues_found': len(report.issues_found),
-            'recommendations': len(report.recommendations)
+            "timestamp": report.timestamp.isoformat(),
+            "event": "compliance_check",
+            "status": report.status.value,
+            "issues_found": len(report.issues_found),
+            "recommendations": len(report.recommendations),
         }
         self._audit_trail.append(audit_entry)
 
@@ -581,22 +635,41 @@ class ComplianceManager:
         report = self.run_compliance_check()
 
         full_report = {
-            'generated_at': datetime.now().isoformat(),
-            'compliance_status': report.status.value,
-            'configuration': {
-                'enforce_zero_log_storage': self.config.enforce_zero_log_storage,
-                'max_metadata_retention_days': self.config.max_metadata_retention_days,
-                'require_encryption_at_rest': self.config.require_encryption_at_rest,
-                'paranoid_mode': self.config.paranoid_mode
+            "generated_at": datetime.now().isoformat(),
+            "compliance_status": report.status.value,
+            "configuration": {
+                "enforce_zero_log_storage": self.config.enforce_zero_log_storage,
+                "max_metadata_retention_days": self.config.max_metadata_retention_days,
+                "require_encryption_at_rest": self.config.require_encryption_at_rest,
+                "paranoid_mode": self.config.paranoid_mode,
             },
-            'current_report': asdict(report),
-            'recent_audit_trail': self.get_audit_trail(50),
-            'statistics': {
-                'total_validations': len([e for e in self._audit_trail if e.get('event') == 'data_validation']),
-                'failed_validations': len([e for e in self._audit_trail if e.get('event') == 'data_validation' and not e.get('compliant')]),
-                'compliance_checks': len([e for e in self._audit_trail if e.get('event') == 'compliance_check']),
-                'violation_count': self._violation_count
-            }
+            "current_report": asdict(report),
+            "recent_audit_trail": self.get_audit_trail(50),
+            "statistics": {
+                "total_validations": len(
+                    [
+                        e
+                        for e in self._audit_trail
+                        if e.get("event") == "data_validation"
+                    ]
+                ),
+                "failed_validations": len(
+                    [
+                        e
+                        for e in self._audit_trail
+                        if e.get("event") == "data_validation"
+                        and not e.get("compliant")
+                    ]
+                ),
+                "compliance_checks": len(
+                    [
+                        e
+                        for e in self._audit_trail
+                        if e.get("event") == "compliance_check"
+                    ]
+                ),
+                "violation_count": self._violation_count,
+            },
         }
 
         report_json = json.dumps(full_report, indent=2, default=str)

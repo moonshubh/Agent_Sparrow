@@ -24,7 +24,9 @@ router = APIRouter(tags=["FeedMe"])
 
 
 @router.put("/conversations/{conversation_id}/edit", response_model=EditResponse)
-async def edit_conversation(conversation_id: int, edit_request: ConversationEditRequest):
+async def edit_conversation(
+    conversation_id: int, edit_request: ConversationEditRequest
+):
     """
     Edit a conversation and create a new version.
 
@@ -35,9 +37,13 @@ async def edit_conversation(conversation_id: int, edit_request: ConversationEdit
         from app.feedme.versioning_service import get_versioning_service
 
         versioning_service = get_versioning_service()
-        result = await versioning_service.edit_conversation(conversation_id, edit_request)
+        result = await versioning_service.edit_conversation(
+            conversation_id, edit_request
+        )
 
-        logger.info(f"Successfully edited conversation {conversation_id}, new version: {result.new_version}")
+        logger.info(
+            f"Successfully edited conversation {conversation_id}, new version: {result.new_version}"
+        )
         return result
 
     except ValueError as e:
@@ -46,11 +52,15 @@ async def edit_conversation(conversation_id: int, edit_request: ConversationEdit
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error editing conversation {conversation_id}: {e}", exc_info=True)
+        logger.error(
+            f"Error editing conversation {conversation_id}: {e}", exc_info=True
+        )
         raise HTTPException(status_code=500, detail="Failed to edit conversation")
 
 
-@router.get("/conversations/{conversation_id}/versions", response_model=VersionListResponse)
+@router.get(
+    "/conversations/{conversation_id}/versions", response_model=VersionListResponse
+)
 async def get_conversation_versions(conversation_id: int):
     """
     Get all versions of a conversation.
@@ -62,9 +72,11 @@ async def get_conversation_versions(conversation_id: int):
         from app.feedme.versioning_service import get_versioning_service
 
         versioning_service = get_versioning_service()
-        result = versioning_service.get_conversation_versions(conversation_id)
+        result = await versioning_service.get_conversation_versions(conversation_id)
 
-        logger.info(f"Retrieved {result.total_count} versions for conversation {conversation_id}")
+        logger.info(
+            f"Retrieved {result.total_count} versions for conversation {conversation_id}"
+        )
         return result
 
     except ValueError as e:
@@ -73,11 +85,19 @@ async def get_conversation_versions(conversation_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting versions for conversation {conversation_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get conversation versions")
+        logger.error(
+            f"Error getting versions for conversation {conversation_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to get conversation versions"
+        )
 
 
-@router.get("/conversations/{conversation_id}/versions/{version_1}/diff/{version_2}", response_model=VersionDiff)
+@router.get(
+    "/conversations/{conversation_id}/versions/{version_1}/diff/{version_2}",
+    response_model=VersionDiff,
+)
 async def get_version_diff(conversation_id: int, version_1: int, version_2: int):
     """
     Generate diff between two versions of a conversation.
@@ -90,15 +110,19 @@ async def get_version_diff(conversation_id: int, version_1: int, version_2: int)
 
         versioning_service = get_versioning_service()
 
-        v1 = versioning_service.get_version_by_number(conversation_id, version_1)
-        v2 = versioning_service.get_version_by_number(conversation_id, version_2)
+        v1 = await versioning_service.get_version_by_number(conversation_id, version_1)
+        v2 = await versioning_service.get_version_by_number(conversation_id, version_2)
 
         if not v1:
-            raise HTTPException(status_code=404, detail=f"Version {version_1} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Version {version_1} not found"
+            )
         if not v2:
-            raise HTTPException(status_code=404, detail=f"Version {version_2} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Version {version_2} not found"
+            )
 
-        diff = versioning_service.generate_diff(v1, v2)
+        diff = await versioning_service.generate_diff(v1, v2)
 
         logger.info(f"Generated diff between versions {version_1} and {version_2}")
         return diff
@@ -110,11 +134,12 @@ async def get_version_diff(conversation_id: int, version_1: int, version_2: int)
         raise HTTPException(status_code=500, detail="Failed to generate version diff")
 
 
-@router.post("/conversations/{conversation_id}/revert/{target_version}", response_model=RevertResponse)
+@router.post(
+    "/conversations/{conversation_id}/revert/{target_version}",
+    response_model=RevertResponse,
+)
 async def revert_conversation(
-    conversation_id: int,
-    target_version: int,
-    revert_request: ConversationRevertRequest
+    conversation_id: int, target_version: int, revert_request: ConversationRevertRequest
 ):
     """
     Revert a conversation to a previous version.
@@ -127,27 +152,37 @@ async def revert_conversation(
 
         if revert_request.target_version != target_version:
             raise HTTPException(
-                status_code=400,
-                detail="Target version in path must match request body"
+                status_code=400, detail="Target version in path must match request body"
             )
 
         versioning_service = get_versioning_service()
-        result = await versioning_service.revert_conversation(conversation_id, revert_request)
+        result = await versioning_service.revert_conversation(
+            conversation_id, revert_request
+        )
 
-        logger.info(f"Reverted conversation {conversation_id} to version {target_version}")
+        logger.info(
+            f"Reverted conversation {conversation_id} to version {target_version}"
+        )
         return result
 
     except ValueError as e:
-        logger.warning(f"Validation error reverting conversation {conversation_id}: {e}")
+        logger.warning(
+            f"Validation error reverting conversation {conversation_id}: {e}"
+        )
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error reverting conversation {conversation_id}: {e}", exc_info=True)
+        logger.error(
+            f"Error reverting conversation {conversation_id}: {e}", exc_info=True
+        )
         raise HTTPException(status_code=500, detail="Failed to revert conversation")
 
 
-@router.get("/conversations/{conversation_id}/versions/{version_number}", response_model=ConversationVersion)
+@router.get(
+    "/conversations/{conversation_id}/versions/{version_number}",
+    response_model=ConversationVersion,
+)
 async def get_specific_version(conversation_id: int, version_number: int):
     """
     Get a specific version of a conversation.
@@ -159,19 +194,25 @@ async def get_specific_version(conversation_id: int, version_number: int):
         from app.feedme.versioning_service import get_versioning_service
 
         versioning_service = get_versioning_service()
-        version = versioning_service.get_version_by_number(conversation_id, version_number)
+        version = await versioning_service.get_version_by_number(
+            conversation_id, version_number
+        )
 
         if not version:
             raise HTTPException(
                 status_code=404,
-                detail=f"Version {version_number} not found for conversation {conversation_id}"
+                detail=f"Version {version_number} not found for conversation {conversation_id}",
             )
 
-        logger.info(f"Retrieved version {version_number} for conversation {conversation_id}")
+        logger.info(
+            f"Retrieved version {version_number} for conversation {conversation_id}"
+        )
         return version
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting version {version_number}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get conversation version")
+        raise HTTPException(
+            status_code=500, detail="Failed to get conversation version"
+        )

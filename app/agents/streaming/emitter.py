@@ -32,7 +32,6 @@ from .event_types import (
 from .normalizers import normalize_todos
 from .utils import count_tokens_approximately, BackpressureQueue, safe_json_value
 
-
 # =============================================================================
 # CONFIGURATION - Based on DeepAgents/LangGraph patterns
 # =============================================================================
@@ -105,7 +104,9 @@ class StreamEventEmitter:
             root_id: Root operation ID (defaults to timestamp-based ID).
         """
         self.writer = writer
-        self.root_id = root_id or f"run-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        self.root_id = (
+            root_id or f"run-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        )
 
         # State tracking
         self.operations: Dict[str, TimelineOperation] = {}
@@ -188,21 +189,25 @@ class StreamEventEmitter:
         sanitized_payload = (
             self._truncate_strings_in_payload(payload) if truncate else payload
         )
-        self.writer({
-            "event": "on_custom_event",
-            "name": name,
-            "data": sanitized_payload,
-        })
+        self.writer(
+            {
+                "event": "on_custom_event",
+                "name": name,
+                "data": sanitized_payload,
+            }
+        )
 
     def emit_tool_call_start(self, tool_call_id: str, tool_name: str) -> None:
         """Emit TOOL_CALL_START event."""
         if self.writer is None:
             return
-        self.writer({
-            "type": "TOOL_CALL_START",
-            "toolCallId": tool_call_id,
-            "toolCallName": tool_name,
-        })
+        self.writer(
+            {
+                "type": "TOOL_CALL_START",
+                "toolCallId": tool_call_id,
+                "toolCallName": tool_name,
+            }
+        )
 
     def emit_tool_call_end(
         self,
@@ -213,22 +218,26 @@ class StreamEventEmitter:
         """Emit TOOL_CALL_END event."""
         if self.writer is None:
             return
-        self.writer({
-            "type": "TOOL_CALL_END",
-            "toolCallId": tool_call_id,
-            "toolCallName": tool_name,
-            "result": result,
-        })
+        self.writer(
+            {
+                "type": "TOOL_CALL_END",
+                "toolCallId": tool_call_id,
+                "toolCallName": tool_name,
+                "result": result,
+            }
+        )
 
     def emit_genui_state(self, data: Dict[str, Any]) -> None:
         """Emit GenUI state update via CUSTOM event."""
         if self.writer is None or not data:
             return
-        self.writer({
-            "type": "CUSTOM",
-            "name": "genui_state_update",
-            "value": data,
-        })
+        self.writer(
+            {
+                "type": "CUSTOM",
+                "name": "genui_state_update",
+                "value": data,
+            }
+        )
 
     def emit_image_artifact(
         self,
@@ -266,7 +275,10 @@ class StreamEventEmitter:
         # Prevents frontend memory overflow from rapid large payload bursts
         now = time.time()
         elapsed_ms = (now - self._last_image_emission_time) * 1000
-        if elapsed_ms < IMAGE_EMISSION_THROTTLE_MS and self._last_image_emission_time > 0:
+        if (
+            elapsed_ms < IMAGE_EMISSION_THROTTLE_MS
+            and self._last_image_emission_time > 0
+        ):
             wait_time = (IMAGE_EMISSION_THROTTLE_MS - elapsed_ms) / 1000
             logger.debug(
                 "emit_image_artifact: throttling, waiting {:.2f}s",
@@ -275,6 +287,7 @@ class StreamEventEmitter:
             time.sleep(wait_time)
 
         import uuid
+
         artifact_id = f"img-{uuid.uuid4().hex[:8]}"
         message_id = getattr(self, "_current_message_id", None) or f"msg-{self.root_id}"
 
@@ -339,6 +352,7 @@ class StreamEventEmitter:
             return
 
         import uuid
+
         artifact_id = f"article-{uuid.uuid4().hex[:8]}"
         message_id = getattr(self, "_current_message_id", None) or f"msg-{self.root_id}"
 
@@ -359,17 +373,19 @@ class StreamEventEmitter:
             content = content + image_section if content else image_section
 
         # Don't truncate article content; send raw payload for artifact rendering.
-        self.writer({
-            "event": "on_custom_event",
-            "name": "article_artifact",
-            "data": {
-                "id": artifact_id,
-                "type": "article",
-                "title": title,
-                "content": content,
-                "messageId": message_id,
-            },
-        })
+        self.writer(
+            {
+                "event": "on_custom_event",
+                "name": "article_artifact",
+                "data": {
+                    "id": artifact_id,
+                    "type": "article",
+                    "title": title,
+                    "content": content,
+                    "messageId": message_id,
+                },
+            }
+        )
         logger.info(
             "emit_article_artifact: id={}, title={}, content_length={}",
             artifact_id,
@@ -394,11 +410,13 @@ class StreamEventEmitter:
         self._message_started = True
 
         if self.writer is not None:
-            self.writer({
-                "type": "TEXT_MESSAGE_START",
-                "messageId": message_id,
-                "role": "assistant",
-            })
+            self.writer(
+                {
+                    "type": "TEXT_MESSAGE_START",
+                    "messageId": message_id,
+                    "role": "assistant",
+                }
+            )
         return message_id
 
     def emit_text_content(self, delta: str) -> None:
@@ -412,13 +430,13 @@ class StreamEventEmitter:
             return
 
         # Ensure message is started
-        if not getattr(self, '_message_started', False):
+        if not getattr(self, "_message_started", False):
             logger.debug("emit_text_content: Starting new text message")
             self.start_text_message()
 
         event = {
             "type": "TEXT_MESSAGE_CONTENT",
-            "messageId": getattr(self, '_current_message_id', self.root_id),
+            "messageId": getattr(self, "_current_message_id", self.root_id),
             "delta": delta,
         }
         self.writer(event)
@@ -428,13 +446,15 @@ class StreamEventEmitter:
         if self.writer is None:
             return
 
-        message_id = getattr(self, '_current_message_id', self.root_id)
+        message_id = getattr(self, "_current_message_id", self.root_id)
         self._message_started = False
 
-        self.writer({
-            "type": "TEXT_MESSAGE_END",
-            "messageId": message_id,
-        })
+        self.writer(
+            {
+                "type": "TEXT_MESSAGE_END",
+                "messageId": message_id,
+            }
+        )
 
     # -------------------------------------------------------------------------
     # Timeline operations
@@ -484,7 +504,9 @@ class StreamEventEmitter:
             safe_input = input_data
             if tool_name == "log_diagnoser":
                 if isinstance(input_data, dict):
-                    file_name = input_data.get("file_name") or input_data.get("fileName")
+                    file_name = input_data.get("file_name") or input_data.get(
+                        "fileName"
+                    )
                     safe_input = {"file_name": file_name} if file_name else None
                 else:
                     safe_input = None
@@ -565,7 +587,9 @@ class StreamEventEmitter:
                 if isinstance(safe_output, str) and len(safe_output) <= 2000:
                     result_meta["output"] = safe_output
                 else:
-                    preview = tool_op.metadata.get("rawOutputPreview") if tool_op else None
+                    preview = (
+                        tool_op.metadata.get("rawOutputPreview") if tool_op else None
+                    )
                     if isinstance(preview, str) and preview.strip():
                         result_meta["outputPreview"] = preview
             if tool_op.duration is not None:
@@ -727,12 +751,9 @@ class StreamEventEmitter:
         buffer = self._thinking_buffer[run_id_str]
         last_flush = self._thinking_buffer_last_flush.get(run_id_str, now_ms)
 
-        should_flush = (
-            len(buffer) >= THINKING_BUFFER_MAX_CHARS
-            or (
-                (now_ms - last_flush) >= THINKING_BUFFER_FLUSH_MS
-                and len(buffer) >= THINKING_BUFFER_MIN_CHARS
-            )
+        should_flush = len(buffer) >= THINKING_BUFFER_MAX_CHARS or (
+            (now_ms - last_flush) >= THINKING_BUFFER_FLUSH_MS
+            and len(buffer) >= THINKING_BUFFER_MIN_CHARS
         )
 
         if should_flush:
@@ -781,12 +802,9 @@ class StreamEventEmitter:
         buffer = self._subagent_thinking_buffer[key]
         last_flush = self._subagent_thinking_last_flush.get(key, now_ms)
 
-        should_flush = (
-            len(buffer) >= SUBAGENT_THINKING_BUFFER_MAX_CHARS
-            or (
-                (now_ms - last_flush) >= SUBAGENT_THINKING_BUFFER_FLUSH_MS
-                and len(buffer) >= SUBAGENT_THINKING_BUFFER_MIN_CHARS
-            )
+        should_flush = len(buffer) >= SUBAGENT_THINKING_BUFFER_MAX_CHARS or (
+            (now_ms - last_flush) >= SUBAGENT_THINKING_BUFFER_FLUSH_MS
+            and len(buffer) >= SUBAGENT_THINKING_BUFFER_MIN_CHARS
         )
 
         if should_flush:
@@ -957,7 +975,9 @@ class StreamEventEmitter:
             # Never regress status.
             incoming_status = str(todo_dict.get("status") or "pending").lower()
             existing_status = str(match.status or "pending").lower()  # type: ignore[attr-defined]
-            if status_rank.get(existing_status, 0) > status_rank.get(incoming_status, 0):
+            if status_rank.get(existing_status, 0) > status_rank.get(
+                incoming_status, 0
+            ):
                 todo_dict["status"] = existing_status
 
             # Merge metadata (new fields win).
@@ -970,7 +990,9 @@ class StreamEventEmitter:
         # Ensure IDs are unique (model output can contain duplicates).
         seen_ids: Set[str] = set()
         for idx, todo_dict in enumerate(normalized, start=1):
-            base_id = str(todo_dict.get("id") or "").strip() or f"{self.root_id}-todo-{idx}"
+            base_id = (
+                str(todo_dict.get("id") or "").strip() or f"{self.root_id}-todo-{idx}"
+            )
             unique_id = base_id
             suffix = 2
             while unique_id in seen_ids:
@@ -984,12 +1006,14 @@ class StreamEventEmitter:
         # Convert to TodoItem objects
         self.todo_items.clear()
         for todo_dict in normalized:
-            self.todo_items.append(TodoItem(
-                id=todo_dict["id"],
-                title=todo_dict["title"],
-                status=todo_dict["status"],  # type: ignore
-                metadata=todo_dict.get("metadata", {}),
-            ))
+            self.todo_items.append(
+                TodoItem(
+                    id=todo_dict["id"],
+                    title=todo_dict["title"],
+                    status=todo_dict["status"],  # type: ignore
+                    metadata=todo_dict.get("metadata", {}),
+                )
+            )
 
         # Update timeline and emit events
         self._sync_todo_operations()
@@ -1079,10 +1103,14 @@ class StreamEventEmitter:
         # Compute a fingerprint that changes when step content changes.
         # This prevents "stale" trace panels where the step count stays the same
         # but the active step content is streaming in.
-        changed_step = step or (self.thinking_trace[-1] if self.thinking_trace else None)
+        changed_step = step or (
+            self.thinking_trace[-1] if self.thinking_trace else None
+        )
         if changed_step is not None:
             tail = changed_step.content[-512:] if changed_step.content else ""
-            tail_hash = hashlib.md5(tail.encode("utf-8", errors="ignore")).hexdigest()[:8]
+            tail_hash = hashlib.md5(tail.encode("utf-8", errors="ignore")).hexdigest()[
+                :8
+            ]
             fingerprint = (
                 f"{len(self.thinking_trace)}|{changed_step.id}|{changed_step.timestamp}|"
                 f"{changed_step.type}|{len(changed_step.content)}|{tail_hash}"
@@ -1112,42 +1140,51 @@ class StreamEventEmitter:
         if total_steps <= TRACE_WINDOW_SIZE:
             # Few enough steps - send all in full detail
             for trace_step in self.thinking_trace:
-                windowed_trace.append(self._prepare_step_for_emission(trace_step, full=True))
+                windowed_trace.append(
+                    self._prepare_step_for_emission(trace_step, full=True)
+                )
         else:
             # Summarize older steps, keep recent steps in full detail
             summary_count = total_steps - TRACE_WINDOW_SIZE
 
             # Older steps: Create summaries
             for i, trace_step in enumerate(self.thinking_trace[:summary_count]):
-                should_keep_full = (
-                    trace_step.type == "thought"
-                    or str(trace_step.metadata.get("kind", "")).lower() in {"narration", "phase", "provider_reasoning"}
-                )
+                should_keep_full = trace_step.type == "thought" or str(
+                    trace_step.metadata.get("kind", "")
+                ).lower() in {"narration", "phase", "provider_reasoning"}
                 windowed_trace.append(
                     self._prepare_step_for_emission(trace_step, full=should_keep_full)
                 )
 
             # Recent steps: Full detail
             for trace_step in self.thinking_trace[summary_count:]:
-                windowed_trace.append(self._prepare_step_for_emission(trace_step, full=True))
+                windowed_trace.append(
+                    self._prepare_step_for_emission(trace_step, full=True)
+                )
 
         # =====================================================================
         # APPROXIMATE TOKEN COUNT (LangChain pattern)
         # Fast estimation for observability without actual tokenization
         # =====================================================================
-        total_content = "".join(
-            str(s.content) if hasattr(s, "content") else str(s.get("content", ""))
-            for s in windowed_trace
+        def _step_content(step_item: Any) -> str:
+            if isinstance(step_item, dict):
+                return str(step_item.get("content", ""))
+            return str(getattr(step_item, "content", ""))
+
+        total_content = "".join(_step_content(s) for s in windowed_trace)
+        approx_tokens = count_tokens_approximately(
+            total_content, include_overhead=False
         )
-        approx_tokens = count_tokens_approximately(total_content, include_overhead=False)
 
         # Build payload
         payload = AgentThinkingTraceEvent(
             total_steps=total_steps,
             thinking_trace=windowed_trace,
             latest_step=step,
-            active_step_id=step.id if step else (
-                self.thinking_trace[-1].id if self.thinking_trace else None
+            active_step_id=(
+                step.id
+                if step
+                else (self.thinking_trace[-1].id if self.thinking_trace else None)
             ),
         )
 
@@ -1168,7 +1205,9 @@ class StreamEventEmitter:
         self._last_emitted_trace_version = total_steps
         self._last_emitted_trace_fingerprint = fingerprint
 
-    def _prepare_step_for_emission(self, trace_step: TraceStep, full: bool = True) -> TraceStep:
+    def _prepare_step_for_emission(
+        self, trace_step: TraceStep, full: bool = True
+    ) -> TraceStep:
         """Prepare a trace step for emission with optional summarization.
 
         Args:
@@ -1190,14 +1229,16 @@ class StreamEventEmitter:
             # For full mode, truncate at a reasonable boundary with indicator
             truncated = content[:max_len]
             # Try to truncate at a sentence boundary
-            last_period = truncated.rfind('. ')
+            last_period = truncated.rfind(". ")
             if last_period > max_len * 0.7:  # Only if we keep >70% of content
-                truncated = truncated[:last_period + 1]
-            summary = truncated + f"\n\n[...{len(content) - len(truncated)} more characters]"
+                truncated = truncated[: last_period + 1]
+            summary = (
+                truncated + f"\n\n[...{len(content) - len(truncated)} more characters]"
+            )
         else:
             # For summary mode, create a brief summary
             # Take first paragraph or first N chars
-            first_para_end = content.find('\n\n')
+            first_para_end = content.find("\n\n")
             if first_para_end > 0 and first_para_end < max_len:
                 summary = content[:first_para_end] + "..."
             else:
@@ -1235,7 +1276,9 @@ class StreamEventEmitter:
         # Remove from parent children
         parent_op = self.operations.get(self.root_id)
         if parent_op is not None:
-            parent_op.children = [c for c in parent_op.children if c not in self.todo_operation_ids]
+            parent_op.children = [
+                c for c in parent_op.children if c not in self.todo_operation_ids
+            ]
 
         self.todo_operation_ids.clear()
 

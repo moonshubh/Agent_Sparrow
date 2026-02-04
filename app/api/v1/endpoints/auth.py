@@ -4,18 +4,15 @@ Production-ready auth endpoints with comprehensive security features.
 """
 
 from typing import Optional, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime
 import logging
 import re
 
 from fastapi import APIRouter, HTTPException, status, Depends, Request
-from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, field_validator
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 
 from app.core.supabase_auth import get_auth_client, SupabaseAuthClient
 from app.core.settings import settings
@@ -35,44 +32,48 @@ router = APIRouter()
 async def debug_jwt_config():
     """Debug endpoint to check JWT configuration (remove in production)."""
     from app.core.settings import settings
+
     return {
         "jwt_secret_configured": bool(settings.supabase_jwt_secret),
         "jwt_secret_is_default": settings.jwt_secret_key == "change-this-in-production",
         "jwt_algorithm": settings.jwt_algorithm,
         "skip_auth": settings.skip_auth,
         "supabase_url_configured": bool(settings.supabase_url),
-        "supabase_anon_key_configured": bool(settings.supabase_anon_key)
+        "supabase_anon_key_configured": bool(settings.supabase_anon_key),
     }
 
 
 # Request/Response Models
 
+
 class SignUpRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: Optional[str] = None
-    
-    @field_validator('password')
+
+    @field_validator("password")
     def validate_password(cls, v):
         if len(v) < 8:
-            raise ValueError('Password must be at least 8 characters long')
-        
+            raise ValueError("Password must be at least 8 characters long")
+
         # Check for uppercase letter
-        if not re.search(r'[A-Z]', v):
-            raise ValueError('Password must contain at least one uppercase letter')
-        
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Password must contain at least one uppercase letter")
+
         # Check for lowercase letter
-        if not re.search(r'[a-z]', v):
-            raise ValueError('Password must contain at least one lowercase letter')
-        
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Password must contain at least one lowercase letter")
+
         # Check for digit
-        if not re.search(r'\d', v):
-            raise ValueError('Password must contain at least one digit')
-        
+        if not re.search(r"\d", v):
+            raise ValueError("Password must contain at least one digit")
+
         # Check for special character
         if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
-            raise ValueError('Password must contain at least one special character (!@#$%^&*(),.?":{}|<>)')
-        
+            raise ValueError(
+                'Password must contain at least one special character (!@#$%^&*(),.?":{}|<>)'
+            )
+
         return v
 
 
@@ -128,6 +129,7 @@ class MessageResponse(BaseModel):
 
 # Helper Functions
 
+
 def get_client_info(request: Request) -> tuple[Optional[str], Optional[str]]:
     """Extract client IP and User-Agent from request."""
     ip_address = request.client.host if request.client else None
@@ -136,7 +138,7 @@ def get_client_info(request: Request) -> tuple[Optional[str], Optional[str]]:
 
 
 async def get_current_user_id(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> str:
     """
     Get current user ID from JWT token.
@@ -144,8 +146,8 @@ async def get_current_user_id(
     """
     if settings.skip_auth:
         # Development mode - return configurable development user ID
-        return getattr(settings, 'development_user_id', 'dev-user-id')
-        
+        return getattr(settings, "development_user_id", "dev-user-id")
+
     if not credentials:
         logger.error("No credentials provided in request")
         raise HTTPException(
@@ -153,40 +155,49 @@ async def get_current_user_id(
             detail="Authentication required - no credentials provided",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     try:
         auth_client = get_auth_client()
-        logger.info(f"Attempting JWT verification for token starting with: {credentials.credentials[:20]}...")
+        logger.info(
+            f"Attempting JWT verification for token starting with: {credentials.credentials[:20]}..."
+        )
         token_data = await auth_client.verify_jwt(credentials.credentials)
-        
+
         if not token_data:
-            logger.error(f"JWT verification returned None for token: {credentials.credentials[:20]}...")
+            logger.error(
+                f"JWT verification returned None for token: {credentials.credentials[:20]}..."
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token - verification returned None",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
-        logger.info(f"JWT verification successful, user_id: {token_data.get('sub', 'unknown')[:8]}...")
-        
+
+        logger.info(
+            f"JWT verification successful, user_id: {token_data.get('sub', 'unknown')[:8]}..."
+        )
+
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
-        logger.error(f"Unexpected error during JWT verification: {type(e).__name__}: {str(e)}")
+        logger.error(
+            f"Unexpected error during JWT verification: {type(e).__name__}: {str(e)}"
+        )
         import traceback
+
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Token verification error: {str(e)}",
         )
-    
+
     # Enforce allowed email domain restriction (production)
     email = token_data.get("email") if token_data else None
     if not email:
         try:
             user = await auth_client.get_user_from_token(credentials.credentials)
-            email = getattr(user, 'email', None) if user else None
+            email = getattr(user, "email", None) if user else None
         except Exception:
             email = None
     if not settings.is_email_domain_allowed(email):
@@ -203,76 +214,68 @@ async def get_current_user_id(
             detail="Invalid token payload",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     return user_id
 
 
 # Auth Endpoints
+
 
 @router.post("/signup", response_model=SignUpResponse)
 @limiter.limit("5/minute")
 async def sign_up(
     request: Request,
     signup_request: SignUpRequest,
-    auth_client: SupabaseAuthClient = Depends(get_auth_client)
+    auth_client: SupabaseAuthClient = Depends(get_auth_client),
 ):
     """
     Sign up a new user with email and password.
-    
+
     Rate limited to 5 attempts per minute per IP.
     """
     # Enforce OAuth-only in production
     if settings.is_production_mode():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Password-based sign up is disabled. Use Google login."
+            detail="Password-based sign up is disabled. Use Google login.",
         )
 
     ip_address, user_agent = get_client_info(request)
-    
+
     try:
         # Prepare metadata
         metadata = {}
         if signup_request.full_name:
             metadata["full_name"] = signup_request.full_name
-            
+
         user, error = await auth_client.sign_up(
             email=signup_request.email,
             password=signup_request.password,
             metadata=metadata,
             ip_address=ip_address,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
-        
+
         if error:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error
-            )
-        
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Sign up failed"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Sign up failed"
             )
-        
+
         # For email confirmation flow, we might not get a session immediately
         return {
             "message": "Sign up successful. Please check your email for verification.",
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "created_at": user.created_at
-            }
+            "user": {"id": user.id, "email": user.email, "created_at": user.created_at},
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Sign up error: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Sign up failed"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sign up failed"
         )
 
 
@@ -281,42 +284,38 @@ async def sign_up(
 async def sign_in(
     request: Request,
     signin_request: SignInRequest,
-    auth_client: SupabaseAuthClient = Depends(get_auth_client)
+    auth_client: SupabaseAuthClient = Depends(get_auth_client),
 ):
     """
     Sign in with email and password.
-    
+
     Rate limited to 10 attempts per minute per IP.
     """
     # Enforce OAuth-only in production
     if settings.is_production_mode():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Password-based sign in is disabled. Use Google login."
+            detail="Password-based sign in is disabled. Use Google login.",
         )
 
     ip_address, user_agent = get_client_info(request)
-    
+
     try:
         session, error = await auth_client.sign_in_with_password(
             email=signin_request.email,
             password=signin_request.password,
             ip_address=ip_address,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
-        
+
         if error:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=error
-            )
-        
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=error)
+
         if not session:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Sign in failed"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in failed"
             )
-        
+
         return {
             "access_token": session.access_token,
             "refresh_token": session.refresh_token,
@@ -327,17 +326,16 @@ async def sign_in(
                 "full_name": session.user.user_metadata.get("full_name"),
                 "created_at": session.user.created_at,
                 "last_sign_in_at": session.user.last_sign_in_at,
-                "metadata": session.user.user_metadata
-            }
+                "metadata": session.user.user_metadata,
+            },
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Sign in error: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Sign in failed"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sign in failed"
         )
 
 
@@ -346,45 +344,42 @@ async def sign_in(
 async def oauth_signin(
     request: Request,
     oauth_request: OAuthRequest,
-    auth_client: SupabaseAuthClient = Depends(get_auth_client)
+    auth_client: SupabaseAuthClient = Depends(get_auth_client),
 ):
     """
     Get OAuth provider URL for sign in.
-    
+
     Rate limited to 20 attempts per minute per IP.
     """
     ip_address, user_agent = get_client_info(request)
-    
+
     try:
         provider_url, error = await auth_client.sign_in_with_oauth(
             provider=oauth_request.provider,
             redirect_to=oauth_request.redirect_to,
             scopes=oauth_request.scopes,
             ip_address=ip_address,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
-        
+
         if error:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error
-            )
-        
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
         if not provider_url:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to generate OAuth URL"
+                detail="Failed to generate OAuth URL",
             )
-        
+
         return {"provider_url": provider_url}
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"OAuth error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="OAuth initialization failed"
+            detail="OAuth initialization failed",
         )
 
 
@@ -393,43 +388,38 @@ async def oauth_signin(
 async def sign_out(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    auth_client: SupabaseAuthClient = Depends(get_auth_client)
+    auth_client: SupabaseAuthClient = Depends(get_auth_client),
 ):
     """
     Sign out the current user.
-    
+
     Rate limited to 30 attempts per minute per IP.
     """
     if not credentials:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
         )
-    
+
     ip_address, user_agent = get_client_info(request)
-    
+
     try:
         error = await auth_client.sign_out(
             jwt_token=credentials.credentials,
             ip_address=ip_address,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
-        
+
         if error:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error
-            )
-        
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
         return {"message": "Sign out successful"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Sign out error: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Sign out failed"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sign out failed"
         )
 
 
@@ -438,34 +428,30 @@ async def sign_out(
 async def refresh_token(
     request: Request,
     refresh_token_value: str,
-    auth_client: SupabaseAuthClient = Depends(get_auth_client)
+    auth_client: SupabaseAuthClient = Depends(get_auth_client),
 ):
     """
     Refresh access token using refresh token.
-    
+
     Rate limited to 60 attempts per minute per IP.
     """
     ip_address, user_agent = get_client_info(request)
-    
+
     try:
         session, error = await auth_client.refresh_token(
             refresh_token=refresh_token_value,
             ip_address=ip_address,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
-        
+
         if error:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=error
-            )
-        
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=error)
+
         if not session:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token refresh failed"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token refresh failed"
             )
-        
+
         return {
             "access_token": session.access_token,
             "refresh_token": session.refresh_token,
@@ -476,17 +462,17 @@ async def refresh_token(
                 "full_name": session.user.user_metadata.get("full_name"),
                 "created_at": session.user.created_at,
                 "last_sign_in_at": session.user.last_sign_in_at,
-                "metadata": session.user.user_metadata
-            }
+                "metadata": session.user.user_metadata,
+            },
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Token refresh error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Token refresh failed"
+            detail="Token refresh failed",
         )
 
 
@@ -495,45 +481,42 @@ async def refresh_token(
 async def reset_password(
     request: Request,
     reset_request: PasswordResetRequest,
-    auth_client: SupabaseAuthClient = Depends(get_auth_client)
+    auth_client: SupabaseAuthClient = Depends(get_auth_client),
 ):
     """
     Send password reset email.
-    
+
     Rate limited to 5 attempts per minute per IP.
     """
     # Enforce OAuth-only in production
     if settings.is_production_mode():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Password reset is disabled. Use Google login."
+            detail="Password reset is disabled. Use Google login.",
         )
 
     ip_address, user_agent = get_client_info(request)
-    
+
     try:
         error = await auth_client.reset_password_for_email(
             email=reset_request.email,
             redirect_to=reset_request.redirect_to,
             ip_address=ip_address,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
-        
+
         if error:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error
-            )
-        
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
         return {"message": "Password reset email sent"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Password reset error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Password reset failed"
+            detail="Password reset failed",
         )
 
 
@@ -543,38 +526,37 @@ async def get_current_user(
     request: Request,
     user_id: str = Depends(get_current_user_id),
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    auth_client: SupabaseAuthClient = Depends(get_auth_client)
+    auth_client: SupabaseAuthClient = Depends(get_auth_client),
 ):
     """
     Get current user information.
-    
+
     Rate limited to 100 requests per minute per IP.
     """
     try:
         user = await auth_client.get_user_from_token(credentials.credentials)
-        
+
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
             )
-        
+
         return {
             "id": user.id,
             "email": user.email,
             "full_name": user.user_metadata.get("full_name"),
             "created_at": user.created_at,
             "last_sign_in_at": user.last_sign_in_at,
-            "metadata": user.user_metadata
+            "metadata": user.user_metadata,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Get user error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get user information"
+            detail="Failed to get user information",
         )
 
 
@@ -585,15 +567,15 @@ async def update_current_user(
     update_request: UpdateUserRequest,
     user_id: str = Depends(get_current_user_id),
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    auth_client: SupabaseAuthClient = Depends(get_auth_client)
+    auth_client: SupabaseAuthClient = Depends(get_auth_client),
 ):
     """
     Update current user information.
-    
+
     Rate limited to 20 requests per minute per IP.
     """
     ip_address, user_agent = get_client_info(request)
-    
+
     try:
         # Prepare attributes to update
         attributes = {}
@@ -603,48 +585,44 @@ async def update_current_user(
             if "data" not in attributes:
                 attributes["data"] = {}
             attributes["data"].update(update_request.metadata)
-        
+
         if not attributes:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No attributes to update"
+                detail="No attributes to update",
             )
-        
+
         user, error = await auth_client.update_user(
             jwt_token=credentials.credentials,
             attributes=attributes,
             ip_address=ip_address,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
-        
+
         if error:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error
-            )
-        
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User update failed"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="User update failed"
             )
-        
+
         return {
             "id": user.id,
             "email": user.email,
             "full_name": user.user_metadata.get("full_name"),
             "created_at": user.created_at,
             "last_sign_in_at": user.last_sign_in_at,
-            "metadata": user.user_metadata
+            "metadata": user.user_metadata,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Update user error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="User update failed"
+            detail="User update failed",
         )
 
 

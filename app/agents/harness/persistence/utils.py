@@ -3,6 +3,7 @@
 These utilities handle the polymorphic nature of database rows
 from various sources (raw tuples, dicts, ORM objects, mocks).
 """
+
 from __future__ import annotations
 
 import json
@@ -119,7 +120,9 @@ def rows_to_dicts(cursor: Any, rows: list[Any]) -> list[dict[str, Any]]:
         if isinstance(row, dict):
             item = dict(row)
         elif columns:
-            item = {columns[idx]: row[idx] for idx in range(min(len(columns), len(row)))}
+            item = {
+                columns[idx]: row[idx] for idx in range(min(len(columns), len(row)))
+            }
         else:
             item = {"value": row}
 

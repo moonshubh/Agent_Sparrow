@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
+from typing import Any, Dict, List, Optional
 
 # Unified Agent System Metadata
 # All agents are now part of the unified agent system with DeepAgents.
 # Legacy agent IDs are maintained for backward compatibility with frontend.
 
-AGENTS: List[Dict[str, object]] = [
+AGENTS: List[Dict[str, Any]] = [
     {
         "id": "unified",
         "destination": "unified_agent",
@@ -47,11 +46,11 @@ AGENTS: List[Dict[str, object]] = [
 ]
 
 
-def list_agents() -> List[Dict[str, object]]:
+def list_agents() -> List[Dict[str, Any]]:
     return AGENTS
 
 
-def get_agent_metadata(agent_id: str) -> Optional[Dict[str, object]]:
+def get_agent_metadata(agent_id: str) -> Optional[Dict[str, Any]]:
     if not isinstance(agent_id, str):
         return None
     key = agent_id.strip().lower()

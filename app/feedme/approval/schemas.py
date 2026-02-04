@@ -5,15 +5,23 @@ Pydantic models for approval workflow data structures, validation, and API contr
 """
 
 from datetime import datetime
-from typing import Optional, Any, Union
+from typing import Optional, Any
 from enum import Enum
 
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict, ValidationError, ValidationInfo
-import numpy as np
+from pydantic import (
+    BaseModel,
+    Field,
+    field_validator,
+    model_validator,
+    ConfigDict,
+    ValidationError,
+    ValidationInfo,
+)
 
 
 class ApprovalState(str, Enum):
     """Approval states for temp examples"""
+
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -23,6 +31,7 @@ class ApprovalState(str, Enum):
 
 class ApprovalAction(str, Enum):
     """Available approval actions"""
+
     APPROVE = "approve"
     REJECT = "reject"
     REQUEST_REVISION = "request_revision"
@@ -30,6 +39,7 @@ class ApprovalAction(str, Enum):
 
 class Priority(str, Enum):
     """Priority levels for review"""
+
     LOW = "low"
     NORMAL = "normal"
     HIGH = "high"
@@ -38,6 +48,7 @@ class Priority(str, Enum):
 
 class RejectionReason(str, Enum):
     """Reasons for rejection"""
+
     POOR_QUALITY = "poor_quality"
     IRRELEVANT = "irrelevant"
     DUPLICATE = "duplicate"
@@ -51,71 +62,74 @@ class RejectionReason(str, Enum):
 # Core Data Models
 # ===========================
 
+
 class TempExampleCreate(BaseModel):
     """Schema for creating a new temp example"""
+
     model_config = ConfigDict(str_strip_whitespace=True)
-    
+
     conversation_id: int = Field(..., gt=0)
     question_text: str = Field(..., min_length=5, max_length=2000)
     answer_text: str = Field(..., min_length=10, max_length=5000)
     context_before: Optional[str] = Field(None, max_length=1000)
     context_after: Optional[str] = Field(None, max_length=1000)
-    
+
     # AI extraction metadata
     extraction_confidence: float = Field(..., ge=0.0, le=1.0)
     ai_model_used: str = Field(..., min_length=1)
     extraction_method: str = Field(default="ai")
-    
+
     # Optional categorization
     issue_category: Optional[str] = Field(None, max_length=50)
     tags: Optional[list[str]] = Field(default_factory=list)
     metadata: Optional[dict[str, Any]] = Field(default_factory=dict)
 
-    @field_validator('question_text', 'answer_text')
+    @field_validator("question_text", "answer_text")
     def validate_text_content(cls, v):
         """Validate text content for basic quality"""
         if not v or not v.strip():
             raise ValueError("Text content cannot be empty")
-        
+
         # Basic content validation
         if len(v.split()) < 2:
             raise ValueError("Text content must contain at least 2 words")
-        
+
         return v.strip()
 
-    @field_validator('tags')
+    @field_validator("tags")
     def validate_tags(cls, v):
         """Validate tags list"""
         if v and len(v) > 10:
             raise ValueError("Maximum 10 tags allowed")
-        
+
         # Clean and validate individual tags
         cleaned_tags = []
         for tag in v or []:
             tag = tag.strip().lower()
             if tag and len(tag) <= 30:
                 cleaned_tags.append(tag)
-        
+
         return cleaned_tags
 
 
 class TempExampleUpdate(BaseModel):
     """Schema for updating a temp example"""
+
     model_config = ConfigDict(str_strip_whitespace=True)
-    
+
     question_text: Optional[str] = Field(None, min_length=5, max_length=2000)
     answer_text: Optional[str] = Field(None, min_length=10, max_length=5000)
     context_before: Optional[str] = Field(None, max_length=1000)
     context_after: Optional[str] = Field(None, max_length=1000)
-    
+
     # Approval workflow fields
     assigned_reviewer: Optional[str] = Field(None, max_length=255)
     priority: Optional[Priority] = None
-    
+
     # Quality assessments
     reviewer_confidence_score: Optional[float] = Field(None, ge=0.0, le=1.0)
     reviewer_usefulness_score: Optional[float] = Field(None, ge=0.0, le=1.0)
-    
+
     # Metadata updates
     tags: Optional[list[str]] = Field(None)
     metadata: Optional[dict[str, Any]] = Field(None)
@@ -123,50 +137,51 @@ class TempExampleUpdate(BaseModel):
 
 class TempExampleResponse(BaseModel):
     """Schema for temp example responses"""
+
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: int
     conversation_id: int
     question_text: str
     answer_text: str
     context_before: Optional[str] = None
     context_after: Optional[str] = None
-    
+
     # Embeddings (excluded from API responses by default)
     question_embedding: Optional[list[float]] = Field(None, exclude=True)
     answer_embedding: Optional[list[float]] = Field(None, exclude=True)
     combined_embedding: Optional[list[float]] = Field(None, exclude=True)
-    
+
     # AI extraction metadata
     extraction_method: str
     extraction_confidence: float
     ai_model_used: str
     extraction_timestamp: datetime
-    
+
     # Approval workflow fields
     approval_status: ApprovalState
     assigned_reviewer: Optional[str] = None
     priority: Priority
-    
+
     # Review information
     review_notes: Optional[str] = None
     rejection_reason: Optional[RejectionReason] = None
     revision_instructions: Optional[str] = None
     reviewer_id: Optional[str] = None
     reviewed_at: Optional[datetime] = None
-    
+
     # Quality assessments
     reviewer_confidence_score: Optional[float] = None
     reviewer_usefulness_score: Optional[float] = None
-    
+
     # Auto-approval
     auto_approved: bool
     auto_approval_reason: Optional[str] = None
-    
+
     # Metadata
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    
+
     # Timestamps
     created_at: datetime
     updated_at: datetime
@@ -176,23 +191,25 @@ class TempExampleResponse(BaseModel):
 # Workflow Decision Models
 # ===========================
 
+
 class ApprovalDecision(BaseModel):
     """Schema for approval decisions"""
+
     model_config = ConfigDict(str_strip_whitespace=True)
-    
+
     temp_example_id: int = Field(..., gt=0)
     action: ApprovalAction
     reviewer_id: str = Field(..., min_length=1, max_length=255)
-    
+
     # Review details
     review_notes: Optional[str] = Field(None, max_length=2000)
     confidence_assessment: Optional[float] = Field(None, ge=0.0, le=1.0)
     time_spent_minutes: Optional[int] = Field(None, ge=0, le=480)  # Max 8 hours
-    
+
     # Action-specific fields
     rejection_reason: Optional[RejectionReason] = None
     revision_instructions: Optional[str] = Field(None, max_length=1000)
-    
+
     # Quality scores
     reviewer_confidence_score: Optional[float] = Field(None, ge=0.0, le=1.0)
     reviewer_usefulness_score: Optional[float] = Field(None, ge=0.0, le=1.0)
@@ -210,8 +227,11 @@ class ApprovalDecision(BaseModel):
                     }
                 ],
             )
-        
-        if self.action == ApprovalAction.REQUEST_REVISION and not self.revision_instructions:
+
+        if (
+            self.action == ApprovalAction.REQUEST_REVISION
+            and not self.revision_instructions
+        ):
             raise ValidationError.from_exception_data(
                 self.__class__,
                 [
@@ -226,20 +246,21 @@ class ApprovalDecision(BaseModel):
 
 class BulkApprovalRequest(BaseModel):
     """Schema for bulk approval operations"""
+
     model_config = ConfigDict(str_strip_whitespace=True)
-    
+
     temp_example_ids: list[int] = Field(..., min_length=1, max_length=100)
     action: ApprovalAction
     reviewer_id: str = Field(..., min_length=1, max_length=255)
-    
+
     # Bulk review details
     review_notes: Optional[str] = Field(None, max_length=2000)
-    
+
     # Action-specific fields
     rejection_reason: Optional[RejectionReason] = None
     revision_instructions: Optional[str] = Field(None, max_length=1000)
 
-    @field_validator('temp_example_ids')
+    @field_validator("temp_example_ids")
     def validate_unique_ids(cls, v):
         """Ensure all IDs are unique"""
         if len(v) != len(set(v)):
@@ -249,6 +270,7 @@ class BulkApprovalRequest(BaseModel):
 
 class BulkApprovalResponse(BaseModel):
     """Schema for bulk approval operation responses"""
+
     processed_count: int
     successful_count: int
     failed_count: int
@@ -260,31 +282,33 @@ class BulkApprovalResponse(BaseModel):
 # Analytics and Metrics
 # ===========================
 
+
 class WorkflowMetrics(BaseModel):
     """Schema for workflow metrics and analytics"""
+
     # Volume metrics
     total_pending: int
     total_approved: int
     total_rejected: int
     total_revision_requested: int
     total_auto_approved: int
-    
+
     # Performance metrics
     approval_rate: float = Field(..., ge=0.0, le=1.0)
     rejection_rate: float = Field(..., ge=0.0, le=1.0)
     auto_approval_rate: float = Field(..., ge=0.0, le=1.0)
-    
+
     # Time metrics
     avg_review_time_hours: Optional[float] = None
     median_review_time_hours: Optional[float] = None
-    
+
     # Quality metrics
     avg_extraction_confidence: Optional[float] = None
     avg_reviewer_confidence: Optional[float] = None
-    
+
     # Reviewer efficiency
     reviewer_efficiency: dict[str, int] = Field(default_factory=dict)
-    
+
     # Time period
     period_start: datetime
     period_end: datetime
@@ -292,12 +316,13 @@ class WorkflowMetrics(BaseModel):
 
 class ReviewerWorkload(BaseModel):
     """Schema for reviewer workload information"""
+
     reviewer_id: str
     pending_count: int
     total_reviewed: int
     avg_review_time_hours: Optional[float] = None
     efficiency_score: Optional[float] = Field(None, ge=0.0, le=1.0)
-    
+
     # Recent activity
     reviews_today: int = 0
     reviews_this_week: int = 0
@@ -305,6 +330,7 @@ class ReviewerWorkload(BaseModel):
 
 class ReviewerWorkloadSummary(BaseModel):
     """Schema for overall reviewer workload summary"""
+
     reviewers: list[ReviewerWorkload]
     total_pending: int
     avg_workload: float
@@ -317,32 +343,36 @@ class ReviewerWorkloadSummary(BaseModel):
 # Configuration Models
 # ===========================
 
+
 class WorkflowConfig(BaseModel):
     """Configuration for approval workflow"""
+
     # Auto-approval thresholds
     auto_approval_threshold: float = Field(default=0.9, ge=0.5, le=1.0)
     high_confidence_threshold: float = Field(default=0.8, ge=0.5, le=1.0)
     require_review_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
-    
+
     # Workflow settings
     batch_size: int = Field(default=10, ge=1, le=100)
     max_pending_per_reviewer: int = Field(default=20, ge=5, le=100)
     enable_auto_assignment: bool = Field(default=True)
-    
+
     # Time limits
     review_timeout_hours: int = Field(default=24, ge=1, le=168)  # Max 1 week
     escalation_timeout_hours: int = Field(default=48, ge=2, le=336)  # Max 2 weeks
-    
+
     # Quality settings
     min_confidence_for_auto_approval: float = Field(default=0.9, ge=0.5, le=1.0)
     require_dual_review_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
-    @field_validator('high_confidence_threshold')
+    @field_validator("high_confidence_threshold")
     def validate_threshold_order(cls, v, info: ValidationInfo):
         """Ensure thresholds are in correct order"""
-        auto_threshold = info.data.get('auto_approval_threshold', 0.9)
+        auto_threshold = info.data.get("auto_approval_threshold", 0.9)
         if v >= auto_threshold:
-            raise ValueError("High confidence threshold must be less than auto approval threshold")
+            raise ValueError(
+                "High confidence threshold must be less than auto approval threshold"
+            )
         return v
 
 
@@ -350,25 +380,28 @@ class WorkflowConfig(BaseModel):
 # API Response Models
 # ===========================
 
+
 class PaginatedTempExampleResponse(BaseModel):
     """Paginated response for temp examples"""
+
     items: list[TempExampleResponse]
     total: int
     page: int
     page_size: int
     total_pages: int
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def calculate_total_pages(self):
         """Calculate total pages based on total and page_size"""
-        total = getattr(self, 'total', 0)
-        page_size = getattr(self, 'page_size', 10)
+        total = getattr(self, "total", 0)
+        page_size = getattr(self, "page_size", 10)
         self.total_pages = (total + page_size - 1) // page_size if total > 0 else 0
         return self
 
 
 class ApprovalSummary(BaseModel):
     """Summary of approval status"""
+
     status: ApprovalState
     count: int
     percentage: float
@@ -376,6 +409,7 @@ class ApprovalSummary(BaseModel):
 
 class WorkflowSummary(BaseModel):
     """High-level workflow summary"""
+
     total_items: int
     status_breakdown: list[ApprovalSummary]
     avg_processing_time_hours: Optional[float] = None

@@ -24,7 +24,6 @@ from typing import Any, Callable, Optional, Sequence, TypedDict
 from loguru import logger
 from app.agents.log_analysis.log_analysis_agent.utils import extract_json_payload
 
-
 # =============================================================================
 # CONFIGURATION CONSTANTS (DeepAgents-style)
 # =============================================================================
@@ -50,9 +49,11 @@ DEFAULT_JITTER = 1.0  # seconds
 # 1. LARGE TOOL RESULT EVICTION (DeepAgents pattern)
 # =============================================================================
 
+
 @dataclass
 class EvictedToolResult:
     """Reference to a tool result that was evicted to storage."""
+
     original_length: int
     evicted_path: str
     sample_content: str
@@ -107,13 +108,13 @@ class ToolResultEvictionManager:
             return content, False
 
         # Sanitize tool call ID for path
-        sanitized_id = re.sub(r'[^a-zA-Z0-9_-]', '_', tool_call_id)[:50]
+        sanitized_id = re.sub(r"[^a-zA-Z0-9_-]", "_", tool_call_id)[:50]
         # Store in session-scoped workspace so the agent can retrieve via read_workspace_file.
         evicted_path = f"/knowledge/tool_results/{tool_name}/{sanitized_id}.txt"
 
         # Get sample content (first 10 lines or 500 chars)
-        lines = content.split('\n')[:10]
-        sample = '\n'.join(lines)
+        lines = content.split("\n")[:10]
+        sample = "\n".join(lines)
         if len(sample) > 500:
             sample = sample[:500] + "..."
 
@@ -126,6 +127,7 @@ class ToolResultEvictionManager:
 
         # Track eviction
         from datetime import datetime, timezone
+
         evicted = EvictedToolResult(
             original_length=len(content),
             evicted_path=evicted_path,
@@ -135,7 +137,7 @@ class ToolResultEvictionManager:
         self._evicted_results[tool_call_id] = evicted
 
         # Create reference message
-        reference_msg = f"""Tool result too large ({len(content):,} chars, ~{len(content)//4:,} tokens).
+        reference_msg = f"""Tool result too large ({len(content):,} chars, ~{len(content) // 4:,} tokens).
 Full result saved at: {evicted_path}
 
 To access the full result, use read_workspace_file(path=..., offset=..., limit=...).
@@ -161,6 +163,7 @@ Preview (first 10 lines):
 # =============================================================================
 # Shared safe JSON helpers
 # =============================================================================
+
 
 def safe_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Ensure metadata values are JSON-serializable."""
@@ -203,6 +206,7 @@ def safe_json_value(value: Any) -> Any:
 # 2. APPROXIMATE TOKEN COUNTING (LangChain pattern)
 # =============================================================================
 
+
 def count_tokens_approximately(
     content: str | list[Any],
     *,
@@ -229,7 +233,11 @@ def count_tokens_approximately(
     elif isinstance(content, list):
         # Sum content of list items
         char_count = sum(
-            len(str(item.get("text", item))) if isinstance(item, dict) else len(str(item))
+            (
+                len(str(item.get("text", item)))
+                if isinstance(item, dict)
+                else len(str(item))
+            )
             for item in content
         )
     else:
@@ -292,8 +300,10 @@ def count_message_tokens_approximately(
 # 3. INVALID TOOL CALL HANDLING (LangChain pattern)
 # =============================================================================
 
+
 class InvalidToolCall(TypedDict):
     """Structured capture of invalid tool calls."""
+
     type: str  # "invalid_tool_call"
     id: Optional[str]
     name: Optional[str]
@@ -333,35 +343,45 @@ def parse_tool_calls_safely(
                     args = json.loads(args_raw)
                 except json.JSONDecodeError as e:
                     # Capture as invalid call
-                    invalid_calls.append(InvalidToolCall(
-                        type="invalid_tool_call",
-                        id=call_id,
-                        name=name,
-                        args=args_raw,
-                        error=f"JSON parse error: {str(e)}",
-                        index=idx,
-                    ))
+                    invalid_calls.append(
+                        InvalidToolCall(
+                            type="invalid_tool_call",
+                            id=call_id,
+                            name=name,
+                            args=args_raw,
+                            error=f"JSON parse error: {str(e)}",
+                            index=idx,
+                        )
+                    )
                     continue
             else:
                 args = args_raw
 
             # Valid call
-            valid_calls.append({
-                "id": call_id,
-                "name": name,
-                "args": args,
-            })
+            valid_calls.append(
+                {
+                    "id": call_id,
+                    "name": name,
+                    "args": args,
+                }
+            )
 
         except Exception as e:
             # Catch any other parsing errors
-            invalid_calls.append(InvalidToolCall(
-                type="invalid_tool_call",
-                id=raw_call.get("id"),
-                name=raw_call.get("name") or raw_call.get("function", {}).get("name"),
-                args=str(raw_call.get("args") or raw_call.get("function", {}).get("arguments")),
-                error=f"Parse error: {str(e)}",
-                index=idx,
-            ))
+            invalid_calls.append(
+                InvalidToolCall(
+                    type="invalid_tool_call",
+                    id=raw_call.get("id"),
+                    name=raw_call.get("name")
+                    or raw_call.get("function", {}).get("name"),
+                    args=str(
+                        raw_call.get("args")
+                        or raw_call.get("function", {}).get("arguments")
+                    ),
+                    error=f"Parse error: {str(e)}",
+                    index=idx,
+                )
+            )
 
     return valid_calls, invalid_calls
 
@@ -369,6 +389,7 @@ def parse_tool_calls_safely(
 # =============================================================================
 # 4. CHECKPOINT DEDUPLICATION (LangGraph pattern)
 # =============================================================================
+
 
 class WriteDeduplicator:
     """Deduplicates checkpoint writes by keeping last write per channel.
@@ -391,7 +412,11 @@ class WriteDeduplicator:
 
     def get_deduplicated_writes(self) -> list[tuple[str, str, Any]]:
         """Get deduplicated writes in submission order."""
-        return [self._pending_writes[key] for key in self._write_order if key in self._pending_writes]
+        return [
+            self._pending_writes[key]
+            for key in self._write_order
+            if key in self._pending_writes
+        ]
 
     def clear(self) -> None:
         """Clear all pending writes."""
@@ -400,7 +425,9 @@ class WriteDeduplicator:
 
     def remove_task_writes(self, task_id: str) -> None:
         """Remove all writes for a specific task."""
-        keys_to_remove = [k for k in self._pending_writes if k.startswith(f"{task_id}:")]
+        keys_to_remove = [
+            k for k in self._pending_writes if k.startswith(f"{task_id}:")
+        ]
         for key in keys_to_remove:
             del self._pending_writes[key]
             if key in self._write_order:
@@ -411,15 +438,17 @@ class WriteDeduplicator:
 # 5. RETRY WITH EXPONENTIAL BACKOFF + JITTER (LangGraph pattern)
 # =============================================================================
 
+
 @dataclass
 class RetryConfig:
     """Configuration for retry behavior."""
+
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
     initial_interval: float = DEFAULT_INITIAL_INTERVAL
     max_interval: float = DEFAULT_MAX_INTERVAL
     backoff_factor: float = DEFAULT_BACKOFF_FACTOR
     jitter: float = DEFAULT_JITTER
-    retry_exceptions: tuple[type, ...] = (Exception,)
+    retry_exceptions: tuple[type[BaseException], ...] = (Exception,)
 
 
 def calculate_retry_delay(
@@ -471,7 +500,7 @@ async def retry_with_backoff(
         Last exception if all retries fail
     """
     config = config or RetryConfig()
-    last_exception: Optional[Exception] = None
+    last_exception: Optional[BaseException] = None
 
     for attempt in range(1, config.max_attempts + 1):
         try:
@@ -510,6 +539,7 @@ async def retry_with_backoff(
 # =============================================================================
 # 6. STREAMING BACKPRESSURE (LangChain pattern)
 # =============================================================================
+
 
 class BackpressureQueue:
     """Async queue with backpressure handling for streaming.
@@ -586,7 +616,9 @@ class BackpressureQueue:
 # 7. CONTENT TRUNCATION WITH GUIDANCE (DeepAgents pattern)
 # =============================================================================
 
-TRUNCATION_GUIDANCE = "... [results truncated, try being more specific with your parameters]"
+TRUNCATION_GUIDANCE = (
+    "... [results truncated, try being more specific with your parameters]"
+)
 
 
 def truncate_if_too_long(
@@ -640,7 +672,7 @@ def format_content_with_line_numbers(
         Formatted string with line numbers
     """
     if isinstance(content, str):
-        lines = content.split('\n')
+        lines = content.split("\n")
     else:
         lines = content
 
@@ -665,14 +697,17 @@ def format_content_with_line_numbers(
                 else:
                     # Continuation: use decimal notation (5.1, 5.2, etc.)
                     continuation_marker = f"{line_num}.{chunk_idx}"
-                    result_lines.append(f"{continuation_marker:>{line_number_width}}\t{chunk}")
+                    result_lines.append(
+                        f"{continuation_marker:>{line_number_width}}\t{chunk}"
+                    )
 
-    return '\n'.join(result_lines)
+    return "\n".join(result_lines)
 
 
 # =============================================================================
 # 8. EMISSION DEDUPLICATION HASH (LangGraph-inspired)
 # =============================================================================
+
 
 def compute_content_hash(content: Any, max_sample: int = 1000) -> str:
     """Compute a fast hash of content for deduplication.

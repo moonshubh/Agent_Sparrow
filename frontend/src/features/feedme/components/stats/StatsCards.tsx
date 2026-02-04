@@ -5,12 +5,12 @@
  * for each type of statistic.
  */
 
-'use client'
+"use client";
 
-import React from 'react'
-import { motion } from 'motion/react'
-import { cn } from '@/shared/lib/utils'
-import { Skeleton } from '@/shared/ui/skeleton'
+import React from "react";
+import { motion } from "motion/react";
+import { cn } from "@/shared/lib/utils";
+import { Skeleton } from "@/shared/ui/skeleton";
 import {
   MessageSquare,
   Activity,
@@ -21,25 +21,25 @@ import {
   Clock,
   CheckCircle2,
   XCircle,
-  Loader2
-} from 'lucide-react'
+  Loader2,
+} from "lucide-react";
 import type {
   ConversationStats,
   ProcessingMetrics,
   ApiUsage,
-  SystemHealth
-} from '@/features/feedme/hooks/use-stats-data'
+  SystemHealth,
+} from "@/features/feedme/hooks/use-stats-data";
 
 // Shared card wrapper component
 interface StatCardProps {
-  label: string
-  value: string | number
-  subtitle?: string
-  icon: React.ReactNode
-  children?: React.ReactNode
-  className?: string
-  animationDelay?: number
-  accentColor?: string
+  label: string;
+  value: string | number;
+  subtitle?: string;
+  icon: React.ReactNode;
+  children?: React.ReactNode;
+  className?: string;
+  animationDelay?: number;
+  accentColor?: string;
 }
 
 function StatCard({
@@ -50,18 +50,22 @@ function StatCard({
   children,
   className,
   animationDelay = 0,
-  accentColor = 'hsl(200.4 98% 38%)'
+  accentColor = "hsl(200.4 98% 38%)",
 }: StatCardProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: animationDelay, ease: [0.4, 0, 0.2, 1] }}
+      transition={{
+        duration: 0.4,
+        delay: animationDelay,
+        ease: [0.4, 0, 0.2, 1],
+      }}
       className={cn(
-        'relative rounded-xl p-5',
-        'bg-card border border-border',
-        'shadow-sm hover:shadow-md transition-shadow duration-200',
-        className
+        "relative rounded-xl p-5",
+        "bg-card border border-border",
+        "shadow-sm hover:shadow-md transition-shadow duration-200",
+        className,
       )}
     >
       {/* Header with icon */}
@@ -87,49 +91,46 @@ function StatCard({
 
       {/* Subtitle */}
       {subtitle && (
-        <p className="text-xs text-muted-foreground mt-1">
-          {subtitle}
-        </p>
+        <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
       )}
 
       {/* Custom content (charts, etc.) */}
-      {children && (
-        <div className="mt-4">
-          {children}
-        </div>
-      )}
+      {children && <div className="mt-4">{children}</div>}
     </motion.div>
-  )
+  );
 }
 
 // Simple progress bar component
 interface ProgressBarProps {
-  value: number
-  max?: number
-  color?: string
-  showLabel?: boolean
-  size?: 'sm' | 'md'
+  value: number;
+  max?: number;
+  color?: string;
+  showLabel?: boolean;
+  size?: "sm" | "md";
 }
 
 function ProgressBar({
   value,
   max = 100,
-  color = 'hsl(200.4 98% 38%)',
+  color = "hsl(200.4 98% 38%)",
   showLabel = true,
-  size = 'sm'
+  size = "sm",
 }: ProgressBarProps) {
   // Protect against division by zero
-  const percentage = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0
-  const height = size === 'sm' ? 'h-1.5' : 'h-2.5'
+  const percentage =
+    max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
+  const height = size === "sm" ? "h-1.5" : "h-2.5";
 
   return (
     <div className="space-y-1">
-      <div className={cn('w-full bg-muted rounded-full overflow-hidden', height)}>
+      <div
+        className={cn("w-full bg-muted rounded-full overflow-hidden", height)}
+      >
         <motion.div
           initial={{ width: 0 }}
           animate={{ width: `${percentage}%` }}
-          transition={{ duration: 0.8, ease: 'easeOut' }}
-          className={cn('h-full rounded-full', height)}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          className={cn("h-full rounded-full", height)}
           style={{ backgroundColor: color }}
         />
       </div>
@@ -140,16 +141,16 @@ function ProgressBar({
         </div>
       )}
     </div>
-  )
+  );
 }
 
 // Mini bar chart for status breakdown
 interface MiniBarChartProps {
-  data: { label: string; value: number; color: string }[]
+  data: { label: string; value: number; color: string }[];
 }
 
 function MiniBarChart({ data }: MiniBarChartProps) {
-  const maxValue = Math.max(...data.map(d => d.value), 1)
+  const maxValue = Math.max(...data.map((d) => d.value), 1);
 
   return (
     <div className="flex items-end gap-1.5 h-10">
@@ -165,7 +166,7 @@ function MiniBarChart({ data }: MiniBarChartProps) {
         />
       ))}
     </div>
-  )
+  );
 }
 
 // Loading skeleton
@@ -180,36 +181,57 @@ export function StatsCardSkeleton() {
       <Skeleton className="h-3 w-32 mb-4" />
       <Skeleton className="h-2 w-full rounded-full" />
     </div>
-  )
+  );
 }
 
 // ==========================================
 // Conversation Stats Card
 // ==========================================
 interface ConversationStatsCardProps {
-  data: ConversationStats
-  className?: string
-  animationDelay?: number
+  data: ConversationStats;
+  className?: string;
+  animationDelay?: number;
 }
 
 export function ConversationStatsCard({
   data,
   className,
-  animationDelay = 0
+  animationDelay = 0,
 }: ConversationStatsCardProps) {
   // Show all relevant statuses, with awaiting review being the most common state
   const statusData = [
-    { label: 'Awaiting Review', value: data.byStatus.awaitingReview, color: 'hsl(280 60% 55%)' },
-    { label: 'Pending', value: data.byStatus.pending, color: 'hsl(40 90% 50%)' },
-    { label: 'Processing', value: data.byStatus.processing, color: 'hsl(200.4 98% 50%)' },
-    { label: 'Approved', value: data.byStatus.approved, color: 'hsl(135 45% 45%)' },
-    { label: 'Rejected', value: data.byStatus.rejected, color: 'hsl(0 70% 50%)' },
-  ]
+    {
+      label: "Awaiting Review",
+      value: data.byStatus.awaitingReview,
+      color: "hsl(280 60% 55%)",
+    },
+    {
+      label: "Pending",
+      value: data.byStatus.pending,
+      color: "hsl(40 90% 50%)",
+    },
+    {
+      label: "Processing",
+      value: data.byStatus.processing,
+      color: "hsl(200.4 98% 50%)",
+    },
+    {
+      label: "Approved",
+      value: data.byStatus.approved,
+      color: "hsl(135 45% 45%)",
+    },
+    {
+      label: "Rejected",
+      value: data.byStatus.rejected,
+      color: "hsl(0 70% 50%)",
+    },
+  ];
 
   // Filter to only show statuses with values > 0 for cleaner display
-  const activeStatusData = statusData.filter(item => item.value > 0)
+  const activeStatusData = statusData.filter((item) => item.value > 0);
   // If all are zero, show all statuses
-  const displayData = activeStatusData.length > 0 ? activeStatusData : statusData
+  const displayData =
+    activeStatusData.length > 0 ? activeStatusData : statusData;
 
   return (
     <StatCard
@@ -227,7 +249,7 @@ export function ConversationStatsCard({
 
         {/* Status legend */}
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-          {displayData.map(item => (
+          {displayData.map((item) => (
             <div key={item.label} className="flex items-center gap-1.5">
               <div
                 className="w-2 h-2 rounded-full"
@@ -240,28 +262,29 @@ export function ConversationStatsCard({
         </div>
       </div>
     </StatCard>
-  )
+  );
 }
 
 // ==========================================
 // Processing Metrics Card
 // ==========================================
 interface ProcessingMetricsCardProps {
-  data: ProcessingMetrics
-  className?: string
-  animationDelay?: number
+  data: ProcessingMetrics;
+  className?: string;
+  animationDelay?: number;
 }
 
 export function ProcessingMetricsCard({
   data,
   className,
-  animationDelay = 0
+  animationDelay = 0,
 }: ProcessingMetricsCardProps) {
-  const successColor = data.successRate >= 80
-    ? 'hsl(135 45% 45%)'
-    : data.successRate >= 50
-      ? 'hsl(40 90% 50%)'
-      : 'hsl(0 70% 50%)'
+  const successColor =
+    data.successRate >= 80
+      ? "hsl(135 45% 45%)"
+      : data.successRate >= 50
+        ? "hsl(40 90% 50%)"
+        : "hsl(0 70% 50%)";
 
   return (
     <StatCard
@@ -289,7 +312,7 @@ export function ProcessingMetricsCard({
             <Clock className="w-3 h-3 text-muted-foreground" />
             <span className="text-muted-foreground">Avg:</span>
             <span className="font-medium">
-              {data.averageTime > 0 ? `${data.averageTime.toFixed(1)}s` : 'N/A'}
+              {data.averageTime > 0 ? `${data.averageTime.toFixed(1)}s` : "N/A"}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
@@ -300,33 +323,33 @@ export function ProcessingMetricsCard({
         </div>
       </div>
     </StatCard>
-  )
+  );
 }
 
 // ==========================================
 // API Usage Cards (Gemini)
 // ==========================================
 interface ApiUsageCardProps {
-  data: ApiUsage
-  className?: string
-  animationDelay?: number
+  data: ApiUsage;
+  className?: string;
+  animationDelay?: number;
 }
 
 export function GeminiUsageCard({
   data,
   className,
-  animationDelay = 0
+  animationDelay = 0,
 }: ApiUsageCardProps) {
-  const usage = data.gemini
-  const percentage = usage.dailyLimit > 0
-    ? (usage.dailyUsed / usage.dailyLimit) * 100
-    : 0
+  const usage = data.gemini;
+  const percentage =
+    usage.dailyLimit > 0 ? (usage.dailyUsed / usage.dailyLimit) * 100 : 0;
 
-  const statusColor = usage.status === 'healthy'
-    ? 'hsl(135 45% 45%)'
-    : usage.status === 'warning'
-      ? 'hsl(40 90% 50%)'
-      : 'hsl(0 70% 50%)'
+  const statusColor =
+    usage.status === "healthy"
+      ? "hsl(135 45% 45%)"
+      : usage.status === "warning"
+        ? "hsl(40 90% 50%)"
+        : "hsl(0 70% 50%)";
 
   return (
     <StatCard
@@ -351,8 +374,11 @@ export function GeminiUsageCard({
         {/* Status indicator */}
         <div className="flex items-center justify-between text-xs">
           <div className="flex items-center gap-1.5">
-            {usage.status === 'healthy' ? (
-              <CheckCircle2 className="w-3 h-3" style={{ color: statusColor }} />
+            {usage.status === "healthy" ? (
+              <CheckCircle2
+                className="w-3 h-3"
+                style={{ color: statusColor }}
+              />
             ) : (
               <XCircle className="w-3 h-3" style={{ color: statusColor }} />
             )}
@@ -364,24 +390,24 @@ export function GeminiUsageCard({
         </div>
       </div>
     </StatCard>
-  )
+  );
 }
 
 export function EmbeddingUsageCard({
   data,
   className,
-  animationDelay = 0
+  animationDelay = 0,
 }: ApiUsageCardProps) {
-  const usage = data.embedding
-  const percentage = usage.dailyLimit > 0
-    ? (usage.dailyUsed / usage.dailyLimit) * 100
-    : 0
+  const usage = data.embedding;
+  const percentage =
+    usage.dailyLimit > 0 ? (usage.dailyUsed / usage.dailyLimit) * 100 : 0;
 
-  const statusColor = usage.status === 'healthy'
-    ? 'hsl(135 45% 45%)'
-    : usage.status === 'warning'
-      ? 'hsl(40 90% 50%)'
-      : 'hsl(0 70% 50%)'
+  const statusColor =
+    usage.status === "healthy"
+      ? "hsl(135 45% 45%)"
+      : usage.status === "warning"
+        ? "hsl(40 90% 50%)"
+        : "hsl(0 70% 50%)";
 
   return (
     <StatCard
@@ -406,8 +432,11 @@ export function EmbeddingUsageCard({
         {/* Status indicator */}
         <div className="flex items-center justify-between text-xs">
           <div className="flex items-center gap-1.5">
-            {usage.status === 'healthy' ? (
-              <CheckCircle2 className="w-3 h-3" style={{ color: statusColor }} />
+            {usage.status === "healthy" ? (
+              <CheckCircle2
+                className="w-3 h-3"
+                style={{ color: statusColor }}
+              />
             ) : (
               <XCircle className="w-3 h-3" style={{ color: statusColor }} />
             )}
@@ -419,31 +448,31 @@ export function EmbeddingUsageCard({
         </div>
       </div>
     </StatCard>
-  )
+  );
 }
 
 // ==========================================
 // System Health Card
 // ==========================================
 interface SystemHealthCardProps {
-  data: SystemHealth
-  className?: string
-  animationDelay?: number
+  data: SystemHealth;
+  className?: string;
+  animationDelay?: number;
 }
 
 export function SystemHealthCard({
   data,
   className,
-  animationDelay = 0
+  animationDelay = 0,
 }: SystemHealthCardProps) {
   const statusConfig = {
-    excellent: { color: 'hsl(135 45% 45%)', icon: Heart },
-    good: { color: 'hsl(135 35% 50%)', icon: Heart },
-    fair: { color: 'hsl(40 90% 50%)', icon: Heart },
-    poor: { color: 'hsl(0 70% 50%)', icon: Heart },
-  }
+    excellent: { color: "hsl(135 45% 45%)", icon: Heart },
+    good: { color: "hsl(135 35% 50%)", icon: Heart },
+    fair: { color: "hsl(40 90% 50%)", icon: Heart },
+    poor: { color: "hsl(0 70% 50%)", icon: Heart },
+  };
 
-  const config = statusConfig[data.status]
+  const config = statusConfig[data.status];
 
   return (
     <StatCard
@@ -470,7 +499,10 @@ export function SystemHealthCard({
           {data.issues.length > 0 ? (
             <div className="space-y-1">
               {data.issues.slice(0, 2).map((issue, i) => (
-                <div key={i} className="flex items-center gap-1.5 text-muted-foreground">
+                <div
+                  key={i}
+                  className="flex items-center gap-1.5 text-muted-foreground"
+                >
                   <XCircle className="w-3 h-3 text-amber-500" />
                   <span>{issue}</span>
                 </div>
@@ -478,12 +510,15 @@ export function SystemHealthCard({
             </div>
           ) : (
             <div className="flex items-center gap-1.5 text-muted-foreground">
-              <CheckCircle2 className="w-3 h-3" style={{ color: config.color }} />
+              <CheckCircle2
+                className="w-3 h-3"
+                style={{ color: config.color }}
+              />
               <span>All systems operational</span>
             </div>
           )}
         </div>
       </div>
     </StatCard>
-  )
+  );
 }

@@ -1,12 +1,18 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
-import * as THREE from 'three';
-import type { EntityType, GraphNode, TreeEdge, TreeTransformResult, TreeViewMode } from '../types';
-import { TreeScene } from './TreeScene';
-import type { TreeCameraState } from '../hooks/useTreeState';
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
+import { Canvas } from "@react-three/fiber";
+import { OrbitControls } from "@react-three/drei";
+import * as THREE from "three";
+import type {
+  EntityType,
+  GraphNode,
+  TreeEdge,
+  TreeTransformResult,
+  TreeViewMode,
+} from "../types";
+import { TreeScene } from "./TreeScene";
+import type { TreeCameraState } from "../hooks/useTreeState";
 
 export type MemoryTree3DControlsApi = {
   zoomIn: () => void;
@@ -61,7 +67,11 @@ export default function MemoryTree3D({
   onBackgroundClick?: () => void;
   htmlPortal?: RefObject<HTMLElement>;
   onNodeClick?: (node: GraphNode) => void;
-  lastExpansionEvent?: { nodeId: string; action: 'expand' | 'collapse'; at: number } | null;
+  lastExpansionEvent?: {
+    nodeId: string;
+    action: "expand" | "collapse";
+    at: number;
+  } | null;
   onToggleExpanded?: (nodeId: string) => void;
   onShowChildren?: (nodeId: string) => void;
   onEdgeClick?: (edge: TreeEdge) => void;
@@ -81,8 +91,16 @@ export default function MemoryTree3D({
     const controls = controlsRef.current;
     if (!camera || !controls) return;
     onCameraStateChange?.({
-      position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
-      target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+      position: {
+        x: camera.position.x,
+        y: camera.position.y,
+        z: camera.position.z,
+      },
+      target: {
+        x: controls.target.x,
+        y: controls.target.y,
+        z: controls.target.z,
+      },
     });
   }, [onCameraStateChange]);
 
@@ -96,12 +114,12 @@ export default function MemoryTree3D({
     controls.target.set(
       initialCameraState.target.x,
       initialCameraState.target.y,
-      initialCameraState.target.z
+      initialCameraState.target.z,
     );
     camera.position.set(
       initialCameraState.position.x,
       initialCameraState.position.y,
-      initialCameraState.position.z
+      initialCameraState.position.z,
     );
     controls.update();
     hydratedCameraRef.current = true;
@@ -118,23 +136,29 @@ export default function MemoryTree3D({
     emitCameraState();
   }, [emitCameraState, initialCameraPosition, initialTarget]);
 
-  const zoomByFactor = useCallback((factor: number) => {
-    const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!camera || !controls) return;
+  const zoomByFactor = useCallback(
+    (factor: number) => {
+      const camera = cameraRef.current;
+      const controls = controlsRef.current;
+      if (!camera || !controls) return;
 
-    const dir = new THREE.Vector3().subVectors(camera.position, controls.target);
-    const distance = dir.length();
-    const next = clamp(
-      distance * factor,
-      controls.minDistance ?? 0,
-      controls.maxDistance ?? 1e9
-    );
-    dir.setLength(next);
-    camera.position.copy(controls.target).add(dir);
-    controls.update();
-    emitCameraState();
-  }, [emitCameraState]);
+      const dir = new THREE.Vector3().subVectors(
+        camera.position,
+        controls.target,
+      );
+      const distance = dir.length();
+      const next = clamp(
+        distance * factor,
+        controls.minDistance ?? 0,
+        controls.maxDistance ?? 1e9,
+      );
+      dir.setLength(next);
+      camera.position.copy(controls.target).add(dir);
+      controls.update();
+      emitCameraState();
+    },
+    [emitCameraState],
+  );
 
   useEffect(() => {
     onControlsReady?.({
@@ -152,31 +176,59 @@ export default function MemoryTree3D({
     controlsRef.current = instance ? (instance as OrbitControlsHandle) : null;
   }, []);
 
-  const lighting = viewMode === 'celebrate_strengths'
-    ? {
-        ambient: { intensity: 0.42, color: '#FFF3E0' },
-        hemi: { intensity: 0.22, sky: '#ffd3b0', ground: '#0b2216' },
-        directional: { intensity: 1.35, color: '#ffcc80', position: [18, 16, -10] as const },
-        point: { intensity: 0.8, color: '#ffb38a', position: [-10, 8, -6] as const },
-        rim: { intensity: 0.35, color: '#22d3ee', position: [10, 10, 18] as const },
-        fog: { color: '#0b0a12', near: 26, far: 88 },
-      }
-    : {
-        ambient: { intensity: 0.22, color: '#dbeafe' },
-        hemi: { intensity: 0.2, sky: '#bcdcff', ground: '#070816' },
-        directional: { intensity: 1.05, color: '#93c5fd', position: [-14, 22, 12] as const },
-        point: { intensity: 0.65, color: '#a855f7', position: [8, 10, -10] as const },
-        rim: { intensity: 0.32, color: '#60a5fa', position: [10, 9, 18] as const },
-        fog: { color: '#090a16', near: 24, far: 86 },
-      };
+  const lighting =
+    viewMode === "celebrate_strengths"
+      ? {
+          ambient: { intensity: 0.42, color: "#FFF3E0" },
+          hemi: { intensity: 0.22, sky: "#ffd3b0", ground: "#0b2216" },
+          directional: {
+            intensity: 1.35,
+            color: "#ffcc80",
+            position: [18, 16, -10] as const,
+          },
+          point: {
+            intensity: 0.8,
+            color: "#ffb38a",
+            position: [-10, 8, -6] as const,
+          },
+          rim: {
+            intensity: 0.35,
+            color: "#22d3ee",
+            position: [10, 10, 18] as const,
+          },
+          fog: { color: "#0b0a12", near: 26, far: 88 },
+        }
+      : {
+          ambient: { intensity: 0.22, color: "#dbeafe" },
+          hemi: { intensity: 0.2, sky: "#bcdcff", ground: "#070816" },
+          directional: {
+            intensity: 1.05,
+            color: "#93c5fd",
+            position: [-14, 22, 12] as const,
+          },
+          point: {
+            intensity: 0.65,
+            color: "#a855f7",
+            position: [8, 10, -10] as const,
+          },
+          rim: {
+            intensity: 0.32,
+            color: "#60a5fa",
+            position: [10, 9, 18] as const,
+          },
+          fog: { color: "#090a16", near: 24, far: 86 },
+        };
 
   return (
-    <div className="particle-tree-3d-container" style={{ width: '100%', height: '100%' }}>
+    <div
+      className="particle-tree-3d-container"
+      style={{ width: "100%", height: "100%" }}
+    >
       <Canvas
         shadows
         camera={{ position: [0, 12, 22], fov: 48 }}
         gl={{ antialias: true, alpha: true }}
-        style={{ background: 'transparent' }}
+        style={{ background: "transparent" }}
         onPointerMissed={() => {
           onBackgroundClick?.();
         }}
@@ -186,8 +238,14 @@ export default function MemoryTree3D({
           }
         }}
       >
-        <fog attach="fog" args={[lighting.fog.color, lighting.fog.near, lighting.fog.far]} />
-        <ambientLight intensity={lighting.ambient.intensity} color={lighting.ambient.color} />
+        <fog
+          attach="fog"
+          args={[lighting.fog.color, lighting.fog.near, lighting.fog.far]}
+        />
+        <ambientLight
+          intensity={lighting.ambient.intensity}
+          color={lighting.ambient.color}
+        />
         <hemisphereLight
           intensity={lighting.hemi.intensity}
           color={lighting.hemi.sky}
@@ -227,7 +285,10 @@ export default function MemoryTree3D({
           maxDistance={70}
           target={[initialTarget.x, initialTarget.y, initialTarget.z]}
           onChange={() => {
-            const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            const now =
+              typeof performance !== "undefined"
+                ? performance.now()
+                : Date.now();
             if (now - lastCameraEmitRef.current < 120) return;
             lastCameraEmitRef.current = now;
             emitCameraState();

@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import re
 
-import bleach
+import bleach  # type: ignore[import-untyped]
 import mistune
 from bs4 import BeautifulSoup, NavigableString, Tag
 from mistune.plugins import url
-
 
 _UNICODE_BULLETS_RE = re.compile(r"^(\s*)([•●◦‣▪∙·])\s+(.*)$")
 _BOLDED_ORDINAL_RE = re.compile(r"^(\s*)(\*\*|__)(\d+)[\.)]\s+(.*?)(\2)\s*(.*)$")

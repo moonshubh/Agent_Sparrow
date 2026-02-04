@@ -1,63 +1,62 @@
-'use client'
+"use client";
 
-import React, { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { Button } from '@/shared/ui/button'
-import { Input } from '@/shared/ui/input'
-import { Label } from '@/shared/ui/label'
-import { toast } from 'sonner'
-import { AlertCircle, LogIn } from 'lucide-react'
+import React, { useState } from "react";
+import { useRouter } from "next/navigation";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Label } from "@/shared/ui/label";
+import { toast } from "sonner";
+import { AlertCircle, LogIn } from "lucide-react";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export const LocalDevLoginForm: React.FC = () => {
-  const router = useRouter()
-  const [email, setEmail] = useState('dev@localhost.com')
-  const [password, setPassword] = useState('dev')
-  const [isLoading, setIsLoading] = useState(false)
+  const router = useRouter();
+  const [email, setEmail] = useState("dev@localhost.com");
+  const [password, setPassword] = useState("dev");
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleLocalLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    
-    setIsLoading(true)
-    
+    e.preventDefault();
+
+    setIsLoading(true);
+
     try {
       // Call local auth endpoint
       const response = await fetch(`${API_BASE_URL}/api/v1/auth/local-signin`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({ email, password }),
-      })
+      });
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.detail || 'Local authentication failed')
+        const error = await response.json();
+        throw new Error(error.detail || "Local authentication failed");
       }
 
-      const data = await response.json()
-      
+      const data = await response.json();
+
       // Store tokens in localStorage (for development only)
-      localStorage.setItem('access_token', data.access_token)
-      localStorage.setItem('refresh_token', data.refresh_token)
-      localStorage.setItem('user', JSON.stringify(data.user))
-      
+      localStorage.setItem("access_token", data.access_token);
+      localStorage.setItem("refresh_token", data.refresh_token);
+      localStorage.setItem("user", JSON.stringify(data.user));
+
       // Show success message
-      toast.success('Successfully logged in with local auth!')
-      
+      toast.success("Successfully logged in with local auth!");
+
       // Redirect to main app
-      const returnUrl = sessionStorage.getItem('authReturnUrl') || '/chat'
-      sessionStorage.removeItem('authReturnUrl')
-      router.push(returnUrl)
-      
+      const returnUrl = sessionStorage.getItem("authReturnUrl") || "/chat";
+      sessionStorage.removeItem("authReturnUrl");
+      router.push(returnUrl);
     } catch (error) {
-      console.error('Local login error:', error)
-      toast.error(error instanceof Error ? error.message : 'Failed to login')
+      console.error("Local login error:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to login");
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
-  }
+  };
 
   return (
     <div className="space-y-4">
@@ -70,7 +69,8 @@ export const LocalDevLoginForm: React.FC = () => {
               Local Development Mode
             </p>
             <p className="text-yellow-700 dark:text-yellow-500 mt-1">
-              OAuth is bypassed for local testing. This mode should never be used in production.
+              OAuth is bypassed for local testing. This mode should never be
+              used in production.
             </p>
           </div>
         </div>
@@ -102,11 +102,7 @@ export const LocalDevLoginForm: React.FC = () => {
           />
         </div>
 
-        <Button
-          type="submit"
-          className="w-full"
-          disabled={isLoading}
-        >
+        <Button type="submit" className="w-full" disabled={isLoading}>
           {isLoading ? (
             <>
               <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
@@ -126,5 +122,5 @@ export const LocalDevLoginForm: React.FC = () => {
         Default credentials: dev@localhost.com / dev
       </div>
     </div>
-  )
-}
+  );
+};

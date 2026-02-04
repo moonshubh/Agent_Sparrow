@@ -1,8 +1,8 @@
-import { 
-  validateAdminAccess, 
-  getAdminConfig, 
-  callUpstream 
-} from '../_shared/route-helpers';
+import {
+  validateAdminAccess,
+  getAdminConfig,
+  callUpstream,
+} from "../_shared/route-helpers";
 
 export async function GET() {
   const authError = await validateAdminAccess();
@@ -15,8 +15,5 @@ export async function GET() {
     return configResult;
   }
 
-  return callUpstream(
-    '/api/v1/integrations/zendesk/models',
-    configResult
-  );
+  return callUpstream("/api/v1/integrations/zendesk/models", configResult);
 }

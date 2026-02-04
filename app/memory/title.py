@@ -9,7 +9,6 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
-
 _WHITESPACE_RE = re.compile(r"\s+")
 _LEADING_BULLET_RE = re.compile(r"^[-*•]+\s*")
 _LABEL_LINE_PREFIXES: tuple[str, ...] = (

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 
@@ -27,18 +27,18 @@ class OpenRouterChatOpenAI(ChatOpenAI):
 
     def _get_request_payload(
         self,
-        messages: List[BaseMessage],
+        input_: Any,
         *,
         stop: List[str] | None = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        payload = super()._get_request_payload(messages, stop=stop, **kwargs)
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         raw_messages = payload.get("messages")
-        if not isinstance(raw_messages, list):
+        if not isinstance(raw_messages, list) or not isinstance(input_, list):
             return payload
 
         patched: list[dict[str, Any]] = []
-        for msg_obj, msg_dict in zip(messages, raw_messages):
+        for msg_obj, msg_dict in zip(input_, raw_messages):
             if isinstance(msg_dict, dict) and isinstance(msg_obj, AIMessage):
                 reasoning_details = msg_obj.additional_kwargs.get("reasoning_details")
                 if reasoning_details is not None:
@@ -57,7 +57,9 @@ class OpenRouterChatOpenAI(ChatOpenAI):
     ) -> ChatResult:
         result = super()._create_chat_result(response, generation_info=generation_info)
 
-        response_dict = response if isinstance(response, dict) else response.model_dump()
+        response_dict = (
+            response if isinstance(response, dict) else response.model_dump()
+        )
         choices = response_dict.get("choices")
         if not isinstance(choices, list):
             return result
@@ -72,7 +74,9 @@ class OpenRouterChatOpenAI(ChatOpenAI):
             if isinstance(gen.message, AIMessage):
                 reasoning_details = msg_dict.get("reasoning_details")
                 if reasoning_details is not None:
-                    gen.message.additional_kwargs["reasoning_details"] = reasoning_details
+                    gen.message.additional_kwargs["reasoning_details"] = (
+                        reasoning_details
+                    )
 
         return result
 

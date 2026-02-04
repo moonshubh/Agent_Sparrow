@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
 
 from langchain_core.tools import BaseTool
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -30,10 +30,13 @@ if TYPE_CHECKING:
 # Try to import middleware classes
 try:
     from langchain.agents import create_agent
-    from langchain.agents.middleware import TodoListMiddleware
     from langchain.agents.middleware.summarization import SummarizationMiddleware
-    from deepagents.middleware.subagents import SubAgentMiddleware
-    from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+    from deepagents.middleware.subagents import (  # type: ignore[import-untyped]
+        SubAgentMiddleware,
+    )
+    from deepagents.middleware.patch_tool_calls import (  # type: ignore[import-untyped]
+        PatchToolCallsMiddleware,
+    )
 
     DEEPAGENTS_AVAILABLE = True
 except ImportError as e:
@@ -41,7 +44,6 @@ except ImportError as e:
     DEEPAGENTS_AVAILABLE = False
 
 from app.agents.unified.prompts import COORDINATOR_PROMPT, TODO_PROMPT
-
 
 # Constants
 DEFAULT_MAX_TOKENS_BEFORE_SUMMARY = 170000
@@ -133,8 +135,9 @@ def _create_summarization_middleware(
     messages_to_keep: int,
 ) -> AgentMiddleware:
     """Create SummarizationMiddleware across langchain versions."""
+    params: dict[str, inspect.Parameter] = {}
     try:
-        params = inspect.signature(SummarizationMiddleware).parameters
+        params = dict(inspect.signature(SummarizationMiddleware).parameters)
     except (TypeError, ValueError):
         params = {}
 
@@ -247,7 +250,7 @@ def create_sparrow_agent(
     )
 
     # Create the agent using DeepAgents pattern
-    agent = create_agent(
+    agent: Any = create_agent(
         config.model,
         system_prompt=config.build_system_prompt(),
         tools=config.tools,
@@ -309,7 +312,7 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
     # 5. SubAgent middleware (if subagents configured)
     if config.subagents:
         # Build subagent middleware for each subagent
-        subagent_default_middleware = [
+        subagent_default_middleware: list[Any] = [
             _create_summarization_middleware(
                 model=config.model,
                 max_tokens_before_summary=config.max_tokens_before_summary,
@@ -319,12 +322,13 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
             PatchToolCallsMiddleware(),
         ]
 
+        subagents_payload: list[Any] = [spec.to_dict() for spec in config.subagents]
         coordinator_middleware = SubAgentMiddleware(
             default_model=config.model,
             default_tools=config.tools,
-            subagents=[spec.to_dict() for spec in config.subagents],
+            subagents=subagents_payload,
             default_middleware=subagent_default_middleware,
-            default_interrupt_on=config.interrupt_on,
+            default_interrupt_on=cast(Any, config.interrupt_on),
             general_purpose_agent=False,
         )
         middleware.append(coordinator_middleware)
@@ -388,7 +392,7 @@ def create_lightweight_agent(
         PatchToolCallsMiddleware(),
     ]
 
-    agent = create_agent(
+    agent: Any = create_agent(
         model,
         system_prompt=system_prompt or "You are a helpful assistant.",
         tools=tools,

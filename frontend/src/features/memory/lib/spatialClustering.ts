@@ -1,4 +1,4 @@
-import { mulberry32 } from './tree3DGeometry';
+import { mulberry32 } from "./tree3DGeometry";
 
 export type Vec3 = readonly [number, number, number];
 
@@ -31,13 +31,16 @@ function mean(points: readonly Vec3[]): Vec3 {
 function pickKMeansPlusPlusCentroids(
   points: readonly Vec3[],
   k: number,
-  seed: number
+  seed: number,
 ): Vec3[] {
   const rng = mulberry32(seed);
   const centroids: Vec3[] = [];
   if (points.length === 0 || k <= 0) return centroids;
 
-  const firstIndex = Math.min(points.length - 1, Math.floor(rng() * points.length));
+  const firstIndex = Math.min(
+    points.length - 1,
+    Math.floor(rng() * points.length),
+  );
   centroids.push(points[firstIndex] ?? [0, 0, 0]);
 
   while (centroids.length < k) {
@@ -51,7 +54,10 @@ function pickKMeansPlusPlusCentroids(
 
     const total = distances.reduce((acc, v) => acc + v, 0);
     if (total <= 0) {
-      const idx = Math.min(points.length - 1, Math.floor(rng() * points.length));
+      const idx = Math.min(
+        points.length - 1,
+        Math.floor(rng() * points.length),
+      );
       centroids.push(points[idx] ?? [0, 0, 0]);
       continue;
     }
@@ -78,7 +84,7 @@ export function spatialKMeans<T>(
     readonly getPoint: (item: T) => Vec3;
     readonly seed?: number;
     readonly maxIterations?: number;
-  }
+  },
 ): SpatialCluster<T>[] {
   if (items.length === 0) return [];
 
@@ -127,7 +133,10 @@ export function spatialKMeans<T>(
     const rng = mulberry32(seed + iter + 1);
     centroids = buckets.map((bucket) => {
       if (bucket.length > 0) return mean(bucket);
-      const idx = Math.min(points.length - 1, Math.floor(rng() * points.length));
+      const idx = Math.min(
+        points.length - 1,
+        Math.floor(rng() * points.length),
+      );
       return points[idx] ?? [0, 0, 0];
     });
   }
@@ -145,4 +154,3 @@ export function spatialKMeans<T>(
     }))
     .filter((cluster) => cluster.items.length > 0);
 }
-

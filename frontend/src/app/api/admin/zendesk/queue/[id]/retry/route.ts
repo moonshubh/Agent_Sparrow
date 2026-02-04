@@ -1,13 +1,13 @@
-import { NextRequest } from 'next/server';
-import { 
-  validateAdminAccess, 
-  getAdminConfig, 
-  callUpstream 
-} from '../../../_shared/route-helpers';
+import { NextRequest } from "next/server";
+import {
+  validateAdminAccess,
+  getAdminConfig,
+  callUpstream,
+} from "../../../_shared/route-helpers";
 
 export async function POST(
-  _req: NextRequest, 
-  ctx: { params: Promise<{ id: string }> }
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> },
 ) {
   const authError = await validateAdminAccess();
   if (authError) {
@@ -24,7 +24,7 @@ export async function POST(
     `/api/v1/integrations/zendesk/admin/queue/${encodeURIComponent(id)}/retry`,
     configResult,
     {
-      method: 'POST',
-    }
+      method: "POST",
+    },
   );
 }

@@ -1,4 +1,4 @@
-import type { CycleEdge, GraphData } from '../types';
+import type { CycleEdge, GraphData } from "../types";
 
 type EdgeKey = `${string}|${string}`;
 
@@ -20,7 +20,7 @@ interface UndirectedEdgeInput {
  */
 export function findCycleEdges(
   data: GraphData,
-  options?: { startNodeId?: string }
+  options?: { startNodeId?: string },
 ): CycleEdge[] {
   const nodeIds = data.nodes.map((n) => n.id);
   const nodeIdSet = new Set(nodeIds);
@@ -34,7 +34,10 @@ export function findCycleEdges(
       weight: l.weight,
     }));
 
-  const adjacency = new Map<string, Array<{ neighborId: string; edge: UndirectedEdgeInput }>>();
+  const adjacency = new Map<
+    string,
+    Array<{ neighborId: string; edge: UndirectedEdgeInput }>
+  >();
   nodeIds.forEach((id) => adjacency.set(id, []));
   edges.forEach((edge) => {
     adjacency.get(edge.sourceId)?.push({ neighborId: edge.targetId, edge });
@@ -93,4 +96,3 @@ export function findCycleEdges(
 
   return Array.from(backEdges.values());
 }
-

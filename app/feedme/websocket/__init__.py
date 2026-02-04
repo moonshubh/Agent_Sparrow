@@ -11,16 +11,16 @@ from .schemas import (
     ApprovalUpdate,
     ConnectionRequest,
     BroadcastMessage,
-    MessageType
+    MessageType,
 )
 
 __all__ = [
-    'FeedMeRealtimeManager',
-    'WebSocketRoom',
-    'ConnectionInfo',
-    'ProcessingUpdate',
-    'ApprovalUpdate',
-    'ConnectionRequest',
-    'BroadcastMessage',
-    'MessageType'
+    "FeedMeRealtimeManager",
+    "WebSocketRoom",
+    "ConnectionInfo",
+    "ProcessingUpdate",
+    "ApprovalUpdate",
+    "ConnectionRequest",
+    "BroadcastMessage",
+    "MessageType",
 ]

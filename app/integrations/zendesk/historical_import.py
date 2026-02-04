@@ -29,9 +29,35 @@ DEFAULT_NATURE_LABEL_MAP: Dict[str, str] = {
 }
 
 DEFAULT_NATURE_KEYWORDS: Dict[str, tuple[str, ...]] = {
-    "sending": ("send", "sending", "receive", "receiving", "smtp", "imap", "inbox", "outbox"),
-    "features": ("how to", "how do i", "how can i", "feature", "does mailbird", "is it possible"),
-    "licensing": ("license", "licence", "subscription", "billing", "payment", "refund", "renew", "trial", "upgrade"),
+    "sending": (
+        "send",
+        "sending",
+        "receive",
+        "receiving",
+        "smtp",
+        "imap",
+        "inbox",
+        "outbox",
+    ),
+    "features": (
+        "how to",
+        "how do i",
+        "how can i",
+        "feature",
+        "does mailbird",
+        "is it possible",
+    ),
+    "licensing": (
+        "license",
+        "licence",
+        "subscription",
+        "billing",
+        "payment",
+        "refund",
+        "renew",
+        "trial",
+        "upgrade",
+    ),
 }
 
 
@@ -98,7 +124,9 @@ class HistoricalImporter:
                 windows_brand_ids=[str(v) for v in windows_ids if str(v).strip()],
                 nature_field_ids=[str(v) for v in nature_field_ids if str(v).strip()],
                 nature_category_map=dict(settings.zendesk_nature_category_map or {}),
-                require_nature_field=bool(getattr(settings, "zendesk_nature_require_field", True)),
+                require_nature_field=bool(
+                    getattr(settings, "zendesk_nature_require_field", True)
+                ),
                 rpm_limit=int(getattr(settings, "zendesk_import_rpm_limit", 10)),
             )
 
@@ -108,14 +136,21 @@ class HistoricalImporter:
         self.enricher = enricher or PlaybookEnricher()
 
     async def run_import(self) -> Dict[str, Any]:
-        start_dt = self.config.start_dt or (datetime.now(timezone.utc) - timedelta(days=max(1, int(self.config.days_back))))
+        start_dt = self.config.start_dt or (
+            datetime.now(timezone.utc)
+            - timedelta(days=max(1, int(self.config.days_back)))
+        )
         end_dt = self.config.end_dt
         start_time = int(start_dt.timestamp())
 
         if not self.config.windows_brand_ids:
-            logger.warning("zendesk_windows_brand_ids not set; no tickets will be imported")
+            logger.warning(
+                "zendesk_windows_brand_ids not set; no tickets will be imported"
+            )
         if not self.config.nature_field_ids:
-            logger.warning("zendesk_nature_field_ids not set; nature filtering will likely skip tickets")
+            logger.warning(
+                "zendesk_nature_field_ids not set; nature filtering will likely skip tickets"
+            )
 
         stats: Dict[str, int] = {
             "fetched": 0,
@@ -156,7 +191,9 @@ class HistoricalImporter:
                 print(f"historical_import_progress={stats}")
                 batch.clear()
                 if self.config.sleep_between_batches:
-                    await asyncio.sleep(max(0.1, float(self.config.sleep_between_batches)))
+                    await asyncio.sleep(
+                        max(0.1, float(self.config.sleep_between_batches))
+                    )
 
         if batch:
             await self._process_batch(batch, stats)
@@ -176,7 +213,9 @@ class HistoricalImporter:
             end_time=end_time,
         )
 
-    async def _process_batch(self, tickets: List[Dict[str, Any]], stats: Dict[str, int]) -> None:
+    async def _process_batch(
+        self, tickets: List[Dict[str, Any]], stats: Dict[str, int]
+    ) -> None:
         for ticket in tickets:
             ticket_id = str(ticket.get("id") or "").strip()
             if not ticket_id:
@@ -195,7 +234,11 @@ class HistoricalImporter:
                 resolution = await self._extract_resolution(ticket)
             except Exception as exc:
                 stats["errors"] += 1
-                logger.warning("historical_extract_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
+                logger.warning(
+                    "historical_extract_failed ticket_id=%s error=%s",
+                    ticket_id,
+                    str(exc)[:180],
+                )
                 continue
 
             if resolution is None:
@@ -211,7 +254,11 @@ class HistoricalImporter:
                     stats["stored"] += 1
             except Exception as exc:
                 stats["errors"] += 1
-                logger.warning("historical_store_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
+                logger.warning(
+                    "historical_store_failed ticket_id=%s error=%s",
+                    ticket_id,
+                    str(exc)[:180],
+                )
 
             try:
                 queued = await self._queue_playbook_extraction(resolution)
@@ -219,9 +266,15 @@ class HistoricalImporter:
                     stats["playbook_queued"] += 1
             except Exception as exc:
                 stats["errors"] += 1
-                logger.warning("historical_playbook_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
+                logger.warning(
+                    "historical_playbook_failed ticket_id=%s error=%s",
+                    ticket_id,
+                    str(exc)[:180],
+                )
 
-    async def _extract_resolution(self, ticket: Dict[str, Any]) -> Optional[ExtractedResolution]:
+    async def _extract_resolution(
+        self, ticket: Dict[str, Any]
+    ) -> Optional[ExtractedResolution]:
         ticket_id = str(ticket.get("id") or "").strip()
         if not ticket_id:
             return None
@@ -289,13 +342,23 @@ class HistoricalImporter:
         brand_id = str(ticket.get("brand_id") or "").strip()
         if not brand_id:
             return False
-        allowed = [str(b).strip() for b in (self.config.windows_brand_ids or []) if str(b).strip()]
+        allowed = [
+            str(b).strip()
+            for b in (self.config.windows_brand_ids or [])
+            if str(b).strip()
+        ]
         if not allowed:
             return False
         return brand_id in allowed
 
-    def _is_within_window(self, ticket: Dict[str, Any], start_dt: datetime, end_dt: Optional[datetime]) -> bool:
-        solved_at = ticket.get("solved_at") or ticket.get("closed_at") or ticket.get("updated_at")
+    def _is_within_window(
+        self, ticket: Dict[str, Any], start_dt: datetime, end_dt: Optional[datetime]
+    ) -> bool:
+        solved_at = (
+            ticket.get("solved_at")
+            or ticket.get("closed_at")
+            or ticket.get("updated_at")
+        )
         if not solved_at:
             return True
         solved_dt = _parse_datetime(str(solved_at))
@@ -335,7 +398,10 @@ class HistoricalImporter:
         if not normalized:
             return None
 
-        custom_map = {str(k).strip().lower(): str(v).strip().lower() for k, v in (self.config.nature_category_map or {}).items()}
+        custom_map = {
+            str(k).strip().lower(): str(v).strip().lower()
+            for k, v in (self.config.nature_category_map or {}).items()
+        }
         if normalized in custom_map:
             return custom_map[normalized]
 
@@ -355,10 +421,14 @@ class HistoricalImporter:
         score = str(satisfaction.get("score") or "").lower()
         return score == "bad"
 
-    def _extract_conversation_messages(self, audits: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], int]:
+    def _extract_conversation_messages(
+        self, audits: List[Dict[str, Any]]
+    ) -> tuple[List[Dict[str, Any]], int]:
         items: List[tuple[datetime, int, int, str, str]] = []
         for idx, audit in enumerate(audits or []):
-            created = _parse_datetime(str(audit.get("created_at") or "")) or datetime.min.replace(tzinfo=timezone.utc)
+            created = _parse_datetime(
+                str(audit.get("created_at") or "")
+            ) or datetime.min.replace(tzinfo=timezone.utc)
             author_id = audit.get("author_id")
             role = "user"
             if author_id is not None:
@@ -435,7 +505,9 @@ class HistoricalImporter:
                     continue
                 event_type = str(event.get("type") or "")
                 if event_type in {"Macro", "MacroReference"}:
-                    macro_id = event.get("macro_id") or event.get("id") or event.get("value")
+                    macro_id = (
+                        event.get("macro_id") or event.get("id") or event.get("value")
+                    )
                     if macro_id:
                         macros.append(str(macro_id))
                     continue
@@ -460,7 +532,11 @@ class HistoricalImporter:
         return sorted(set(macros))
 
     def _extract_kb_links(self, messages: List[Dict[str, Any]]) -> List[str]:
-        domains = [d.strip().lower() for d in (settings.zendesk_firecrawl_support_domains or []) if d]
+        domains = [
+            d.strip().lower()
+            for d in (settings.zendesk_firecrawl_support_domains or [])
+            if d
+        ]
         if not domains:
             domains = ["support.getmailbird.com", "www.getmailbird.com/help"]
         urls: List[str] = []
@@ -515,11 +591,11 @@ def _get_custom_field_value(ticket: Dict[str, Any], field_id: str) -> Any:
     fields = ticket.get("custom_fields") or []
     if not isinstance(fields, list):
         return None
-    for field in fields:
-        if not isinstance(field, dict):
+    for field_item in fields:
+        if not isinstance(field_item, dict):
             continue
-        if str(field.get("id") or "") == str(field_id):
-            return field.get("value")
+        if str(field_item.get("id") or "") == str(field_id):
+            return field_item.get("value")
     return None
 
 
@@ -536,7 +612,9 @@ def _parse_date_arg(value: str, *, is_end: bool) -> datetime:
     except Exception as exc:
         raise SystemExit(f"Invalid date '{value}'. Use YYYY-MM-DD.") from exc
     if is_end:
-        return datetime(dt.year, dt.month, dt.day, 23, 59, 59, 999000, tzinfo=timezone.utc)
+        return datetime(
+            dt.year, dt.month, dt.day, 23, 59, 59, 999000, tzinfo=timezone.utc
+        )
     return datetime(dt.year, dt.month, dt.day, 0, 0, 0, tzinfo=timezone.utc)
 
 
@@ -547,16 +625,47 @@ def _truncate_text(text: str, max_chars: int) -> str:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Import historical Zendesk tickets for context learning.")
-    parser.add_argument("--days", type=int, default=30, help="How many days back to import (default: 30).")
-    parser.add_argument("--start-date", type=str, help="Start date (YYYY-MM-DD, inclusive).")
-    parser.add_argument("--end-date", type=str, help="End date (YYYY-MM-DD, inclusive).")
-    parser.add_argument("--dry-run", action="store_true", help="Run extraction without storing results.")
-    parser.add_argument("--no-dry-run", action="store_true", help="Persist results (overrides ZENDESK_DRY_RUN).")
-    parser.add_argument("--skip-existing", action="store_true", help="Skip tickets already stored.")
-    parser.add_argument("--no-skip-existing", action="store_true", help="Process even if already stored.")
-    parser.add_argument("--require-nature-field", action="store_true", help="Require nature-of-inquiry field match.")
-    parser.add_argument("--allow-heuristic", action="store_true", help="Allow tag/keyword fallback for category.")
+    parser = argparse.ArgumentParser(
+        description="Import historical Zendesk tickets for context learning."
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="How many days back to import (default: 30).",
+    )
+    parser.add_argument(
+        "--start-date", type=str, help="Start date (YYYY-MM-DD, inclusive)."
+    )
+    parser.add_argument(
+        "--end-date", type=str, help="End date (YYYY-MM-DD, inclusive)."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Run extraction without storing results."
+    )
+    parser.add_argument(
+        "--no-dry-run",
+        action="store_true",
+        help="Persist results (overrides ZENDESK_DRY_RUN).",
+    )
+    parser.add_argument(
+        "--skip-existing", action="store_true", help="Skip tickets already stored."
+    )
+    parser.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="Process even if already stored.",
+    )
+    parser.add_argument(
+        "--require-nature-field",
+        action="store_true",
+        help="Require nature-of-inquiry field match.",
+    )
+    parser.add_argument(
+        "--allow-heuristic",
+        action="store_true",
+        help="Allow tag/keyword fallback for category.",
+    )
     return parser.parse_args()
 
 
@@ -577,10 +686,14 @@ def _build_config_from_args(args: argparse.Namespace) -> ImportConfig:
     if getattr(args, "dry_run", False):
         dry_run = True
     skip_existing = bool(args.skip_existing or not args.no_skip_existing)
-    require_field = bool(args.require_nature_field or settings.zendesk_nature_require_field)
+    require_field = bool(
+        args.require_nature_field or settings.zendesk_nature_require_field
+    )
     if args.allow_heuristic:
         require_field = False
-    start_dt = _parse_date_arg(args.start_date, is_end=False) if args.start_date else None
+    start_dt = (
+        _parse_date_arg(args.start_date, is_end=False) if args.start_date else None
+    )
     end_dt = _parse_date_arg(args.end_date, is_end=True) if args.end_date else None
     return ImportConfig(
         days_back=max(1, int(args.days)),

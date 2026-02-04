@@ -81,7 +81,7 @@ router = APIRouter(
         403: {"description": "Forbidden - Admin access required"},
         404: {"description": "Not found"},
         500: {"description": "Internal server error"},
-    }
+    },
 )
 
 # Include the endpoints router

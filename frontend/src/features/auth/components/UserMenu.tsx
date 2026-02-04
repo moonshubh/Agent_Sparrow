@@ -1,8 +1,8 @@
-'use client'
+"use client";
 
-import React from 'react'
-import { User } from '@supabase/supabase-js'
-import { UserAvatar } from '@/shared/ui/UserAvatar'
+import React from "react";
+import { User } from "@supabase/supabase-js";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,54 +11,53 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/shared/ui/dropdown-menu'
-import { Button } from '@/shared/ui/button'
-import {
-  LogOut,
-  Settings,
-  User as UserIcon,
-  Key
-} from 'lucide-react'
-import { cn } from '@/shared/lib/utils'
-import { useRouter, useSearchParams } from 'next/navigation'
+} from "@/shared/ui/dropdown-menu";
+import { Button } from "@/shared/ui/button";
+import { LogOut, Settings, User as UserIcon, Key } from "lucide-react";
+import { cn } from "@/shared/lib/utils";
+import { useRouter, useSearchParams } from "next/navigation";
 
 interface UserMenuProps {
-  user: User
-  onLogout: () => void
-  className?: string
+  user: User;
+  onLogout: () => void;
+  className?: string;
 }
 
-export const UserMenu: React.FC<UserMenuProps> = ({ user, onLogout, className }) => {
-  const router = useRouter()
-  const searchParams = useSearchParams()
+export const UserMenu: React.FC<UserMenuProps> = ({
+  user,
+  onLogout,
+  className,
+}) => {
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
   const getUserName = () => {
     // Check user metadata first
     if (user?.user_metadata?.full_name) {
-      return user.user_metadata.full_name
+      return user.user_metadata.full_name;
     }
 
     if (user?.user_metadata?.name) {
-      return user.user_metadata.name
+      return user.user_metadata.name;
     }
 
     // Extract username from email with validation
     if (user?.email) {
-      const emailUsername = user.email.split('@')[0]
+      const emailUsername = user.email.split("@")[0];
       if (emailUsername && emailUsername.trim().length > 0) {
-        return emailUsername.trim()
+        return emailUsername.trim();
       }
     }
 
     // Final fallback
-    return 'User'
-  }
+    return "User";
+  };
 
   const handleSettingsNavigation = (tab: string) => {
-    const params = new URLSearchParams(searchParams?.toString() || '')
-    params.set('settings', tab)
-    router.push(`?${params.toString()}`)
-  }
+    const params = new URLSearchParams(searchParams?.toString() || "");
+    params.set("settings", tab);
+    router.push(`?${params.toString()}`);
+  };
 
   return (
     <DropdownMenu>
@@ -66,7 +65,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onLogout, className })
         <Button
           variant="ghost"
           size="icon"
-          className={cn('relative h-10 w-10 rounded-full', className)}
+          className={cn("relative h-10 w-10 rounded-full", className)}
         >
           <UserAvatar user={user} size="md" />
         </Button>
@@ -82,15 +81,17 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onLogout, className })
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuItem onClick={() => handleSettingsNavigation('account')}>
+          <DropdownMenuItem onClick={() => handleSettingsNavigation("account")}>
             <UserIcon className="mr-2 h-4 w-4" />
             <span>Profile</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => handleSettingsNavigation('general')}>
+          <DropdownMenuItem onClick={() => handleSettingsNavigation("general")}>
             <Settings className="mr-2 h-4 w-4" />
             <span>Settings</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => handleSettingsNavigation('api-keys')}>
+          <DropdownMenuItem
+            onClick={() => handleSettingsNavigation("api-keys")}
+          >
             <Key className="mr-2 h-4 w-4" />
             <span>API Keys</span>
           </DropdownMenuItem>
@@ -102,5 +103,5 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onLogout, className })
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  )
-}
+  );
+};

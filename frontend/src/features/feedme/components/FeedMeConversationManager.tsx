@@ -1,8 +1,7 @@
-
 /**
  * Updated FeedMe Conversation Manager
  * Main interface for managing conversations with unified text canvas
- * 
+ *
  * Updated Features:
  * - Unified text canvas display (replaces Q&A sections)
  * - PDF OCR and manual text processing
@@ -11,21 +10,30 @@
  * - Enhanced search and filtering
  */
 
-'use client'
+"use client";
 
-import React, { useState, useEffect, useCallback } from 'react'
-import { useDebounce } from 'use-debounce'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/shared/ui/alert-dialog'
-import { Button } from '@/shared/ui/button'
-import { Input } from '@/shared/ui/input'
-import { Badge } from '@/shared/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/shared/ui/card'
-import { ScrollArea } from '@/shared/ui/scroll-area'
-import { 
-  Plus, 
-  Search, 
-  Clock, 
-  User, 
+import React, { useState, useEffect, useCallback } from "react";
+import { useDebounce } from "use-debounce";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Badge } from "@/shared/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
+import { ScrollArea } from "@/shared/ui/scroll-area";
+import {
+  Plus,
+  Search,
+  Clock,
+  User,
   FileText,
   CheckCircle2,
   AlertCircle,
@@ -35,113 +43,162 @@ import {
   Bot,
   Sparkles,
   Eye,
-  X
-} from 'lucide-react'
-import { cn } from '@/shared/lib/utils'
-import { formatDistanceToNow } from 'date-fns'
-import UnifiedTextCanvas from './UnifiedTextCanvas'
-import type { ProcessingStatusValue } from '@/features/feedme/services/feedme-api'
+  X,
+} from "lucide-react";
+import { cn } from "@/shared/lib/utils";
+import { formatDistanceToNow } from "date-fns";
+import UnifiedTextCanvas from "./UnifiedTextCanvas";
+import type { ProcessingStatusValue } from "@/features/feedme/services/feedme-api";
 
 interface ConversationMetadata extends Record<string, unknown> {
-  ticket_id?: string | number | null
+  ticket_id?: string | number | null;
   processing_tracker?: {
-    progress?: number
-    stage?: ProcessingStatusValue
-    message?: string
-  }
+    progress?: number;
+    stage?: ProcessingStatusValue;
+    message?: string;
+  };
 }
 
 // Updated types for unified text workflow
 interface ConversationData {
-  id: number
-  title: string
-  extracted_text?: string
-  raw_transcript?: string
-  processing_method: 'pdf_ai' | 'pdf_ocr' | 'manual_text' | 'text_paste'
-  processing_status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
-  approval_status: 'pending' | 'approved' | 'rejected'
-  extraction_confidence?: number
-  processing_time_ms?: number
-  quality_metrics?: Record<string, number>
-  extraction_method?: string
-  warnings?: string[]
-  approved_by?: string
-  approved_at?: string
-  created_at: string
-  updated_at: string
-  uploaded_by?: string
-  metadata?: ConversationMetadata | null
-  folder_id?: number | null
+  id: number;
+  title: string;
+  extracted_text?: string;
+  raw_transcript?: string;
+  processing_method: "pdf_ai" | "pdf_ocr" | "manual_text" | "text_paste";
+  processing_status:
+    | "pending"
+    | "processing"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  approval_status: "pending" | "approved" | "rejected";
+  extraction_confidence?: number;
+  processing_time_ms?: number;
+  quality_metrics?: Record<string, number>;
+  extraction_method?: string;
+  warnings?: string[];
+  approved_by?: string;
+  approved_at?: string;
+  created_at: string;
+  updated_at: string;
+  uploaded_by?: string;
+  metadata?: ConversationMetadata | null;
+  folder_id?: number | null;
 }
 
 interface ConversationCardProps {
-  conversation: ConversationData
-  onView: (conversation: ConversationData) => void
-  onDelete: (conversation: ConversationData) => void
-  onRefresh: () => void
+  conversation: ConversationData;
+  onView: (conversation: ConversationData) => void;
+  onDelete: (conversation: ConversationData) => void;
+  onRefresh: () => void;
 }
 
 interface ApprovalActionPayload {
-  edited_text?: string
+  edited_text?: string;
 }
 
-function ConversationCard({ conversation, onView, onDelete, onRefresh }: ConversationCardProps) {
+function ConversationCard({
+  conversation,
+  onView,
+  onDelete,
+  onRefresh,
+}: ConversationCardProps) {
   const formatTimestamp = (timestamp: string) => {
     try {
-      return formatDistanceToNow(new Date(timestamp), { addSuffix: true })
+      return formatDistanceToNow(new Date(timestamp), { addSuffix: true });
     } catch {
-      return timestamp
+      return timestamp;
     }
-  }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'completed': return 'text-green-600 bg-green-50 border-green-200'
-      case 'processing': return 'text-blue-600 bg-blue-50 border-blue-200'
-      case 'failed': return 'text-red-600 bg-red-50 border-red-200'
-      case 'cancelled': return 'text-gray-600 bg-gray-100 border-gray-300'
-      default: return 'text-yellow-600 bg-yellow-50 border-yellow-200'
+      case "completed":
+        return "text-green-600 bg-green-50 border-green-200";
+      case "processing":
+        return "text-blue-600 bg-blue-50 border-blue-200";
+      case "failed":
+        return "text-red-600 bg-red-50 border-red-200";
+      case "cancelled":
+        return "text-gray-600 bg-gray-100 border-gray-300";
+      default:
+        return "text-yellow-600 bg-yellow-50 border-yellow-200";
     }
-  }
+  };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'completed': return <CheckCircle2 className="h-3 w-3" />
-      case 'processing': return <Loader2 className="h-3 w-3 animate-spin" />
-      case 'failed': return <AlertCircle className="h-3 w-3" />
-      case 'cancelled': return <AlertCircle className="h-3 w-3" />
-      default: return <Clock className="h-3 w-3" />
+      case "completed":
+        return <CheckCircle2 className="h-3 w-3" />;
+      case "processing":
+        return <Loader2 className="h-3 w-3 animate-spin" />;
+      case "failed":
+        return <AlertCircle className="h-3 w-3" />;
+      case "cancelled":
+        return <AlertCircle className="h-3 w-3" />;
+      default:
+        return <Clock className="h-3 w-3" />;
     }
-  }
+  };
 
   const getProcessingMethodInfo = (method: string) => {
     switch (method) {
-      case 'pdf_ai':
-        return { label: 'AI Vision', icon: <Bot className="h-3 w-3" />, color: 'bg-sky-100 text-sky-700' }
-      case 'pdf_ocr':
-        return { label: 'PDF OCR', icon: <Bot className="h-3 w-3" />, color: 'bg-blue-100 text-blue-700' }
-      case 'manual_text':
-        return { label: 'Manual', icon: <User className="h-3 w-3" />, color: 'bg-green-100 text-green-700' }
-      case 'text_paste':
-        return { label: 'Paste', icon: <FileText className="h-3 w-3" />, color: 'bg-purple-100 text-purple-700' }
+      case "pdf_ai":
+        return {
+          label: "AI Vision",
+          icon: <Bot className="h-3 w-3" />,
+          color: "bg-sky-100 text-sky-700",
+        };
+      case "pdf_ocr":
+        return {
+          label: "PDF OCR",
+          icon: <Bot className="h-3 w-3" />,
+          color: "bg-blue-100 text-blue-700",
+        };
+      case "manual_text":
+        return {
+          label: "Manual",
+          icon: <User className="h-3 w-3" />,
+          color: "bg-green-100 text-green-700",
+        };
+      case "text_paste":
+        return {
+          label: "Paste",
+          icon: <FileText className="h-3 w-3" />,
+          color: "bg-purple-100 text-purple-700",
+        };
       default:
-        return { label: 'Unknown', icon: <FileText className="h-3 w-3" />, color: 'bg-gray-100 text-gray-700' }
+        return {
+          label: "Unknown",
+          icon: <FileText className="h-3 w-3" />,
+          color: "bg-gray-100 text-gray-700",
+        };
     }
-  }
+  };
 
   const getApprovalStatusInfo = (status: string) => {
     switch (status) {
-      case 'approved':
-        return { label: 'Approved', color: 'bg-green-100 text-green-700 border-green-300' }
-      case 'rejected':
-        return { label: 'Rejected', color: 'bg-red-100 text-red-700 border-red-300' }
+      case "approved":
+        return {
+          label: "Approved",
+          color: "bg-green-100 text-green-700 border-green-300",
+        };
+      case "rejected":
+        return {
+          label: "Rejected",
+          color: "bg-red-100 text-red-700 border-red-300",
+        };
       default:
-        return { label: 'Review', color: 'bg-yellow-100 text-yellow-700 border-yellow-300' }
+        return {
+          label: "Review",
+          color: "bg-yellow-100 text-yellow-700 border-yellow-300",
+        };
     }
-  }
+  };
 
-  const methodInfo = getProcessingMethodInfo(conversation.processing_method)
-  const approvalInfo = getApprovalStatusInfo(conversation.approval_status)
+  const methodInfo = getProcessingMethodInfo(conversation.processing_method);
+  const approvalInfo = getApprovalStatusInfo(conversation.approval_status);
 
   return (
     <Card className="hover:shadow-md transition-shadow">
@@ -159,7 +216,9 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
               {conversation.extraction_confidence && (
                 <div className="flex items-center gap-1">
                   <Sparkles className="h-3 w-3" />
-                  <span>{Math.round(conversation.extraction_confidence * 100)}%</span>
+                  <span>
+                    {Math.round(conversation.extraction_confidence * 100)}%
+                  </span>
                 </div>
               )}
               <div className="flex items-center gap-1">
@@ -168,13 +227,18 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
               </div>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-2 ml-2">
-            <Badge 
-              variant="outline" 
-              className={cn("text-xs", getStatusColor(conversation.processing_status))}
+            <Badge
+              variant="outline"
+              className={cn(
+                "text-xs",
+                getStatusColor(conversation.processing_status),
+              )}
             >
-              <span className="mr-1">{getStatusIcon(conversation.processing_status)}</span>
+              <span className="mr-1">
+                {getStatusIcon(conversation.processing_status)}
+              </span>
               {conversation.processing_status}
             </Badge>
           </div>
@@ -184,7 +248,10 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
       <CardContent className="pt-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className={cn("text-xs", approvalInfo.color)}>
+            <Badge
+              variant="outline"
+              className={cn("text-xs", approvalInfo.color)}
+            >
               {approvalInfo.label}
             </Badge>
             {conversation.extracted_text && (
@@ -193,9 +260,9 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
               </span>
             )}
           </div>
-          
+
           <div className="flex items-center gap-2">
-            {conversation.processing_status === 'processing' && (
+            {conversation.processing_status === "processing" && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -206,7 +273,7 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
                 <RefreshCw className="h-4 w-4" />
               </Button>
             )}
-            
+
             <Button
               variant="ghost"
               size="sm"
@@ -216,7 +283,7 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
             >
               <Eye className="h-4 w-4" />
             </Button>
-            
+
             <Button
               variant="ghost"
               size="sm"
@@ -230,157 +297,191 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
         </div>
       </CardContent>
     </Card>
-  )
+  );
 }
 
 export default function FeedMeConversationManager() {
-  const [conversations, setConversations] = useState<ConversationData[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [debouncedSearchQuery] = useDebounce(searchQuery, 300)
-  const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [methodFilter, setMethodFilter] = useState<string>('all')
-  const [selectedConversation, setSelectedConversation] = useState<ConversationData | null>(null)
-  const [conversationToDelete, setConversationToDelete] = useState<ConversationData | null>(null)
-  const [isDeleting, setIsDeleting] = useState(false)
+  const [conversations, setConversations] = useState<ConversationData[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery] = useDebounce(searchQuery, 300);
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [methodFilter, setMethodFilter] = useState<string>("all");
+  const [selectedConversation, setSelectedConversation] =
+    useState<ConversationData | null>(null);
+  const [conversationToDelete, setConversationToDelete] =
+    useState<ConversationData | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Load conversations
   const loadConversations = useCallback(async () => {
-    setIsLoading(true)
+    setIsLoading(true);
     try {
       // TODO: Replace with actual API call
-      const response = await fetch('/api/v1/feedme/conversations')
+      const response = await fetch("/api/v1/feedme/conversations");
       if (response.ok) {
-        const data = await response.json()
-        setConversations(data.conversations || [])
+        const data = await response.json();
+        setConversations(data.conversations || []);
       }
     } catch (error) {
-      console.error('Failed to load conversations:', error)
+      console.error("Failed to load conversations:", error);
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
-  }, [])
+  }, []);
 
   // Load conversations on mount
   useEffect(() => {
-    loadConversations()
-  }, [loadConversations])
+    loadConversations();
+  }, [loadConversations]);
 
   // Filter conversations
-  const filteredConversations = conversations.filter(conv => {
-    const matchesSearch = !debouncedSearchQuery || 
+  const filteredConversations = conversations.filter((conv) => {
+    const matchesSearch =
+      !debouncedSearchQuery ||
       conv.title.toLowerCase().includes(debouncedSearchQuery.toLowerCase()) ||
-      (conv.extracted_text && conv.extracted_text.toLowerCase().includes(debouncedSearchQuery.toLowerCase()))
-    
-    const matchesStatus = statusFilter === 'all' || conv.processing_status === statusFilter
-    const matchesMethod = methodFilter === 'all' || conv.processing_method === methodFilter
-    
-    return matchesSearch && matchesStatus && matchesMethod
-  })
+      (conv.extracted_text &&
+        conv.extracted_text
+          .toLowerCase()
+          .includes(debouncedSearchQuery.toLowerCase()));
+
+    const matchesStatus =
+      statusFilter === "all" || conv.processing_status === statusFilter;
+    const matchesMethod =
+      methodFilter === "all" || conv.processing_method === methodFilter;
+
+    return matchesSearch && matchesStatus && matchesMethod;
+  });
 
   // Handle viewing conversation
   const handleViewConversation = (conversation: ConversationData) => {
-    setSelectedConversation(conversation)
-  }
+    setSelectedConversation(conversation);
+  };
 
   // Handle text update
   const handleTextUpdate = async (text: string) => {
-    if (!selectedConversation) return
+    if (!selectedConversation) return;
 
     try {
-      const response = await fetch(`/api/v1/feedme/conversations/${selectedConversation.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ extracted_text: text })
-      })
+      const response = await fetch(
+        `/api/v1/feedme/conversations/${selectedConversation.id}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ extracted_text: text }),
+        },
+      );
 
       if (response.ok) {
         // Update local state
-        setSelectedConversation({ ...selectedConversation, extracted_text: text })
-        setConversations(convs => 
-          convs.map(c => c.id === selectedConversation.id ? { ...c, extracted_text: text } : c)
-        )
+        setSelectedConversation({
+          ...selectedConversation,
+          extracted_text: text,
+        });
+        setConversations((convs) =>
+          convs.map((c) =>
+            c.id === selectedConversation.id
+              ? { ...c, extracted_text: text }
+              : c,
+          ),
+        );
       } else {
-        throw new Error('Failed to update text')
+        throw new Error("Failed to update text");
       }
     } catch (error) {
-      console.error('Failed to update text:', error)
-      throw error
+      console.error("Failed to update text:", error);
+      throw error;
     }
-  }
+  };
 
   // Handle approval action
-  const handleApprovalAction = async (action: 'approve' | 'reject' | 'edit_and_approve', data?: ApprovalActionPayload) => {
-    if (!selectedConversation) return
+  const handleApprovalAction = async (
+    action: "approve" | "reject" | "edit_and_approve",
+    data?: ApprovalActionPayload,
+  ) => {
+    if (!selectedConversation) return;
 
     try {
-      const response = await fetch(`/api/v1/feedme/approval/conversation/${selectedConversation.id}/decide`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action,
-          reviewer_id: 'current_user', // TODO: Get from auth context
-          notes: `${action} via UI`,
-          ...data
-        })
-      })
+      const response = await fetch(
+        `/api/v1/feedme/approval/conversation/${selectedConversation.id}/decide`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action,
+            reviewer_id: "current_user", // TODO: Get from auth context
+            notes: `${action} via UI`,
+            ...data,
+          }),
+        },
+      );
 
       if (response.ok) {
-        await response.json()
+        await response.json();
         // Update local state
         const updatedConversation: ConversationData = {
           ...selectedConversation,
-          approval_status: action === 'reject' ? 'rejected' : 'approved',
-          approved_by: 'current_user',
+          approval_status: action === "reject" ? "rejected" : "approved",
+          approved_by: "current_user",
           approved_at: new Date().toISOString(),
-          ...(data?.edited_text && { extracted_text: data.edited_text })
-        }
-        setSelectedConversation(updatedConversation)
-        setConversations(convs => 
-          convs.map(c => c.id === selectedConversation.id ? updatedConversation : c)
-        )
+          ...(data?.edited_text && { extracted_text: data.edited_text }),
+        };
+        setSelectedConversation(updatedConversation);
+        setConversations((convs) =>
+          convs.map((c) =>
+            c.id === selectedConversation.id ? updatedConversation : c,
+          ),
+        );
       } else {
-        throw new Error('Failed to process approval action')
+        throw new Error("Failed to process approval action");
       }
     } catch (error) {
-      console.error('Failed to process approval action:', error)
-      throw error
+      console.error("Failed to process approval action:", error);
+      throw error;
     }
-  }
+  };
 
   // Handle delete conversation
   const handleDeleteConversation = async () => {
-    if (!conversationToDelete) return
+    if (!conversationToDelete) return;
 
-    setIsDeleting(true)
+    setIsDeleting(true);
     try {
-      const response = await fetch(`/api/v1/feedme/conversations/${conversationToDelete.id}`, {
-        method: 'DELETE'
-      })
+      const response = await fetch(
+        `/api/v1/feedme/conversations/${conversationToDelete.id}`,
+        {
+          method: "DELETE",
+        },
+      );
 
       if (response.ok) {
-        setConversations(convs => convs.filter(c => c.id !== conversationToDelete.id))
-        setConversationToDelete(null)
-        
+        setConversations((convs) =>
+          convs.filter((c) => c.id !== conversationToDelete.id),
+        );
+        setConversationToDelete(null);
+
         // Close detail view if showing deleted conversation
         if (selectedConversation?.id === conversationToDelete.id) {
-          setSelectedConversation(null)
+          setSelectedConversation(null);
         }
       } else {
-        throw new Error('Failed to delete conversation')
+        throw new Error("Failed to delete conversation");
       }
     } catch (error) {
-      console.error('Failed to delete conversation:', error)
+      console.error("Failed to delete conversation:", error);
     } finally {
-      setIsDeleting(false)
+      setIsDeleting(false);
     }
-  }
+  };
 
   // Get status counts for filter badges
-  const statusCounts = conversations.reduce((acc, conv) => {
-    acc[conv.processing_status] = (acc[conv.processing_status] || 0) + 1
-    return acc
-  }, {} as Record<string, number>)
+  const statusCounts = conversations.reduce(
+    (acc, conv) => {
+      acc[conv.processing_status] = (acc[conv.processing_status] || 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
 
   return (
     <div className="flex h-[calc(100vh-4rem)]">
@@ -411,23 +512,23 @@ export default function FeedMeConversationManager() {
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm font-medium">Status:</span>
               <Button
-                variant={statusFilter === 'all' ? 'default' : 'outline'}
+                variant={statusFilter === "all" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setStatusFilter('all')}
+                onClick={() => setStatusFilter("all")}
               >
                 All ({conversations.length})
               </Button>
               <Button
-                variant={statusFilter === 'pending' ? 'default' : 'outline'}
+                variant={statusFilter === "pending" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setStatusFilter('pending')}
+                onClick={() => setStatusFilter("pending")}
               >
                 Pending ({statusCounts.pending || 0})
               </Button>
               <Button
-                variant={statusFilter === 'completed' ? 'default' : 'outline'}
+                variant={statusFilter === "completed" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setStatusFilter('completed')}
+                onClick={() => setStatusFilter("completed")}
               >
                 Completed ({statusCounts.completed || 0})
               </Button>
@@ -436,30 +537,30 @@ export default function FeedMeConversationManager() {
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm font-medium">Method:</span>
               <Button
-                variant={methodFilter === 'all' ? 'default' : 'outline'}
+                variant={methodFilter === "all" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setMethodFilter('all')}
+                onClick={() => setMethodFilter("all")}
               >
                 All
               </Button>
               <Button
-                variant={methodFilter === 'pdf_ai' ? 'default' : 'outline'}
+                variant={methodFilter === "pdf_ai" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setMethodFilter('pdf_ai')}
+                onClick={() => setMethodFilter("pdf_ai")}
               >
                 AI Vision
               </Button>
               <Button
-                variant={methodFilter === 'pdf_ocr' ? 'default' : 'outline'}
+                variant={methodFilter === "pdf_ocr" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setMethodFilter('pdf_ocr')}
+                onClick={() => setMethodFilter("pdf_ocr")}
               >
                 PDF OCR
               </Button>
               <Button
-                variant={methodFilter === 'manual_text' ? 'default' : 'outline'}
+                variant={methodFilter === "manual_text" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setMethodFilter('manual_text')}
+                onClick={() => setMethodFilter("manual_text")}
               >
                 Manual
               </Button>
@@ -479,7 +580,9 @@ export default function FeedMeConversationManager() {
                 <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
                 <p className="text-sm">No conversations found</p>
                 <p className="text-xs mt-1">
-                  {debouncedSearchQuery ? 'Try adjusting your search' : 'Upload a transcript to get started'}
+                  {debouncedSearchQuery
+                    ? "Try adjusting your search"
+                    : "Upload a transcript to get started"}
                 </p>
               </div>
             ) : (
@@ -513,22 +616,28 @@ export default function FeedMeConversationManager() {
                   <X className="h-4 w-4" />
                 </Button>
               </div>
-              
+
               <ScrollArea className="flex-1">
                 <div className="p-6">
                   <UnifiedTextCanvas
                     conversationId={selectedConversation.id}
                     title={selectedConversation.title}
-                    ticketId={selectedConversation.metadata?.ticket_id != null ? String(selectedConversation.metadata.ticket_id) : null}
+                    ticketId={
+                      selectedConversation.metadata?.ticket_id != null
+                        ? String(selectedConversation.metadata.ticket_id)
+                        : null
+                    }
                     metadata={selectedConversation.metadata ?? null}
-                    extractedText={selectedConversation.extracted_text || ''}
+                    extractedText={selectedConversation.extracted_text || ""}
                     processingMetadata={{
                       processing_method: selectedConversation.processing_method,
-                      extraction_confidence: selectedConversation.extraction_confidence,
-                      processing_time_ms: selectedConversation.processing_time_ms,
+                      extraction_confidence:
+                        selectedConversation.extraction_confidence,
+                      processing_time_ms:
+                        selectedConversation.processing_time_ms,
                       quality_metrics: selectedConversation.quality_metrics,
                       extraction_method: selectedConversation.extraction_method,
-                      warnings: selectedConversation.warnings
+                      warnings: selectedConversation.warnings,
                     }}
                     approvalStatus={selectedConversation.approval_status}
                     approvedBy={selectedConversation.approved_by}
@@ -537,7 +646,9 @@ export default function FeedMeConversationManager() {
                     onTextUpdate={handleTextUpdate}
                     onApprovalAction={handleApprovalAction}
                     readOnly={false}
-                    showApprovalControls={selectedConversation.approval_status === 'pending'}
+                    showApprovalControls={
+                      selectedConversation.approval_status === "pending"
+                    }
                   />
                 </div>
               </ScrollArea>
@@ -548,20 +659,27 @@ export default function FeedMeConversationManager() {
             <div className="text-center">
               <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
               <p className="text-lg font-medium">Select a conversation</p>
-              <p className="text-sm mt-1">Choose a conversation from the list to view and edit its content</p>
+              <p className="text-sm mt-1">
+                Choose a conversation from the list to view and edit its content
+              </p>
             </div>
           </div>
         )}
       </div>
 
       {/* Delete confirmation dialog */}
-      <AlertDialog open={!!conversationToDelete} onOpenChange={() => setConversationToDelete(null)}>
+      <AlertDialog
+        open={!!conversationToDelete}
+        onOpenChange={() => setConversationToDelete(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Conversation</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete &ldquo;{conversationToDelete?.title}&rdquo;?
-              This action cannot be undone and will permanently remove the conversation and its extracted text.
+              Are you sure you want to delete &ldquo;
+              {conversationToDelete?.title}&rdquo;? This action cannot be undone
+              and will permanently remove the conversation and its extracted
+              text.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -577,12 +695,12 @@ export default function FeedMeConversationManager() {
                   Deleting...
                 </>
               ) : (
-                'Delete'
+                "Delete"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  )
+  );
 }

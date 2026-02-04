@@ -7,15 +7,19 @@ import logging
 import os
 import threading
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 import uuid
 
 from app.api_keys.schemas import (
-    APIKeyType, APIKeyOperation, APIKeyRecord, DecryptedAPIKey,
-    APIKeyInfo, APIKeyCreateRequest, APIKeyUpdateRequest,
-    APIKeyListResponse, APIKeyCreateResponse, APIKeyUpdateResponse,
-    APIKeyDeleteResponse, APIKeyValidateResponse, APIKeyTestResponse,
-    APIKeyStatus, APIKeyAuditLog
+    APIKeyType,
+    APIKeyOperation,
+    APIKeyInfo,
+    APIKeyCreateRequest,
+    APIKeyListResponse,
+    APIKeyCreateResponse,
+    APIKeyDeleteResponse,
+    APIKeyValidateResponse,
+    APIKeyStatus,
 )
 from app.core.encryption import encryption_service
 from app.core.settings import settings
@@ -34,43 +38,51 @@ class SupabaseAPIKeyService:
             return True
         except Exception:
             return False
-    
+
     def __init__(self):
         self.supabase = get_supabase_client()
-    
+
     async def create_or_update_api_key(
-        self, 
-        user_id: str, 
+        self,
+        user_id: str,
         request: APIKeyCreateRequest,
         ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None
+        user_agent: Optional[str] = None,
     ) -> APIKeyCreateResponse:
         """Create or update an API key for a user."""
         try:
             # Validate API key format
-            if not encryption_service.is_valid_api_key_format(request.api_key_type, request.api_key):
+            if not encryption_service.is_valid_api_key_format(
+                request.api_key_type, request.api_key
+            ):
                 return APIKeyCreateResponse(
                     success=False,
-                    message=f"Invalid {request.api_key_type} API key format"
+                    message=f"Invalid {request.api_key_type} API key format",
                 )
-            
+
             # Encrypt the API key and compute masked version
             encrypted_key = encryption_service.encrypt_api_key(user_id, request.api_key)
             masked_key = encryption_service.mask_api_key(request.api_key)
-            
+
             # Check if key already exists (check both user_uuid and user_id for compatibility)
-            api_key_type_str = request.api_key_type.value if isinstance(request.api_key_type, APIKeyType) else request.api_key_type
-            
+            api_key_type_str = (
+                request.api_key_type.value
+                if isinstance(request.api_key_type, APIKeyType)
+                else request.api_key_type
+            )
+
             # Avoid invalid UUID errors in PostgREST for non-UUID dev IDs
             query = self.supabase.client.table("user_api_keys").select("*")
             if self._is_valid_uuid(user_id):
                 query = query.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
             else:
                 query = query.eq("user_id", user_id)
-            existing_response = await self.supabase._exec(lambda: query.eq("api_key_type", api_key_type_str).execute())
-            
+            existing_response = await self.supabase._exec(
+                lambda: query.eq("api_key_type", api_key_type_str).execute()
+            )
+
             current_time = datetime.now(timezone.utc).isoformat()
-            
+
             if existing_response.data:
                 # Update existing key
                 update_data = {
@@ -78,16 +90,22 @@ class SupabaseAPIKeyService:
                     "masked_key": masked_key,
                     "key_name": request.key_name,
                     "updated_at": current_time,
-                    "is_active": True
+                    "is_active": True,
                 }
-                
-                update_q = self.supabase.client.table("user_api_keys").update(update_data)
+
+                update_q = self.supabase.client.table("user_api_keys").update(
+                    update_data
+                )
                 if self._is_valid_uuid(user_id):
-                    update_q = update_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
+                    update_q = update_q.or_(
+                        f"user_uuid.eq.{user_id},user_id.eq.{user_id}"
+                    )
                 else:
                     update_q = update_q.eq("user_id", user_id)
-                response = await self.supabase._exec(lambda: update_q.eq("api_key_type", api_key_type_str).execute())
-                
+                response = await self.supabase._exec(
+                    lambda: update_q.eq("api_key_type", api_key_type_str).execute()
+                )
+
                 operation = APIKeyOperation.UPDATE
                 api_key_data = existing_response.data[0]
                 api_key_data.update(update_data)
@@ -102,58 +120,76 @@ class SupabaseAPIKeyService:
                     "key_name": request.key_name,
                     "is_active": True,
                     "created_at": current_time,
-                    "updated_at": current_time
+                    "updated_at": current_time,
                 }
-                
-                response = await self.supabase._exec(lambda: self.supabase.client.table("user_api_keys")
+
+                response = await self.supabase._exec(
+                    lambda: self.supabase.client.table("user_api_keys")
                     .insert(insert_data)
-                    .execute())
-                
+                    .execute()
+                )
+
                 operation = APIKeyOperation.CREATE
                 api_key_data = response.data[0]
-            
+
+            api_key_type_enum = APIKeyType(api_key_type_str)
             # Log the operation
             await self._log_operation(
                 user_id=user_id,
-                api_key_type=api_key_type_str,
+                api_key_type=api_key_type_enum,
                 operation=operation,
                 ip_address=ip_address,
-                user_agent=user_agent
+                user_agent=user_agent,
             )
-            
+
             # Return response with API key info
+            created_at = self._parse_iso_datetime(
+                api_key_data.get("created_at")
+            ) or datetime.now(timezone.utc)
+            updated_at = (
+                self._parse_iso_datetime(api_key_data.get("updated_at")) or created_at
+            )
             api_key_info = APIKeyInfo(
                 id=api_key_data["id"],
-                api_key_type=APIKeyType(api_key_data["api_key_type"]),
+                api_key_type=api_key_type_enum,
                 key_name=api_key_data["key_name"],
                 is_active=api_key_data["is_active"],
-                created_at=self._parse_iso_datetime(api_key_data["created_at"]),
-                updated_at=self._parse_iso_datetime(api_key_data["updated_at"]),
-                last_used_at=self._parse_iso_datetime(api_key_data["last_used_at"]) if api_key_data.get("last_used_at") else None,
-                masked_key=api_key_data.get("masked_key", "****")
+                created_at=created_at,
+                updated_at=updated_at,
+                last_used_at=(
+                    self._parse_iso_datetime(api_key_data["last_used_at"])
+                    if api_key_data.get("last_used_at")
+                    else None
+                ),
+                masked_key=api_key_data.get("masked_key", "****"),
             )
-            
+
             return APIKeyCreateResponse(
                 success=True,
                 message=f"{request.api_key_type} API key {'updated' if operation == APIKeyOperation.UPDATE else 'created'} successfully",
-                api_key_info=api_key_info
+                api_key_info=api_key_info,
             )
-            
+
         except Exception as e:
-            logger.error(f"Error creating/updating API key for user {user_id}: {str(e)}")
-            return APIKeyCreateResponse(
-                success=False,
-                message="An error occurred while saving the API key"
+            logger.error(
+                f"Error creating/updating API key for user {user_id}: {str(e)}"
             )
-    
+            return APIKeyCreateResponse(
+                success=False, message="An error occurred while saving the API key"
+            )
+
     async def get_user_api_keys(self, user_id: str) -> APIKeyListResponse:
         """Get all API keys for a user (masked for security)."""
         try:
-            response = await self.supabase._exec(lambda: self.supabase.client.table("user_api_keys")
-                .select("id, api_key_type, key_name, is_active, created_at, updated_at, last_used_at, encrypted_key, masked_key")
+            response = await self.supabase._exec(
+                lambda: self.supabase.client.table("user_api_keys")
+                .select(
+                    "id, api_key_type, key_name, is_active, created_at, updated_at, last_used_at, encrypted_key, masked_key"
+                )
                 .eq("user_uuid", user_id)
-                .execute())
-            
+                .execute()
+            )
+
             api_key_infos = []
             for key_data in response.data:
                 # Use pre-computed masked key if available, otherwise fallback
@@ -161,36 +197,49 @@ class SupabaseAPIKeyService:
                 if not masked_key:
                     # Fallback: decrypt just to get the masked version (for legacy records)
                     try:
-                        decrypted_key = encryption_service.decrypt_api_key(user_id, key_data["encrypted_key"])
+                        decrypted_key = encryption_service.decrypt_api_key(
+                            user_id, key_data["encrypted_key"]
+                        )
                         masked_key = encryption_service.mask_api_key(decrypted_key)
                     except Exception:
                         masked_key = "****"
-                
-                api_key_infos.append(APIKeyInfo(
-                    id=key_data["id"],
-                    api_key_type=key_data["api_key_type"],
-                    key_name=key_data["key_name"],
-                    is_active=key_data["is_active"],
-                    created_at=self._parse_iso_datetime(key_data["created_at"]),
-                    updated_at=self._parse_iso_datetime(key_data["updated_at"]),
-                    last_used_at=self._parse_iso_datetime(key_data["last_used_at"]) if key_data.get("last_used_at") else None,
-                    masked_key=masked_key
-                ))
-            
+
+                created_at = self._parse_iso_datetime(
+                    key_data.get("created_at")
+                ) or datetime.now(timezone.utc)
+                updated_at = (
+                    self._parse_iso_datetime(key_data.get("updated_at")) or created_at
+                )
+                api_key_infos.append(
+                    APIKeyInfo(
+                        id=key_data["id"],
+                        api_key_type=APIKeyType(key_data["api_key_type"]),
+                        key_name=key_data["key_name"],
+                        is_active=key_data["is_active"],
+                        created_at=created_at,
+                        updated_at=updated_at,
+                        last_used_at=(
+                            self._parse_iso_datetime(key_data["last_used_at"])
+                            if key_data.get("last_used_at")
+                            else None
+                        ),
+                        masked_key=masked_key,
+                    )
+                )
+
             return APIKeyListResponse(
-                api_keys=api_key_infos,
-                total_count=len(api_key_infos)
+                api_keys=api_key_infos, total_count=len(api_key_infos)
             )
-            
+
         except Exception as e:
             logger.error(f"Error retrieving API keys for user {user_id}: {str(e)}")
             return APIKeyListResponse(api_keys=[], total_count=0)
-    
+
     async def get_decrypted_api_key(
-        self, 
-        user_id: str, 
+        self,
+        user_id: str,
         api_key_type: APIKeyType,
-        fallback_env_var: Optional[str] = None
+        fallback_env_var: Optional[str] = None,
     ) -> Optional[str]:
         """
         Get decrypted API key for a user and type.
@@ -198,107 +247,142 @@ class SupabaseAPIKeyService:
         """
         try:
             # Debug only; avoid leaking identifiable data at INFO level
-            logger.debug("Fetching API key for user_id type=%s len=%s api_key_type=%s",
-                         type(user_id).__name__, len(str(user_id)), api_key_type)
-            
+            logger.debug(
+                "Fetching API key for user_id type=%s len=%s api_key_type=%s",
+                type(user_id).__name__,
+                len(str(user_id)),
+                api_key_type,
+            )
+
             # Try to get user-specific key first (check both user_uuid and user_id)
             # Convert enum to string value for database query
-            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
-            
-            select_q = self.supabase.client.table("user_api_keys")\
-                .select("encrypted_key, is_active")
+            api_key_type_enum = (
+                api_key_type
+                if isinstance(api_key_type, APIKeyType)
+                else APIKeyType(api_key_type)
+            )
+            api_key_type_str = api_key_type_enum.value
+
+            select_q = self.supabase.client.table("user_api_keys").select(
+                "encrypted_key, is_active"
+            )
             if self._is_valid_uuid(user_id):
                 select_q = select_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
             else:
                 select_q = select_q.eq("user_id", user_id)
-            response = await self.supabase._exec(lambda: select_q.eq("api_key_type", api_key_type_str).eq("is_active", True).execute())
-            logger.debug("API key rows fetched: %s", len(response.data) if response and response.data is not None else 0)
-            
+            response = await self.supabase._exec(
+                lambda: select_q.eq("api_key_type", api_key_type_str)
+                .eq("is_active", True)
+                .execute()
+            )
+            logger.debug(
+                "API key rows fetched: %s",
+                len(response.data) if response and response.data is not None else 0,
+            )
+
             if response.data:
                 key_data = response.data[0]
                 # Update last used timestamp
                 await self._update_last_used(user_id, api_key_type)
-                
+
                 # Decrypt and return
-                decrypted_key = encryption_service.decrypt_api_key(user_id, key_data["encrypted_key"])
+                decrypted_key = encryption_service.decrypt_api_key(
+                    user_id, key_data["encrypted_key"]
+                )
                 logger.debug("Successfully retrieved user's %s API key", api_key_type)
                 return decrypted_key
-            
+
             # If no user key found, try fallback
-            logger.debug("No user API key found for %s, trying fallback env var present=%s",
-                         api_key_type, bool(fallback_env_var))
+            logger.debug(
+                "No user API key found for %s, trying fallback env var present=%s",
+                api_key_type,
+                bool(fallback_env_var),
+            )
             return self._get_fallback_env_key(user_id, api_key_type, fallback_env_var)
-            
+
         except Exception as e:
-            logger.error(f"Error retrieving API key for user {user_id}, type {api_key_type}: {str(e)}")
-            
+            logger.error(
+                f"Error retrieving API key for user {user_id}, type {api_key_type}: {str(e)}"
+            )
+
             # Try fallback on error too
-            return self._get_fallback_env_key(user_id, api_key_type, fallback_env_var, log_usage=False)
-    
+            return self._get_fallback_env_key(
+                user_id, api_key_type, fallback_env_var, log_usage=False
+            )
+
     async def delete_api_key(
         self,
         user_id: str,
         api_key_type: APIKeyType,
         ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None
+        user_agent: Optional[str] = None,
     ) -> APIKeyDeleteResponse:
         """Delete an API key."""
         try:
-            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
+            api_key_type_str = (
+                api_key_type.value
+                if isinstance(api_key_type, APIKeyType)
+                else api_key_type
+            )
             delete_q = self.supabase.client.table("user_api_keys").delete()
             if self._is_valid_uuid(user_id):
                 delete_q = delete_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
             else:
                 delete_q = delete_q.eq("user_id", user_id)
-            response = await self.supabase._exec(lambda: delete_q.eq("api_key_type", api_key_type_str).execute())
-            
+            response = await self.supabase._exec(
+                lambda: delete_q.eq("api_key_type", api_key_type_str).execute()
+            )
+
             if not response.data:
                 return APIKeyDeleteResponse(
-                    success=False,
-                    message=f"No {api_key_type} API key found"
+                    success=False, message=f"No {api_key_type} API key found"
                 )
-            
+
             # Log the operation
             await self._log_operation(
                 user_id=user_id,
                 api_key_type=api_key_type,
                 operation=APIKeyOperation.DELETE,
                 ip_address=ip_address,
-                user_agent=user_agent
+                user_agent=user_agent,
             )
-            
+
             return APIKeyDeleteResponse(
-                success=True,
-                message=f"{api_key_type} API key deleted successfully"
+                success=True, message=f"{api_key_type} API key deleted successfully"
             )
-            
+
         except Exception as e:
             logger.error(f"Error deleting API key for user {user_id}: {str(e)}")
             return APIKeyDeleteResponse(
-                success=False,
-                message="An error occurred while deleting the API key"
+                success=False, message="An error occurred while deleting the API key"
             )
-    
+
     async def get_api_key_status(self, user_id: str) -> APIKeyStatus:
         """Get status of all API key types for a user."""
         try:
-            response_q = self.supabase.client.table("user_api_keys")\
-                .select("api_key_type, is_active")\
+            response_q = (
+                self.supabase.client.table("user_api_keys")
+                .select("api_key_type, is_active")
                 .eq("is_active", True)
+            )
             if self._is_valid_uuid(user_id):
-                response_q = response_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
+                response_q = response_q.or_(
+                    f"user_uuid.eq.{user_id},user_id.eq.{user_id}"
+                )
             else:
                 response_q = response_q.eq("user_id", user_id)
             response = await self.supabase._exec(lambda: response_q.execute())
-            
+
             # Normalize configured types to simple strings
-            configured_types = {str(item.get("api_key_type")).lower() for item in (response.data or [])}
-            
+            configured_types = {
+                str(item.get("api_key_type")).lower() for item in (response.data or [])
+            }
+
             gemini_configured = "gemini" in configured_types
             openai_configured = "openai" in configured_types
             tavily_configured = "tavily" in configured_types
             firecrawl_configured = "firecrawl" in configured_types
-            
+
             return APIKeyStatus(
                 user_id=user_id,
                 gemini_configured=gemini_configured,
@@ -306,9 +390,9 @@ class SupabaseAPIKeyService:
                 tavily_configured=tavily_configured,
                 firecrawl_configured=firecrawl_configured,
                 all_required_configured=gemini_configured,  # Only Gemini is required
-                last_validation_check=None
+                last_validation_check=None,
             )
-            
+
         except Exception as e:
             logger.error(f"Error getting API key status for user {user_id}: {str(e)}")
             return APIKeyStatus(
@@ -318,38 +402,49 @@ class SupabaseAPIKeyService:
                 tavily_configured=False,
                 firecrawl_configured=False,
                 all_required_configured=False,
-                last_validation_check=None
+                last_validation_check=None,
             )
-    
+
     def validate_api_key_format(
-        self, 
-        api_key_type: APIKeyType, 
-        api_key: str
+        self, api_key_type: APIKeyType, api_key: str
     ) -> APIKeyValidateResponse:
         """Validate API key format."""
         is_valid = encryption_service.is_valid_api_key_format(api_key_type, api_key)
-        
+
         return APIKeyValidateResponse(
             is_valid=is_valid,
-            message="API key format is valid" if is_valid else f"Invalid {api_key_type} API key format"
+            message=(
+                "API key format is valid"
+                if is_valid
+                else f"Invalid {api_key_type} API key format"
+            ),
         )
-    
+
     # Private helper methods
-    
+
     async def _update_last_used(self, user_id: str, api_key_type: APIKeyType):
         """Update last used timestamp for an API key."""
         try:
-            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
-            last_used_q = self.supabase.client.table("user_api_keys")\
-                .update({"last_used_at": datetime.now(timezone.utc).isoformat()})
+            api_key_type_str = (
+                api_key_type.value
+                if isinstance(api_key_type, APIKeyType)
+                else api_key_type
+            )
+            last_used_q = self.supabase.client.table("user_api_keys").update(
+                {"last_used_at": datetime.now(timezone.utc).isoformat()}
+            )
             if self._is_valid_uuid(user_id):
-                last_used_q = last_used_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
+                last_used_q = last_used_q.or_(
+                    f"user_uuid.eq.{user_id},user_id.eq.{user_id}"
+                )
             else:
                 last_used_q = last_used_q.eq("user_id", user_id)
-            await self.supabase._exec(lambda: last_used_q.eq("api_key_type", api_key_type_str).execute())
+            await self.supabase._exec(
+                lambda: last_used_q.eq("api_key_type", api_key_type_str).execute()
+            )
         except Exception as e:
             logger.debug(f"Failed to update last_used timestamp: {e}")
-    
+
     async def _log_operation(
         self,
         user_id: str,
@@ -357,92 +452,103 @@ class SupabaseAPIKeyService:
         operation: APIKeyOperation,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
-        additional_details: Optional[Dict[str, Any]] = None
+        additional_details: Optional[Dict[str, Any]] = None,
     ):
         """Log API key operation for audit trail."""
         try:
             # Convert enums to strings for database storage
-            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
-            operation_str = operation.value if isinstance(operation, APIKeyOperation) else operation
-            
+            api_key_type_str = (
+                api_key_type.value
+                if isinstance(api_key_type, APIKeyType)
+                else api_key_type
+            )
+            operation_str = (
+                operation.value if isinstance(operation, APIKeyOperation) else operation
+            )
+
             operation_details = {
                 "api_key_type": api_key_type_str,
                 "operation": operation_str,
             }
             if additional_details:
                 operation_details.update(additional_details)
-            
+
             # Dev guard: skip audit log if auth is skipped or user_id is not a UUID
-            if getattr(settings, "skip_auth", False) or not self._is_valid_uuid(user_id):
+            if getattr(settings, "skip_auth", False) or not self._is_valid_uuid(
+                user_id
+            ):
                 # In development or when user_id is not a UUID, avoid Supabase 400 errors
                 # by skipping external audit log insert.
                 return
 
-            await self.supabase._exec(lambda: self.supabase.client.table("api_key_audit_log").insert({
-                "user_uuid": user_id,
-                "user_id": user_id,  # Also set user_id for backward compatibility
-                "api_key_type": api_key_type_str,
-                "operation": operation_str,
-                "operation_details": operation_details,
-                "ip_address": ip_address,
-                "user_agent": user_agent,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }).execute())
-            
+            await self.supabase._exec(
+                lambda: self.supabase.client.table("api_key_audit_log")
+                .insert(
+                    {
+                        "user_uuid": user_id,
+                        "user_id": user_id,  # Also set user_id for backward compatibility
+                        "api_key_type": api_key_type_str,
+                        "operation": operation_str,
+                        "operation_details": operation_details,
+                        "ip_address": ip_address,
+                        "user_agent": user_agent,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                .execute()
+            )
+
         except Exception as e:
             logger.error(f"Failed to log API key operation: {e}")
-    
+
     async def _log_fallback_usage(
-        self,
-        user_id: str,
-        api_key_type: APIKeyType,
-        fallback_env_var: str
+        self, user_id: str, api_key_type: APIKeyType, fallback_env_var: str
     ):
         """Log when fallback environment variable is used."""
         try:
-            # Convert enum to string if needed
-            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
-            
+            api_key_type_enum = (
+                api_key_type
+                if isinstance(api_key_type, APIKeyType)
+                else APIKeyType(api_key_type)
+            )
+
             await self._log_operation(
                 user_id=user_id,
-                api_key_type=api_key_type_str,
+                api_key_type=api_key_type_enum,
                 operation=APIKeyOperation.USE,
-                additional_details={
-                    "fallback": True,
-                    "env_var": fallback_env_var
-                }
+                additional_details={"fallback": True, "env_var": fallback_env_var},
             )
         except Exception as e:
             logger.debug(f"Failed to log fallback usage: {e}")
-    
+
     def _parse_iso_datetime(self, iso_string: Optional[str]) -> Optional[datetime]:
         """Parse ISO datetime string with fallback for 'Z' suffix."""
         if not iso_string:
             return None
-            
+
         try:
             # Try direct parsing first (works in Python 3.11+)
             return datetime.fromisoformat(iso_string)
         except ValueError:
             # Fallback for older Python versions or non-standard formats
             try:
-                return datetime.fromisoformat(iso_string.replace('Z', '+00:00'))
+                return datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
             except ValueError:
                 logger.warning(f"Failed to parse datetime string: {iso_string}")
                 return None
-    
+
     def _get_fallback_env_key(
-        self, 
-        user_id: str, 
-        api_key_type: APIKeyType, 
+        self,
+        user_id: str,
+        api_key_type: APIKeyType,
         fallback_env_var: Optional[str],
-        log_usage: bool = True
+        log_usage: bool = True,
     ) -> Optional[str]:
         """Get fallback environment variable API key with optional usage logging."""
         if not fallback_env_var:
             logger.debug("No fallback env var specified for %s", api_key_type)
             return None
-            
+
         fallback_key = os.getenv(fallback_env_var)
         if fallback_key:
             logger.debug("Using fallback %s for %s", fallback_env_var, api_key_type)
@@ -452,14 +558,19 @@ class SupabaseAPIKeyService:
             # Log fallback usage for monitoring (fire and forget)
             try:
                 import asyncio
+
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # Schedule the coroutine to run
-                    asyncio.create_task(self._log_fallback_usage(user_id, api_key_type, fallback_env_var))
+                    asyncio.create_task(
+                        self._log_fallback_usage(
+                            user_id, api_key_type, fallback_env_var
+                        )
+                    )
             except Exception:
                 # Logging failure shouldn't break the functionality
                 pass
-                
+
         return fallback_key
 
 

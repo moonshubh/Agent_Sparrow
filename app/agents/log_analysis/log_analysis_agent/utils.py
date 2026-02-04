@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional, TypeVar
+from typing import Any, Dict, List, Optional, TypeVar, cast
 
 from app.core.logging_config import get_logger
 
@@ -37,9 +37,9 @@ def extract_json_payload(
 
     # Handle already-parsed content (e.g. some chat model content blocks).
     if expected_type and isinstance(text, expected_type):
-        return text
+        return cast(Optional[T], text)
     if expected_type is None and isinstance(text, (dict, list)):
-        return text  # type: ignore[return-value]
+        return cast(Optional[T], text)
 
     def _strip_code_fences(raw: str) -> str:
         stripped = (raw or "").strip()
@@ -48,7 +48,9 @@ def extract_json_payload(
             stripped = re.sub(r"\s*```\s*$", "", stripped)
         return stripped.strip()
 
-    def _extract_balanced(block: str, start_idx: int, opener: str, closer: str) -> Optional[str]:
+    def _extract_balanced(
+        block: str, start_idx: int, opener: str, closer: str
+    ) -> Optional[str]:
         depth = 0
         in_string = False
         escape = False

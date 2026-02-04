@@ -1,60 +1,89 @@
-'use client';
+"use client";
 
-import React, { useMemo, useState, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, ChevronUp, ThumbsUp, ThumbsDown, Eye, Trash2, Pencil } from 'lucide-react';
-import { MemoryTipTapEditor } from './MemoryTipTapEditor';
-import { normalizeLegacyMemoryContent } from '../lib/legacyMemoryFormatting';
-import { useMemories, useMemory, useMemorySearch, useSubmitFeedback, useDeleteMemory } from '../hooks';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shared/ui/tooltip';
-import { ConfidenceBadge } from './ConfidenceBadge';
-import { SourceBadge } from './SourceBadge';
-import { MemoryForm } from './MemoryForm';
-import { getMemoryEditorDisplayName, isMemoryEdited } from '../lib/memoryFlags';
-import type { Memory, MemoryFilters, FeedbackType } from '../types';
+import React, { useMemo, useState, useCallback, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  ChevronDown,
+  ChevronUp,
+  ThumbsUp,
+  ThumbsDown,
+  Eye,
+  Trash2,
+  Pencil,
+} from "lucide-react";
+import { MemoryTipTapEditor } from "./MemoryTipTapEditor";
+import { normalizeLegacyMemoryContent } from "../lib/legacyMemoryFormatting";
+import {
+  useMemories,
+  useMemory,
+  useMemorySearch,
+  useSubmitFeedback,
+  useDeleteMemory,
+} from "../hooks";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/shared/ui/tooltip";
+import { ConfidenceBadge } from "./ConfidenceBadge";
+import { SourceBadge } from "./SourceBadge";
+import { MemoryForm } from "./MemoryForm";
+import { getMemoryEditorDisplayName, isMemoryEdited } from "../lib/memoryFlags";
+import type { Memory, MemoryFilters, FeedbackType } from "../types";
 
 interface MemoryTableProps {
   searchQuery?: string;
   filters?: MemoryFilters;
-  onSortChange?: (sortBy: MemoryFilters['sortBy'], sortOrder: MemoryFilters['sortOrder']) => void;
+  onSortChange?: (
+    sortBy: MemoryFilters["sortBy"],
+    sortOrder: MemoryFilters["sortOrder"],
+  ) => void;
   focusMemoryId?: string | null;
   onClearFocus?: () => void;
   isAdmin?: boolean;
 }
 
-function toMemorySortField(sortBy: MemoryFilters['sortBy']): keyof Memory {
+function toMemorySortField(sortBy: MemoryFilters["sortBy"]): keyof Memory {
   switch (sortBy) {
-    case 'confidence':
-      return 'confidence_score';
-    case 'retrieval_count':
-      return 'retrieval_count';
+    case "confidence":
+      return "confidence_score";
+    case "retrieval_count":
+      return "retrieval_count";
     default:
-      return 'created_at';
+      return "created_at";
   }
 }
 
-function toFiltersSortBy(field: keyof Memory): MemoryFilters['sortBy'] | null {
+function toFiltersSortBy(field: keyof Memory): MemoryFilters["sortBy"] | null {
   switch (field) {
-    case 'confidence_score':
-      return 'confidence';
-    case 'retrieval_count':
-      return 'retrieval_count';
-    case 'created_at':
-      return 'created_at';
+    case "confidence_score":
+      return "confidence";
+    case "retrieval_count":
+      return "retrieval_count";
+    case "created_at":
+      return "created_at";
     default:
       return null;
   }
 }
 
-type PaginationItem = number | 'ellipsis';
+type PaginationItem = number | "ellipsis";
 const EMPTY_MEMORIES: Memory[] = [];
 
-function buildPaginationItems(totalPages: number, currentPage: number): PaginationItem[] {
+function buildPaginationItems(
+  totalPages: number,
+  currentPage: number,
+): PaginationItem[] {
   const pages = new Set<number>();
   const current = currentPage + 1;
   const lastPage = Math.max(1, totalPages);
 
-  for (let pageNumber = 1; pageNumber <= Math.min(3, lastPage); pageNumber += 1) {
+  for (
+    let pageNumber = 1;
+    pageNumber <= Math.min(3, lastPage);
+    pageNumber += 1
+  ) {
     pages.add(pageNumber);
   }
 
@@ -71,7 +100,7 @@ function buildPaginationItems(totalPages: number, currentPage: number): Paginati
 
   sorted.forEach((pageNumber) => {
     if (previous && pageNumber - previous > 1) {
-      items.push('ellipsis');
+      items.push("ellipsis");
     }
     items.push(pageNumber);
     previous = pageNumber;
@@ -88,8 +117,9 @@ export default function MemoryTable({
   onClearFocus,
   isAdmin = false,
 }: MemoryTableProps) {
-  const [localSortField, setLocalSortField] = useState<keyof Memory>('created_at');
-  const [localSortOrder, setLocalSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [localSortField, setLocalSortField] =
+    useState<keyof Memory>("created_at");
+  const [localSortOrder, setLocalSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
   const [listPage, setListPage] = useState(0);
@@ -97,52 +127,69 @@ export default function MemoryTable({
 
   const isControlledSort = Boolean(filters && onSortChange);
   const sortField = isControlledSort
-    ? toMemorySortField(filters?.sortBy ?? 'created_at')
+    ? toMemorySortField(filters?.sortBy ?? "created_at")
     : localSortField;
-  const sortOrder = isControlledSort ? (filters?.sortOrder ?? 'desc') : localSortOrder;
+  const sortOrder = isControlledSort
+    ? (filters?.sortOrder ?? "desc")
+    : localSortOrder;
 
   // Use search when query exists, otherwise list
-  const { data: searchResults, isLoading: searchLoading, error: searchError } = useMemorySearch(
-    searchQuery || '',
-    { enabled: Boolean(searchQuery && searchQuery.length >= 2) }
-  );
+  const {
+    data: searchResults,
+    isLoading: searchLoading,
+    error: searchError,
+  } = useMemorySearch(searchQuery || "", {
+    enabled: Boolean(searchQuery && searchQuery.length >= 2),
+  });
 
   const isUsingSearch = Boolean(searchQuery && searchQuery.length >= 2);
 
-  const { data: listResults, isLoading: listLoading, error: listError } = useMemories(
+  const {
+    data: listResults,
+    isLoading: listLoading,
+    error: listError,
+  } = useMemories(
     {
       limit: pageSize,
       offset: listPage * pageSize,
       source_type: filters?.sourceType || undefined,
-      sort_order: sortField === 'created_at' ? sortOrder : 'desc',
+      sort_order: sortField === "created_at" ? sortOrder : "desc",
     },
     {
       enabled: !isUsingSearch,
-      onSuccess: (data) => {
-        const nextTotalPages = Math.max(1, Math.ceil(data.total / pageSize));
-        setListPage((current) => Math.min(current, nextTotalPages - 1));
-      },
-    }
+    },
   );
 
+  useEffect(() => {
+    if (!listResults) return;
+    const nextTotalPages = Math.max(1, Math.ceil(listResults.total / pageSize));
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setListPage((current) => Math.min(current, nextTotalPages - 1));
+  }, [listResults, pageSize]);
+
   // Use search when query is at least 2 characters, otherwise use list
-  const page = isUsingSearch ? 0 : listPage;
-  const listMemories = listResults?.items ?? EMPTY_MEMORIES;
   const searchMemories = searchResults ?? EMPTY_MEMORIES;
+  const listMemories = listResults?.items ?? EMPTY_MEMORIES;
+  const listTotal = listResults?.total ?? listMemories.length;
+  const totalCount = isUsingSearch ? searchMemories.length : listTotal;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const page = isUsingSearch ? 0 : Math.min(listPage, totalPages - 1);
   const memories = useMemo(
     () => (isUsingSearch ? searchMemories : listMemories),
-    [isUsingSearch, listMemories, searchMemories]
+    [isUsingSearch, listMemories, searchMemories],
   );
   const isLoading = isUsingSearch ? searchLoading : listLoading;
   const loadError = isUsingSearch ? searchError : listError;
   const pageOffset = isUsingSearch ? 0 : page * pageSize;
 
-  const focusedMemoryQuery = useMemory(focusMemoryId ?? '', {
+  const focusedMemoryQuery = useMemory(focusMemoryId ?? "", {
     enabled: Boolean(focusMemoryId),
   });
 
   const effectiveSelectedMemory =
-    focusMemoryId && focusedMemoryQuery.data ? focusedMemoryQuery.data : selectedMemory;
+    focusMemoryId && focusedMemoryQuery.data
+      ? focusedMemoryQuery.data
+      : selectedMemory;
   const canEdit = Boolean(isAdmin);
 
   // Mutations
@@ -168,21 +215,22 @@ export default function MemoryTable({
       }
       const aVal = a[sortField];
       const bVal = b[sortField];
-      if (aVal == null) return sortOrder === 'asc' ? 1 : -1;
-      if (bVal == null) return sortOrder === 'asc' ? -1 : 1;
-      if (typeof aVal === 'string' && typeof bVal === 'string') {
-        return sortOrder === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+      if (aVal == null) return sortOrder === "asc" ? 1 : -1;
+      if (bVal == null) return sortOrder === "asc" ? -1 : 1;
+      if (typeof aVal === "string" && typeof bVal === "string") {
+        return sortOrder === "asc"
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
       }
-      return sortOrder === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+      return sortOrder === "asc"
+        ? (aVal as number) - (bVal as number)
+        : (bVal as number) - (aVal as number);
     });
   }, [focusMemoryId, memoriesWithFocus, sortField, sortOrder]);
 
-  const listTotal = listResults?.total ?? listMemories.length;
-  const totalCount = isUsingSearch ? searchMemories.length : listTotal;
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const paginationItems = useMemo(
     () => buildPaginationItems(totalPages, page),
-    [page, totalPages]
+    [page, totalPages],
   );
 
   // Toggle sort
@@ -193,19 +241,27 @@ export default function MemoryTable({
       if (isControlledSort && filters && onSortChange) {
         const sortBy = toFiltersSortBy(field);
         if (!sortBy) return;
-        const nextOrder = sortField === field ? (sortOrder === 'asc' ? 'desc' : 'asc') : 'desc';
+        const nextOrder =
+          sortField === field ? (sortOrder === "asc" ? "desc" : "asc") : "desc";
         onSortChange(sortBy, nextOrder);
         return;
       }
 
       if (localSortField === field) {
-        setLocalSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+        setLocalSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
       } else {
         setLocalSortField(field);
-        setLocalSortOrder('desc');
+        setLocalSortOrder("desc");
       }
     },
-    [filters, isControlledSort, localSortField, onSortChange, sortField, sortOrder]
+    [
+      filters,
+      isControlledSort,
+      localSortField,
+      onSortChange,
+      sortField,
+      sortOrder,
+    ],
   );
 
   // Feedback handler
@@ -216,34 +272,38 @@ export default function MemoryTable({
         request: { feedback_type: type },
       });
     },
-    [submitFeedback]
+    [submitFeedback],
   );
 
   // Delete handler
   const handleDelete = useCallback(
     async (memoryId: string) => {
-      if (confirm('Are you sure you want to delete this memory?')) {
+      if (confirm("Are you sure you want to delete this memory?")) {
         await deleteMemory.mutateAsync(memoryId);
       }
     },
-    [deleteMemory]
+    [deleteMemory],
   );
 
   // Format date
   const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+    return new Date(dateStr).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
   // Sort icon
   const renderSortIcon = (field: keyof Memory) => {
     if (sortField !== field) return null;
-    return sortOrder === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />;
+    return sortOrder === "asc" ? (
+      <ChevronUp size={14} />
+    ) : (
+      <ChevronDown size={14} />
+    );
   };
 
   if (isLoading) {
@@ -256,7 +316,8 @@ export default function MemoryTable({
   }
 
   if (loadError) {
-    const message = loadError instanceof Error ? loadError.message : 'Unknown error';
+    const message =
+      loadError instanceof Error ? loadError.message : "Unknown error";
     return (
       <div className="memory-error">
         <p>Error loading memories</p>
@@ -269,7 +330,9 @@ export default function MemoryTable({
     return (
       <div className="memory-empty">
         <p>No memories found</p>
-        {searchQuery && <p className="memory-empty-hint">Try a different search term</p>}
+        {searchQuery && (
+          <p className="memory-empty-hint">Try a different search term</p>
+        )}
       </div>
     );
   }
@@ -282,19 +345,26 @@ export default function MemoryTable({
             <tr>
               <th className="memory-th-index">#</th>
               <th className="memory-th-content">Content</th>
-              <th className="memory-th-confidence" onClick={() => handleSort('confidence_score')}>
-                Confidence {renderSortIcon('confidence_score')}
+              <th
+                className="memory-th-confidence"
+                onClick={() => handleSort("confidence_score")}
+              >
+                Confidence {renderSortIcon("confidence_score")}
               </th>
               <th className="memory-th-source">Source</th>
-              <th className="memory-th-retrievals" onClick={() => handleSort('retrieval_count')}>
-                <span
-                  title="Times this memory has been retrieved by the agent. This counter increments when the Unified Agent retrieves memories via the Memory UI store (ENABLE_MEMORY_UI_RETRIEVAL)."
-                >
-                  Retrievals {renderSortIcon('retrieval_count')}
+              <th
+                className="memory-th-retrievals"
+                onClick={() => handleSort("retrieval_count")}
+              >
+                <span title="Times this memory has been retrieved by the agent. This counter increments when the Unified Agent retrieves memories via the Memory UI store (ENABLE_MEMORY_UI_RETRIEVAL).">
+                  Retrievals {renderSortIcon("retrieval_count")}
                 </span>
               </th>
-              <th className="memory-th-date" onClick={() => handleSort('created_at')}>
-                Created {renderSortIcon('created_at')}
+              <th
+                className="memory-th-date"
+                onClick={() => handleSort("created_at")}
+              >
+                Created {renderSortIcon("created_at")}
               </th>
               <th className="memory-th-actions">Actions</th>
             </tr>
@@ -304,7 +374,9 @@ export default function MemoryTable({
               {sortedMemories.map((memory, index) => {
                 const isEdited = isMemoryEdited(memory);
                 const editedBy = getMemoryEditorDisplayName(memory);
-                const editedLabel = editedBy ? `Edited by ${editedBy}` : 'Edited by admin';
+                const editedLabel = editedBy
+                  ? `Edited by ${editedBy}`
+                  : "Edited by admin";
 
                 return (
                   <motion.tr
@@ -313,10 +385,12 @@ export default function MemoryTable({
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, x: -20 }}
                     transition={{ delay: index * 0.03 }}
-                    className={`memory-row ${isEdited ? 'is-edited' : ''} ${focusMemoryId === memory.id ? 'is-focused' : ''}`}
+                    className={`memory-row ${isEdited ? "is-edited" : ""} ${focusMemoryId === memory.id ? "is-focused" : ""}`}
                   >
                     <td className="memory-td-index">
-                      <span className="memory-index-number">{pageOffset + index + 1}</span>
+                      <span className="memory-index-number">
+                        {pageOffset + index + 1}
+                      </span>
                     </td>
                     <td className="memory-td-content">
                       {isEdited ? (
@@ -324,12 +398,19 @@ export default function MemoryTable({
                           <TooltipTrigger asChild>
                             <div className="memory-content-tooltip-target">
                               <div className="memory-content-header">
-                                <span className="memory-edited-badge">Edited</span>
+                                <span className="memory-edited-badge">
+                                  Edited
+                                </span>
                               </div>
-                              <p className="memory-content-text">{memory.content}</p>
+                              <p className="memory-content-text">
+                                {memory.content}
+                              </p>
                             </div>
                           </TooltipTrigger>
-                          <TooltipContent className="memory-tooltip-content" side="top">
+                          <TooltipContent
+                            className="memory-tooltip-content"
+                            side="top"
+                          >
                             {editedLabel}
                           </TooltipContent>
                         </Tooltip>
@@ -344,10 +425,14 @@ export default function MemoryTable({
                       <SourceBadge sourceType={memory.source_type} />
                     </td>
                     <td className="memory-td-retrievals">
-                      <span className="memory-retrieval-count">{memory.retrieval_count}</span>
+                      <span className="memory-retrieval-count">
+                        {memory.retrieval_count}
+                      </span>
                     </td>
                     <td className="memory-td-date">
-                      <span className="memory-date">{formatDate(memory.created_at)}</span>
+                      <span className="memory-date">
+                        {formatDate(memory.created_at)}
+                      </span>
                     </td>
                     <td className="memory-td-actions">
                       <div className="memory-actions">
@@ -355,15 +440,21 @@ export default function MemoryTable({
                           <TooltipTrigger asChild>
                             <button
                               className="memory-action-icon memory-action-success"
-                              onClick={() => handleFeedback(memory.id, 'thumbs_up')}
+                              onClick={() =>
+                                handleFeedback(memory.id, "thumbs_up")
+                              }
                               aria-label="Mark as helpful"
                               disabled={submitFeedback.isPending}
                             >
                               <ThumbsUp size={14} />
                             </button>
                           </TooltipTrigger>
-                          <TooltipContent className="memory-tooltip-content" side="top">
-                            👍 {memory.feedback_positive} · 👎 {memory.feedback_negative}
+                          <TooltipContent
+                            className="memory-tooltip-content"
+                            side="top"
+                          >
+                            👍 {memory.feedback_positive} · 👎{" "}
+                            {memory.feedback_negative}
                           </TooltipContent>
                         </Tooltip>
 
@@ -371,15 +462,21 @@ export default function MemoryTable({
                           <TooltipTrigger asChild>
                             <button
                               className="memory-action-icon memory-action-danger"
-                              onClick={() => handleFeedback(memory.id, 'thumbs_down')}
+                              onClick={() =>
+                                handleFeedback(memory.id, "thumbs_down")
+                              }
                               aria-label="Mark as not helpful"
                               disabled={submitFeedback.isPending}
                             >
                               <ThumbsDown size={14} />
                             </button>
                           </TooltipTrigger>
-                          <TooltipContent className="memory-tooltip-content" side="top">
-                            👍 {memory.feedback_positive} · 👎 {memory.feedback_negative}
+                          <TooltipContent
+                            className="memory-tooltip-content"
+                            side="top"
+                          >
+                            👍 {memory.feedback_positive} · 👎{" "}
+                            {memory.feedback_negative}
                           </TooltipContent>
                         </Tooltip>
 
@@ -426,9 +523,12 @@ export default function MemoryTable({
           </button>
           <div className="memory-pagination-pages">
             {paginationItems.map((item, idx) => {
-              if (item === 'ellipsis') {
+              if (item === "ellipsis") {
                 return (
-                  <span key={`ellipsis-${idx}`} className="memory-pagination-ellipsis">
+                  <span
+                    key={`ellipsis-${idx}`}
+                    className="memory-pagination-ellipsis"
+                  >
                     ...
                   </span>
                 );
@@ -439,8 +539,8 @@ export default function MemoryTable({
                 <button
                   key={`page-${item}`}
                   onClick={() => setListPage(item - 1)}
-                  className={`memory-pagination-page ${isActive ? 'is-active' : ''}`}
-                  aria-current={isActive ? 'page' : undefined}
+                  className={`memory-pagination-page ${isActive ? "is-active" : ""}`}
+                  aria-current={isActive ? "page" : undefined}
                 >
                   {item}
                 </button>
@@ -470,7 +570,10 @@ export default function MemoryTable({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => {
-              if (focusMemoryId && effectiveSelectedMemory.id === focusMemoryId) {
+              if (
+                focusMemoryId &&
+                effectiveSelectedMemory.id === focusMemoryId
+              ) {
                 onClearFocus?.();
               }
               setSelectedMemory(null);
@@ -490,7 +593,10 @@ export default function MemoryTable({
                     <button
                       className="memory-action-icon"
                       onClick={() => {
-                        if (focusMemoryId && effectiveSelectedMemory.id === focusMemoryId) {
+                        if (
+                          focusMemoryId &&
+                          effectiveSelectedMemory.id === focusMemoryId
+                        ) {
                           onClearFocus?.();
                         }
                         setEditingMemory(effectiveSelectedMemory);
@@ -503,7 +609,10 @@ export default function MemoryTable({
                   )}
                   <button
                     onClick={() => {
-                      if (focusMemoryId && effectiveSelectedMemory.id === focusMemoryId) {
+                      if (
+                        focusMemoryId &&
+                        effectiveSelectedMemory.id === focusMemoryId
+                      ) {
                         onClearFocus?.();
                       }
                       setSelectedMemory(null);
@@ -518,7 +627,9 @@ export default function MemoryTable({
                   <label>Content</label>
                   <div className="memory-detail-markdown">
                     <MemoryTipTapEditor
-                      content={normalizeLegacyMemoryContent(effectiveSelectedMemory.content)}
+                      content={normalizeLegacyMemoryContent(
+                        effectiveSelectedMemory.content,
+                      )}
                       readOnly
                       className="memory-detail-tiptap"
                     />
@@ -527,11 +638,15 @@ export default function MemoryTable({
                 <div className="memory-detail-grid">
                   <div className="memory-detail-item">
                     <label>Confidence</label>
-                    <ConfidenceBadge score={effectiveSelectedMemory.confidence_score} />
+                    <ConfidenceBadge
+                      score={effectiveSelectedMemory.confidence_score}
+                    />
                   </div>
                   <div className="memory-detail-item">
                     <label>Source</label>
-                    <SourceBadge sourceType={effectiveSelectedMemory.source_type} />
+                    <SourceBadge
+                      sourceType={effectiveSelectedMemory.source_type}
+                    />
                   </div>
                   <div className="memory-detail-item">
                     <label>Retrievals</label>
@@ -539,18 +654,24 @@ export default function MemoryTable({
                   </div>
                   <div className="memory-detail-item">
                     <label>Created</label>
-                    <span>{formatDate(effectiveSelectedMemory.created_at)}</span>
+                    <span>
+                      {formatDate(effectiveSelectedMemory.created_at)}
+                    </span>
                   </div>
                 </div>
                 {effectiveSelectedMemory.metadata &&
                   Object.keys(effectiveSelectedMemory.metadata).length > 0 && (
-                  <div className="memory-detail-section">
-                    <label>Metadata</label>
-                    <pre className="memory-detail-metadata">
-                      {JSON.stringify(effectiveSelectedMemory.metadata, null, 2)}
-                    </pre>
-                  </div>
-                )}
+                    <div className="memory-detail-section">
+                      <label>Metadata</label>
+                      <pre className="memory-detail-metadata">
+                        {JSON.stringify(
+                          effectiveSelectedMemory.metadata,
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </div>
+                  )}
               </div>
             </motion.div>
           </motion.div>

@@ -8,14 +8,13 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Depends, Path, Query
+from fastapi import APIRouter, HTTPException, Depends, Path
 from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user, User
 from app.db.supabase.client import get_supabase_client
 from app.agents.unified.model_health import quota_tracker
 from app.core.config import coordinator_bucket_name
-from app.memory.service import MemoryService
 from app.core.logging_config import get_logger
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
 
@@ -26,26 +25,44 @@ router = APIRouter(prefix="/metadata", tags=["Metadata"])
 # Pydantic Models
 # ============================================
 
+
 class MemoryStats(BaseModel):
     """Memory statistics for a session"""
+
     facts_count: int = Field(..., description="Total facts in memory for this session")
-    recent_facts: List[Dict[str, Any]] = Field(..., description="Most recently retrieved facts")
+    recent_facts: List[Dict[str, Any]] = Field(
+        ..., description="Most recently retrieved facts"
+    )
     write_count: int = Field(..., description="Number of facts written this session")
-    last_write_at: Optional[datetime] = Field(None, description="Timestamp of last write")
-    relevance_scores: Optional[List[float]] = Field(None, description="Recent relevance scores")
+    last_write_at: Optional[datetime] = Field(
+        None, description="Timestamp of last write"
+    )
+    relevance_scores: Optional[List[float]] = Field(
+        None, description="Recent relevance scores"
+    )
+
 
 class QuotaStatus(BaseModel):
     """Real-time quota status across services"""
+
     gemini_pro_pct: float = Field(
         ...,
         ge=0,
         le=100,
         description="Gemini Pro usage percentage (tool-only image generation)",
     )
-    gemini_flash_pct: float = Field(..., ge=0, le=100, description="Gemini Flash usage percentage")
-    grounding_pct: float = Field(..., ge=0, le=100, description="Grounding service usage percentage")
-    embeddings_pct: float = Field(..., ge=0, le=100, description="Embeddings usage percentage")
-    warnings: List[str] = Field(default_factory=list, description="Active quota warnings")
+    gemini_flash_pct: float = Field(
+        ..., ge=0, le=100, description="Gemini Flash usage percentage"
+    )
+    grounding_pct: float = Field(
+        ..., ge=0, le=100, description="Grounding service usage percentage"
+    )
+    embeddings_pct: float = Field(
+        ..., ge=0, le=100, description="Embeddings usage percentage"
+    )
+    warnings: List[str] = Field(
+        default_factory=list, description="Active quota warnings"
+    )
 
     # Detailed breakdowns
     gemini_pro: Dict[str, Any] = Field(default_factory=dict)
@@ -53,33 +70,47 @@ class QuotaStatus(BaseModel):
     grounding: Dict[str, Any] = Field(default_factory=dict)
     embeddings: Dict[str, Any] = Field(default_factory=dict)
 
+
 class TraceMetadata(BaseModel):
     """Enhanced trace metadata from LangSmith"""
+
     trace_id: str = Field(..., description="LangSmith trace ID")
     session_id: str = Field(..., description="Session ID")
     model_used: str = Field(..., description="Primary model used")
-    fallback_chain: Optional[List[str]] = Field(None, description="Models tried in order")
+    fallback_chain: Optional[List[str]] = Field(
+        None, description="Models tried in order"
+    )
     fallback_occurred: bool = Field(False, description="Whether fallback was triggered")
     fallback_reason: Optional[str] = Field(None, description="Reason for fallback")
 
     search_service: Optional[str] = Field(None, description="Search service used")
-    search_metadata: Optional[Dict[str, Any]] = Field(None, description="Search service details")
+    search_metadata: Optional[Dict[str, Any]] = Field(
+        None, description="Search service details"
+    )
 
-    memory_operations: Optional[Dict[str, Any]] = Field(None, description="Memory operation stats")
-    tool_calls: List[Dict[str, Any]] = Field(default_factory=list, description="Tools invoked")
+    memory_operations: Optional[Dict[str, Any]] = Field(
+        None, description="Memory operation stats"
+    )
+    tool_calls: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Tools invoked"
+    )
 
-    duration_ms: Optional[int] = Field(None, description="Total execution time in milliseconds")
+    duration_ms: Optional[int] = Field(
+        None, description="Total execution time in milliseconds"
+    )
     token_count: Optional[int] = Field(None, description="Total tokens used")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
 
 # ============================================
 # Memory Endpoints
 # ============================================
 
+
 @router.get("/memory/{session_id}/stats", response_model=MemoryStats)
 async def get_memory_stats(
     session_id: str = Path(..., description="Session ID to get memory stats for"),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ) -> MemoryStats:
     """
     Get memory statistics for a specific session.
@@ -87,22 +118,29 @@ async def get_memory_stats(
     Returns facts count, recent retrievals, write stats, and relevance scores.
     """
     try:
-        memory_service = MemoryService()
         supabase = get_supabase_client()
 
         # Get facts count for this session
-        result = supabase.table("memory_facts").select("*", count="exact").eq(
-            "session_id", session_id
-        ).eq("user_id", current_user.id).execute()
+        result = (
+            supabase.table("memory_facts")
+            .select("*", count="exact")
+            .eq("session_id", session_id)
+            .eq("user_id", current_user.id)
+            .execute()
+        )
 
         facts_count = result.count if result else 0
 
         # Get recent facts (last 5)
-        recent_result = supabase.table("memory_facts").select("*").eq(
-            "session_id", session_id
-        ).eq("user_id", current_user.id).order(
-            "created_at", desc=True
-        ).limit(5).execute()
+        recent_result = (
+            supabase.table("memory_facts")
+            .select("*")
+            .eq("session_id", session_id)
+            .eq("user_id", current_user.id)
+            .order("created_at", desc=True)
+            .limit(5)
+            .execute()
+        )
 
         recent_facts = []
         if recent_result and recent_result.data:
@@ -110,17 +148,20 @@ async def get_memory_stats(
                 {
                     "fact": fact.get("fact", ""),
                     "relevance_score": fact.get("relevance_score"),
-                    "created_at": fact.get("created_at")
+                    "created_at": fact.get("created_at"),
                 }
                 for fact in recent_result.data
             ]
 
         # Get write count for this session
-        write_result = supabase.table("memory_facts").select("created_at", count="exact").eq(
-            "session_id", session_id
-        ).eq("user_id", current_user.id).gte(
-            "created_at", (datetime.utcnow() - timedelta(hours=24)).isoformat()
-        ).execute()
+        write_result = (
+            supabase.table("memory_facts")
+            .select("created_at", count="exact")
+            .eq("session_id", session_id)
+            .eq("user_id", current_user.id)
+            .gte("created_at", (datetime.utcnow() - timedelta(hours=24)).isoformat())
+            .execute()
+        )
 
         write_count = write_result.count if write_result else 0
         last_write_at = None
@@ -141,20 +182,24 @@ async def get_memory_stats(
             recent_facts=recent_facts,
             write_count=write_count,
             last_write_at=last_write_at,
-            relevance_scores=relevance_scores if relevance_scores else None
+            relevance_scores=relevance_scores if relevance_scores else None,
         )
 
     except Exception as e:
         logger.error(f"Error fetching memory stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch memory stats: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch memory stats: {str(e)}"
+        )
+
 
 # ============================================
 # Quota Endpoints
 # ============================================
 
+
 @router.get("/quotas/status", response_model=QuotaStatus)
 async def get_quota_status(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ) -> QuotaStatus:
     """
     Get real-time quota status for all services.
@@ -162,7 +207,9 @@ async def get_quota_status(
     Returns usage percentages and warnings for rate limits approaching.
     """
     try:
-        coordinator_bucket = coordinator_bucket_name("google", with_subagents=True, zendesk=False)
+        coordinator_bucket = coordinator_bucket_name(
+            "google", with_subagents=True, zendesk=False
+        )
         image_bucket = "internal.image"
         grounding_bucket = "internal.grounding"
         embedding_bucket = "internal.embedding"
@@ -180,12 +227,10 @@ async def get_quota_status(
             return min(100.0, (used / limit) * 100)
 
         gemini_pro_pct = calculate_percentage(
-            gemini_pro_health.rpd_used,
-            gemini_pro_health.rpd_limit
+            gemini_pro_health.rpd_used, gemini_pro_health.rpd_limit
         )
         gemini_flash_pct = calculate_percentage(
-            gemini_flash_health.rpd_used,
-            gemini_flash_health.rpd_limit
+            gemini_flash_health.rpd_used, gemini_flash_health.rpd_limit
         )
 
         grounding_pct = calculate_percentage(
@@ -206,7 +251,9 @@ async def get_quota_status(
         if gemini_flash_pct > 80:
             warnings.append(f"Gemini Flash usage at {gemini_flash_pct:.0f}%")
         if grounding_pct > 80:
-            warnings.append(f"Grounding service approaching limit ({grounding_pct:.0f}%)")
+            warnings.append(
+                f"Grounding service approaching limit ({grounding_pct:.0f}%)"
+            )
         if embeddings_pct > 80:
             warnings.append(f"Embeddings usage at {embeddings_pct:.0f}%")
 
@@ -218,7 +265,7 @@ async def get_quota_status(
             "rpd_used": gemini_pro_health.rpd_used,
             "rpd_limit": gemini_pro_health.rpd_limit,
             "circuit_state": gemini_pro_health.circuit_state,
-            "available": gemini_pro_health.available
+            "available": gemini_pro_health.available,
         }
 
         gemini_flash_details = {
@@ -227,7 +274,7 @@ async def get_quota_status(
             "rpd_used": gemini_flash_health.rpd_used,
             "rpd_limit": gemini_flash_health.rpd_limit,
             "circuit_state": gemini_flash_health.circuit_state,
-            "available": gemini_flash_health.available
+            "available": gemini_flash_health.available,
         }
 
         grounding_details = {
@@ -266,17 +313,21 @@ async def get_quota_status(
 
     except Exception as e:
         logger.error(f"Error fetching quota status: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch quota status: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch quota status: {str(e)}"
+        )
+
 
 # ============================================
 # Trace Metadata Endpoints
 # ============================================
 
+
 @router.get("/sessions/{session_id}/traces/{trace_id}", response_model=TraceMetadata)
 async def get_trace_metadata(
     session_id: str = Path(..., description="Session ID"),
     trace_id: str = Path(..., description="Trace ID from LangSmith"),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ) -> TraceMetadata:
     """
     Get enhanced metadata for a specific trace.
@@ -287,14 +338,17 @@ async def get_trace_metadata(
     try:
         # Verify session ownership
         supabase = get_supabase_client()
-        session_check = supabase.table("chat_sessions").select("id").eq(
-            "id", session_id
-        ).eq("user_id", current_user.id).execute()
+        session_check = (
+            supabase.table("chat_sessions")
+            .select("id")
+            .eq("id", session_id)
+            .eq("user_id", current_user.id)
+            .execute()
+        )
 
         if not session_check.data:
             raise HTTPException(
-                status_code=404,
-                detail="Session not found or access denied"
+                status_code=404, detail="Session not found or access denied"
             )
 
         # In production, this would fetch from LangSmith API
@@ -313,24 +367,24 @@ async def get_trace_metadata(
             search_metadata={
                 "results_count": 5,
                 "max_requested": 5,
-                "query_length": 42
+                "query_length": 42,
             },
             memory_operations={
                 "retrieval_attempted": True,
                 "facts_retrieved": 3,
                 "write_attempted": True,
-                "facts_written": 1
+                "facts_written": 1,
             },
             tool_calls=[
                 {
                     "tool": "search_knowledge_base",
                     "confidence": 0.95,
-                    "duration_ms": 245
+                    "duration_ms": 245,
                 }
             ],
             duration_ms=1250,
             token_count=850,
-            timestamp=datetime.now(timezone.utc)
+            timestamp=datetime.now(timezone.utc),
         )
 
         return metadata
@@ -339,11 +393,15 @@ async def get_trace_metadata(
         raise
     except Exception as e:
         logger.error(f"Error fetching trace metadata: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch trace metadata: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch trace metadata: {str(e)}"
+        )
+
 
 # ============================================
 # Health Check Endpoint
 # ============================================
+
 
 @router.get("/health")
 async def health_check():
@@ -360,14 +418,18 @@ async def health_check():
             "services": {
                 "redis": "healthy" if redis_ok else "unavailable",
                 "memory": "healthy",  # Could check Supabase connection
-                "quotas": "healthy" if limiter_health.get("overall") == "healthy" else "degraded",
+                "quotas": (
+                    "healthy"
+                    if limiter_health.get("overall") == "healthy"
+                    else "degraded"
+                ),
             },
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {
             "status": "unhealthy",
             "error": str(e),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }

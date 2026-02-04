@@ -1,9 +1,18 @@
-'use client';
+"use client";
 
-import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
-import type { User } from '@supabase/supabase-js';
-import { Plus, MessageSquare, Trash2, MoreHorizontal, Pencil, Bird, PenLine, SquarePen } from 'lucide-react';
-import { useAuth } from '@/shared/contexts/AuthContext';
+import React, { useState, useCallback, useRef, useEffect, memo } from "react";
+import type { User } from "@supabase/supabase-js";
+import {
+  Plus,
+  MessageSquare,
+  Trash2,
+  MoreHorizontal,
+  Pencil,
+  Bird,
+  PenLine,
+  SquarePen,
+} from "lucide-react";
+import { useAuth } from "@/shared/contexts/AuthContext";
 
 interface Conversation {
   id: string;
@@ -24,29 +33,32 @@ interface SidebarProps {
 }
 
 const getUserDisplayName = (user: User | null): string => {
-  if (!user) return 'Agent Sparrow';
+  if (!user) return "Agent Sparrow";
 
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
-  const fullName = typeof meta.full_name === 'string' ? meta.full_name.trim() : '';
-  const name = typeof meta.name === 'string' ? meta.name.trim() : '';
+  const fullName =
+    typeof meta.full_name === "string" ? meta.full_name.trim() : "";
+  const name = typeof meta.name === "string" ? meta.name.trim() : "";
 
   if (fullName) return fullName;
   if (name) return name;
 
   const email = user.email?.trim();
-  if (email) return email.split('@')[0] || email;
+  if (email) return email.split("@")[0] || email;
 
-  return 'User';
+  return "User";
 };
 
 const getUserAvatarUrl = (user: User | null): string => {
-  if (!user) return '/Sparrow_logo_cropped.png';
+  if (!user) return "/Sparrow_logo_cropped.png";
 
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
-  const avatarUrl = typeof meta.avatar_url === 'string' ? meta.avatar_url.trim() : '';
-  const pictureUrl = typeof meta.picture === 'string' ? meta.picture.trim() : '';
+  const avatarUrl =
+    typeof meta.avatar_url === "string" ? meta.avatar_url.trim() : "";
+  const pictureUrl =
+    typeof meta.picture === "string" ? meta.picture.trim() : "";
 
-  return avatarUrl || pictureUrl || '/Sparrow_logo_cropped.png';
+  return avatarUrl || pictureUrl || "/Sparrow_logo_cropped.png";
 };
 
 // Agent Sparrow Logo Component
@@ -62,11 +74,7 @@ const SparrowLogo = memo(function SparrowLogo() {
 
 // Custom New Chat Icon (Modern Square Pen matching attached image)
 const NewChatIcon = ({ size = 18 }: { size?: number }) => (
-  <SquarePen
-    size={size}
-    strokeWidth={2.5}
-    className="lc-new-chat-icon"
-  />
+  <SquarePen size={size} strokeWidth={2.5} className="lc-new-chat-icon" />
 );
 
 const RESIZE_MIN = 260;
@@ -100,8 +108,8 @@ export function Sidebar({
     const groups: Record<string, Conversation[]> = {
       Today: [],
       Yesterday: [],
-      'Previous 7 Days': [],
-      'Previous 30 Days': [],
+      "Previous 7 Days": [],
+      "Previous 30 Days": [],
       Older: [],
       Undated: [],
     };
@@ -124,9 +132,9 @@ export function Sidebar({
       } else if (date >= yesterday) {
         groups.Yesterday.push(conv);
       } else if (date >= weekAgo) {
-        groups['Previous 7 Days'].push(conv);
+        groups["Previous 7 Days"].push(conv);
       } else if (date >= monthAgo) {
-        groups['Previous 30 Days'].push(conv);
+        groups["Previous 30 Days"].push(conv);
       } else {
         groups.Older.push(conv);
       }
@@ -140,11 +148,14 @@ export function Sidebar({
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
 
-  const startResizing = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    setIsResizing(true);
-  }, []);
+  const startResizing = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      setIsResizing(true);
+    },
+    [],
+  );
 
   const stopResizing = useCallback(() => {
     setIsResizing(false);
@@ -165,57 +176,60 @@ export function Sidebar({
       setSidebarWidth(newWidth);
       if (isCollapsed && newWidth >= RESIZE_MIN) onToggle();
     },
-    [isResizing, isCollapsed, onToggle]
+    [isResizing, isCollapsed, onToggle],
   );
 
-  const handleResizeKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    switch (event.key) {
-      case 'ArrowLeft': {
-        event.preventDefault();
-        if (isCollapsed) return;
-        const nextWidth = sidebarWidth - RESIZE_STEP;
-        if (nextWidth < COLLAPSE_THRESHOLD) {
-          onToggle();
-          return;
+  const handleResizeKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      switch (event.key) {
+        case "ArrowLeft": {
+          event.preventDefault();
+          if (isCollapsed) return;
+          const nextWidth = sidebarWidth - RESIZE_STEP;
+          if (nextWidth < COLLAPSE_THRESHOLD) {
+            onToggle();
+            return;
+          }
+          setSidebarWidth(Math.max(nextWidth, RESIZE_MIN));
+          break;
         }
-        setSidebarWidth(Math.max(nextWidth, RESIZE_MIN));
-        break;
-      }
-      case 'ArrowRight': {
-        event.preventDefault();
-        if (isCollapsed) {
-          onToggle();
+        case "ArrowRight": {
+          event.preventDefault();
+          if (isCollapsed) {
+            onToggle();
+            setSidebarWidth(RESIZE_MIN);
+            return;
+          }
+          setSidebarWidth(Math.min(sidebarWidth + RESIZE_STEP, RESIZE_MAX));
+          break;
+        }
+        case "Home": {
+          event.preventDefault();
+          if (isCollapsed) onToggle();
           setSidebarWidth(RESIZE_MIN);
-          return;
+          break;
         }
-        setSidebarWidth(Math.min(sidebarWidth + RESIZE_STEP, RESIZE_MAX));
-        break;
+        case "End": {
+          event.preventDefault();
+          if (isCollapsed) onToggle();
+          setSidebarWidth(RESIZE_MAX);
+          break;
+        }
+        default:
+          break;
       }
-      case 'Home': {
-        event.preventDefault();
-        if (isCollapsed) onToggle();
-        setSidebarWidth(RESIZE_MIN);
-        break;
-      }
-      case 'End': {
-        event.preventDefault();
-        if (isCollapsed) onToggle();
-        setSidebarWidth(RESIZE_MAX);
-        break;
-      }
-      default:
-        break;
-    }
-  }, [isCollapsed, onToggle, sidebarWidth]);
+    },
+    [isCollapsed, onToggle, sidebarWidth],
+  );
 
   useEffect(() => {
-    window.addEventListener('pointermove', resize);
-    window.addEventListener('pointerup', stopResizing);
-    window.addEventListener('pointercancel', stopResizing);
+    window.addEventListener("pointermove", resize);
+    window.addEventListener("pointerup", stopResizing);
+    window.addEventListener("pointercancel", stopResizing);
     return () => {
-      window.removeEventListener('pointermove', resize);
-      window.removeEventListener('pointerup', stopResizing);
-      window.removeEventListener('pointercancel', stopResizing);
+      window.removeEventListener("pointermove", resize);
+      window.removeEventListener("pointerup", stopResizing);
+      window.removeEventListener("pointercancel", stopResizing);
     };
   }, [resize, stopResizing]);
 
@@ -226,10 +240,13 @@ export function Sidebar({
   return (
     <aside
       ref={sidebarRef}
-      className={`lc-sidebar ${isCollapsed ? 'collapsed' : ''}`}
+      className={`lc-sidebar ${isCollapsed ? "collapsed" : ""}`}
       role="complementary"
       aria-label="Conversation sidebar"
-      style={{ width: isCollapsed ? 0 : sidebarWidth, minWidth: isCollapsed ? 0 : sidebarWidth }}
+      style={{
+        width: isCollapsed ? 0 : sidebarWidth,
+        minWidth: isCollapsed ? 0 : sidebarWidth,
+      }}
     >
       <div
         className="lc-sidebar-resizer"
@@ -264,7 +281,11 @@ export function Sidebar({
       </div>
 
       {/* Conversation list */}
-      <div className="lc-conversation-list" role="list" aria-label="Conversations">
+      <div
+        className="lc-conversation-list"
+        role="list"
+        aria-label="Conversations"
+      >
         {Object.entries(groupedConversations).map(
           ([group, convs]) =>
             convs.length > 0 && (
@@ -281,25 +302,28 @@ export function Sidebar({
                   />
                 ))}
               </div>
-            )
+            ),
         )}
 
         {/* Empty state */}
         {conversations.length === 0 && (
           <div
             style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '32px 16px',
-              color: 'var(--lc-text-tertiary)',
-              textAlign: 'center',
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "32px 16px",
+              color: "var(--lc-text-tertiary)",
+              textAlign: "center",
             }}
           >
-            <MessageSquare size={32} style={{ marginBottom: '12px', opacity: 0.5 }} />
-            <p style={{ fontSize: '14px', margin: 0 }}>No conversations yet</p>
-            <p style={{ fontSize: '12px', margin: '4px 0 0' }}>
+            <MessageSquare
+              size={32}
+              style={{ marginBottom: "12px", opacity: 0.5 }}
+            />
+            <p style={{ fontSize: "14px", margin: 0 }}>No conversations yet</p>
+            <p style={{ fontSize: "12px", margin: "4px 0 0" }}>
               Start a new chat to begin
             </p>
           </div>
@@ -312,7 +336,7 @@ export function Sidebar({
           <img
             src={avatarSrc}
             alt={userDisplayName}
-            onError={() => setAvatarSrc('/Sparrow_logo_cropped.png')}
+            onError={() => setAvatarSrc("/Sparrow_logo_cropped.png")}
             className="lc-sidebar-avatar"
           />
           <span>{userDisplayName}</span>
@@ -341,7 +365,10 @@ const ConversationItem = memo(function ConversationItem({
   const [menuOpen, setMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(conversation.title);
-  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -356,9 +383,9 @@ const ConversationItem = memo(function ConversationItem({
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside, true);
+    document.addEventListener("mousedown", handleClickOutside, true);
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside, true);
+      document.removeEventListener("mousedown", handleClickOutside, true);
     };
   }, [menuOpen]);
 
@@ -385,41 +412,57 @@ const ConversationItem = memo(function ConversationItem({
     setMenuOpen((prev) => !prev);
   }, []); // No dependencies - uses functional update and ref
 
-  const handleRenameClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setMenuOpen(false);
-    setIsRenaming(true);
-    setRenameValue(conversation.title);
-  }, [conversation.title]);
+  const handleRenameClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setMenuOpen(false);
+      setIsRenaming(true);
+      setRenameValue(conversation.title);
+    },
+    [conversation.title],
+  );
 
-  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setMenuOpen(false);
-    if (onDelete) {
-      onDelete(conversation.id);
-    }
-  }, [onDelete, conversation.id]);
+  const handleDeleteClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setMenuOpen(false);
+      if (onDelete) {
+        onDelete(conversation.id);
+      }
+    },
+    [onDelete, conversation.id],
+  );
 
-  const handleRenameSubmit = useCallback((e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (renameValue.trim() && renameValue !== conversation.title && onRename) {
-      onRename(conversation.id, renameValue.trim());
-    }
-    setIsRenaming(false);
-  }, [renameValue, conversation.id, conversation.title, onRename]);
+  const handleRenameSubmit = useCallback(
+    (e?: React.FormEvent) => {
+      e?.preventDefault();
+      if (
+        renameValue.trim() &&
+        renameValue !== conversation.title &&
+        onRename
+      ) {
+        onRename(conversation.id, renameValue.trim());
+      }
+      setIsRenaming(false);
+    },
+    [renameValue, conversation.id, conversation.title, onRename],
+  );
 
   const handleRenameCancel = useCallback(() => {
     setIsRenaming(false);
     setRenameValue(conversation.title);
   }, [conversation.title]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      handleRenameCancel();
-    } else if (e.key === 'Enter') {
-      handleRenameSubmit();
-    }
-  }, [handleRenameCancel, handleRenameSubmit]);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        handleRenameCancel();
+      } else if (e.key === "Enter") {
+        handleRenameSubmit();
+      }
+    },
+    [handleRenameCancel, handleRenameSubmit],
+  );
 
   // Create stable click handler
   const handleClick = useCallback(() => {
@@ -429,11 +472,15 @@ const ConversationItem = memo(function ConversationItem({
   if (isRenaming) {
     return (
       <div
-        className={`lc-conversation-item ${isActive ? 'active' : ''}`}
-        style={{ position: 'relative' }}
+        className={`lc-conversation-item ${isActive ? "active" : ""}`}
+        style={{ position: "relative" }}
         role="listitem"
       >
-        <MessageSquare size={16} style={{ flexShrink: 0, opacity: 0.7 }} aria-hidden="true" />
+        <MessageSquare
+          size={16}
+          style={{ flexShrink: 0, opacity: 0.7 }}
+          aria-hidden="true"
+        />
         <input
           ref={inputRef}
           type="text"
@@ -450,23 +497,20 @@ const ConversationItem = memo(function ConversationItem({
 
   return (
     <div
-      className={`lc-conversation-item ${isActive ? 'active' : ''}`}
+      className={`lc-conversation-item ${isActive ? "active" : ""}`}
       onClick={handleClick}
       onMouseEnter={() => setShowMenu(true)}
       onMouseLeave={() => {
         if (!menuOpen) setShowMenu(false);
       }}
-      style={{ position: 'relative' }}
+      style={{ position: "relative" }}
       role="listitem"
-      aria-current={isActive ? 'page' : undefined}
+      aria-current={isActive ? "page" : undefined}
     >
-
-      <span className="lc-conversation-title">
-        {conversation.title}
-      </span>
+      <span className="lc-conversation-title">{conversation.title}</span>
 
       {(showMenu || menuOpen) && (onRename || onDelete) && (
-        <div ref={menuRef} style={{ position: 'absolute', right: '8px' }}>
+        <div ref={menuRef} style={{ position: "absolute", right: "8px" }}>
           <button
             ref={buttonRef}
             onClick={handleMenuClick}

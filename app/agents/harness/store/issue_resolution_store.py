@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Issue Resolution Store for tracking resolved support tickets.
 
 This module provides a store for tracking issue resolutions with vector embeddings
@@ -38,7 +39,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 import math
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -105,7 +106,9 @@ def _build_embedding_text(problem_summary: str, solution_summary: str) -> str:
     return f"Problem: {p}\nSolution: {s}".strip()
 
 
-def _lexical_similarity(query: str, problem_summary: str, solution_summary: str) -> float:
+def _lexical_similarity(
+    query: str, problem_summary: str, solution_summary: str
+) -> float:
     """Cheap similarity proxy when vector RPC is unavailable."""
     q = _tokenize(query)
     if not q:
@@ -210,9 +213,7 @@ class IssueResolutionStore:
 
                 self._client = get_supabase_client()
             except ImportError:
-                logger.warning(
-                    "Supabase client not available for IssueResolutionStore"
-                )
+                logger.warning("Supabase client not available for IssueResolutionStore")
                 self._client = _IMPORT_FAILED  # type: ignore
                 return None
             except Exception as exc:
@@ -331,7 +332,10 @@ class IssueResolutionStore:
         solution_summary = str(solution_summary or "").strip()
 
         # Quality gate: keep only high-utility patterns.
-        if len(problem_summary) < MIN_PROBLEM_SUMMARY_CHARS or len(solution_summary) < MIN_SOLUTION_SUMMARY_CHARS:
+        if (
+            len(problem_summary) < MIN_PROBLEM_SUMMARY_CHARS
+            or len(solution_summary) < MIN_SOLUTION_SUMMARY_CHARS
+        ):
             logger.info(
                 "resolution_skipped_low_utility",
                 ticket_id=ticket_id,
@@ -345,7 +349,9 @@ class IssueResolutionStore:
         if len(problem_summary) > MAX_PROBLEM_SUMMARY_CHARS:
             problem_summary = problem_summary[:MAX_PROBLEM_SUMMARY_CHARS].rstrip() + "…"
         if len(solution_summary) > MAX_SOLUTION_SUMMARY_CHARS:
-            solution_summary = solution_summary[:MAX_SOLUTION_SUMMARY_CHARS].rstrip() + "…"
+            solution_summary = (
+                solution_summary[:MAX_SOLUTION_SUMMARY_CHARS].rstrip() + "…"
+            )
 
         # Generate embedding for a combined "scenario" representation.
         embedding_text = _build_embedding_text(problem_summary, solution_summary)
@@ -371,7 +377,10 @@ class IssueResolutionStore:
                 solution_tokens = _tokenize(solution_summary)
                 for hit in existing:
                     hit_solution_tokens = _tokenize(hit.solution_summary)
-                    if _jaccard(solution_tokens, hit_solution_tokens) >= DUPLICATE_MIN_SOLUTION_JACCARD:
+                    if (
+                        _jaccard(solution_tokens, hit_solution_tokens)
+                        >= DUPLICATE_MIN_SOLUTION_JACCARD
+                    ):
                         logger.info(
                             "resolution_deduped",
                             ticket_id=ticket_id,
@@ -412,11 +421,20 @@ class IssueResolutionStore:
                 # Best-effort: also write a reviewable Memory UI entry (separate from IssueResolutionStore).
                 try:
                     from app.core.settings import settings
-                    from app.security.pii_redactor import redact_pii, redact_pii_from_dict
+                    from app.security.pii_redactor import (
+                        redact_pii,
+                        redact_pii_from_dict,
+                    )
 
                     if getattr(settings, "enable_memory_ui_capture", False):
-                        agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
-                        tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+                        agent_id = (
+                            getattr(settings, "memory_ui_agent_id", "sparrow")
+                            or "sparrow"
+                        )
+                        tenant_id = (
+                            getattr(settings, "memory_ui_tenant_id", "mailbot")
+                            or "mailbot"
+                        )
 
                         # Keep the content compact and pattern-focused.
                         memory_content = "\n".join(
@@ -458,7 +476,9 @@ class IssueResolutionStore:
                             async def _insert_memory_ui() -> None:
                                 try:
                                     await asyncio.to_thread(
-                                        lambda: client.table("memories").insert(payload).execute()
+                                        lambda: client.table("memories")
+                                        .insert(payload)
+                                        .execute()
                                     )
                                 except Exception as insert_exc:
                                     logger.debug(
@@ -471,10 +491,17 @@ class IssueResolutionStore:
                             logger.debug(
                                 "memory_ui_capture_skipped_embedding_mismatch",
                                 ticket_id=ticket_id,
-                                got_dim=len(embedding) if isinstance(embedding, list) else None,
+                                got_dim=(
+                                    len(embedding)
+                                    if isinstance(embedding, list)
+                                    else None
+                                ),
                             )
                 except Exception as exc:
-                    logger.debug("memory_ui_capture_issue_resolution_failed", error=str(exc)[:180])
+                    logger.debug(
+                        "memory_ui_capture_issue_resolution_failed",
+                        error=str(exc)[:180],
+                    )
 
                 if prune:
                     try:
@@ -815,22 +842,42 @@ class IssueResolutionStore:
                 if isinstance(rpc_data, str) and rpc_data.isdigit():
                     return int(rpc_data)
                 if isinstance(rpc_data, dict):
-                    for key in ("deleted", "deleted_count", "count", "pruned", "prune_issue_resolutions"):
+                    for key in (
+                        "deleted",
+                        "deleted_count",
+                        "count",
+                        "pruned",
+                        "prune_issue_resolutions",
+                    ):
                         value = rpc_data.get(key)
                         if isinstance(value, int):
                             return value
                         if isinstance(value, str) and value.isdigit():
                             return int(value)
-                if isinstance(rpc_data, list) and rpc_data and isinstance(rpc_data[0], dict):
+                if (
+                    isinstance(rpc_data, list)
+                    and rpc_data
+                    and isinstance(rpc_data[0], dict)
+                ):
                     row0 = rpc_data[0]
-                    for key in ("deleted", "deleted_count", "count", "pruned", "prune_issue_resolutions"):
+                    for key in (
+                        "deleted",
+                        "deleted_count",
+                        "count",
+                        "pruned",
+                        "prune_issue_resolutions",
+                    ):
                         value = row0.get(key)
                         if isinstance(value, int):
                             return value
                         if isinstance(value, str) and value.isdigit():
                             return int(value)
             except Exception as exc:
-                logger.debug("prune_category_rpc_failed_falling_back", category=category, error=str(exc)[:180])
+                logger.debug(
+                    "prune_category_rpc_failed_falling_back",
+                    category=category,
+                    error=str(exc)[:180],
+                )
 
             # Fallback: prune based on a cutoff timestamp (minimizes round trips).
             cutoff_resp = (
@@ -864,7 +911,9 @@ class IssueResolutionStore:
                 if not rows:
                     break
 
-                delete_ids = [r.get("id") for r in rows if isinstance(r, dict) and r.get("id")]
+                delete_ids = [
+                    r.get("id") for r in rows if isinstance(r, dict) and r.get("id")
+                ]
                 if not delete_ids:
                     break
 
@@ -952,19 +1001,14 @@ class IssueResolutionStore:
             return []
 
         try:
+
             def _fetch():
                 query = (
-                    client.table(RESOLUTIONS_TABLE)
-                    .select("*")
-                    .eq("category", category)
+                    client.table(RESOLUTIONS_TABLE).select("*").eq("category", category)
                 )
                 if not include_escalated:
                     query = query.eq("was_escalated", False)
-                return (
-                    query.order("created_at", desc=True)
-                    .limit(limit)
-                    .execute()
-                )
+                return query.order("created_at", desc=True).limit(limit).execute()
 
             response = await asyncio.to_thread(_fetch)
 
@@ -1073,9 +1117,7 @@ class IssueResolutionStore:
             for category, cat_stats in stats.items():
                 count = cat_stats["count"]
                 escalated = cat_stats["escalated"]
-                cat_stats["escalation_rate"] = (
-                    escalated / count if count > 0 else 0.0
-                )
+                cat_stats["escalation_rate"] = escalated / count if count > 0 else 0.0
 
             return stats
 

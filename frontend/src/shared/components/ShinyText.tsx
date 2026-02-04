@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 
 interface ShinyTextProps {
   text: string;
@@ -12,25 +12,32 @@ interface ShinyTextProps {
   accentBlue?: boolean;
 }
 
-const ShinyText: React.FC<ShinyTextProps> = ({ text, disabled = false, speed = 5, className = '', accentBlue = true }) => {
+const ShinyText: React.FC<ShinyTextProps> = ({
+  text,
+  disabled = false,
+  speed = 5,
+  className = "",
+  accentBlue = true,
+}) => {
   const animationDuration = `${speed}s`;
 
   // Base subtle Mailbird blue gradient (behind the moving shine)
   const accentGradient = accentBlue
-    ? 'linear-gradient(90deg, rgba(56,182,255,0.9) 0%, rgba(0,149,255,0.9) 100%)'
-    : 'linear-gradient(90deg, rgba(181,181,181,0.85) 0%, rgba(181,181,181,0.85) 100%)';
+    ? "linear-gradient(90deg, rgba(56,182,255,0.9) 0%, rgba(0,149,255,0.9) 100%)"
+    : "linear-gradient(90deg, rgba(181,181,181,0.85) 0%, rgba(181,181,181,0.85) 100%)";
 
   // Moving specular highlight
-  const shineGradient = 'linear-gradient(120deg, rgba(255,255,255,0) 40%, rgba(255,255,255,0.85) 50%, rgba(255,255,255,0) 60%)';
+  const shineGradient =
+    "linear-gradient(120deg, rgba(255,255,255,0) 40%, rgba(255,255,255,0.85) 50%, rgba(255,255,255,0) 60%)";
 
   return (
     <div
-      className={`text-transparent bg-clip-text inline-block ${disabled ? '' : 'animate-shine'} ${className}`}
+      className={`text-transparent bg-clip-text inline-block ${disabled ? "" : "animate-shine"} ${className}`}
       style={{
         backgroundImage: `${accentGradient}, ${shineGradient}`,
         backgroundSize: `100% 100%, 200% 100%`,
-        backgroundRepeat: 'no-repeat',
-        WebkitBackgroundClip: 'text',
+        backgroundRepeat: "no-repeat",
+        WebkitBackgroundClip: "text",
         animationDuration,
       }}
     >

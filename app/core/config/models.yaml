@@ -110,7 +110,7 @@ coordinators:
 internal:
   # Summarization / thread-state extraction
   summarizer:
-    model_id: "gemini-2.5-flash"
+    model_id: "gemini-2.5-flash-preview-09-2025"
     provider: "google"        # Explicit: always Google direct
     temperature: 0.2
     context_window: 1048576

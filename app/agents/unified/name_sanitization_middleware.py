@@ -7,7 +7,7 @@ strip names only at the last possible moment: right before the model call.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, cast
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
@@ -17,9 +17,16 @@ try:
 
     MIDDLEWARE_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
-    AgentMiddleware = object  # type: ignore[assignment]
-    ModelRequest = object  # type: ignore[assignment]
-    ModelResponse = object  # type: ignore[assignment]
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
+    class ModelRequest:  # type: ignore[no-redef]
+        pass
+
+    class ModelResponse:  # type: ignore[no-redef]
+        pass
+
     MIDDLEWARE_AVAILABLE = False
 
 
@@ -46,7 +53,11 @@ def _should_strip_names(model: Any) -> bool:
     )
     if isinstance(base_url, str):
         base_lower = base_url.lower()
-        if "openrouter" in base_lower or "api.x.ai" in base_lower or "x.ai" in base_lower:
+        if (
+            "openrouter" in base_lower
+            or "api.x.ai" in base_lower
+            or "x.ai" in base_lower
+        ):
             return True
 
     # Heuristic: Grok model names are typically xAI-backed.
@@ -82,7 +93,7 @@ def _strip_name_from_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     return sanitized
 
 
-class MessageNameSanitizationMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object):
+class MessageNameSanitizationMiddleware(AgentMiddleware):
     """Strip `name` from non-user messages before strict provider calls."""
 
     @property
@@ -101,7 +112,9 @@ class MessageNameSanitizationMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
         if not messages:
             return handler(request)
 
-        return handler(request.override(messages=_strip_name_from_messages(messages)))
+        return handler(
+            request.override(messages=cast(Any, _strip_name_from_messages(messages)))
+        )
 
     async def awrap_model_call(  # type: ignore[override]
         self,
@@ -115,4 +128,6 @@ class MessageNameSanitizationMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE 
         if not messages:
             return await handler(request)
 
-        return await handler(request.override(messages=_strip_name_from_messages(messages)))
+        return await handler(
+            request.override(messages=cast(Any, _strip_name_from_messages(messages)))
+        )

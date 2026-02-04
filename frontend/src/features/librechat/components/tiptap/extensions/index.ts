@@ -1,15 +1,15 @@
-import StarterKit from '@tiptap/starter-kit';
-import Placeholder from '@tiptap/extension-placeholder';
-import Link from '@tiptap/extension-link';
-import { Markdown } from '@tiptap/markdown';
-import type { AnyExtension } from '@tiptap/core';
+import StarterKit from "@tiptap/starter-kit";
+import Placeholder from "@tiptap/extension-placeholder";
+import Link from "@tiptap/extension-link";
+import { Markdown } from "@tiptap/markdown";
+import type { AnyExtension } from "@tiptap/core";
 
-import { ArtifactDirective } from './artifact-directive';
-import { createCodeBlockExtension } from './code-block';
-import { createImageExtension } from './image';
-import { createMathExtension } from './math';
-import { createTableExtensions } from './table';
-import { createTaskListExtensions } from './task-list';
+import { ArtifactDirective } from "./artifact-directive";
+import { createCodeBlockExtension } from "./code-block";
+import { createImageExtension } from "./image";
+import { createMathExtension } from "./math";
+import { createTableExtensions } from "./table";
+import { createTaskListExtensions } from "./task-list";
 
 export interface ExtensionOptions {
   placeholder?: string;
@@ -33,7 +33,7 @@ export const createExtensions = (options: ExtensionOptions = {}) => {
       openOnClick: false,
     }),
     Placeholder.configure({
-      placeholder: options.placeholder ?? 'Edit message...',
+      placeholder: options.placeholder ?? "Edit message...",
     }),
   ];
 

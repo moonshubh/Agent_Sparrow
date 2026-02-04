@@ -1,25 +1,30 @@
-"use client"
+"use client";
 
-import React, { useMemo, useState } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/ui/dialog"
-import { Separator } from "@/shared/ui/separator"
-import { cn } from "@/shared/lib/utils"
-import { Settings, Key, User, LifeBuoy, Gauge } from "lucide-react"
-import { GeneralPanel } from "./panels/GeneralPanel"
-import { APIKeysPanel } from "./panels/APIKeysPanel"
-import { AccountPanel } from "./panels/AccountPanel"
-import { ZendeskPanel } from "./panels/ZendeskPanel"
-import { RateLimitsPanel } from "./panels/RateLimitsPanel"
+import React, { useMemo, useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
+import { Separator } from "@/shared/ui/separator";
+import { cn } from "@/shared/lib/utils";
+import { Settings, Key, User, LifeBuoy, Gauge } from "lucide-react";
+import { GeneralPanel } from "./panels/GeneralPanel";
+import { APIKeysPanel } from "./panels/APIKeysPanel";
+import { AccountPanel } from "./panels/AccountPanel";
+import { ZendeskPanel } from "./panels/ZendeskPanel";
+import { RateLimitsPanel } from "./panels/RateLimitsPanel";
 
-type TabKey = "general" | "api-keys" | "account" | "zendesk" | "rate-limits"
+type TabKey = "general" | "api-keys" | "account" | "zendesk" | "rate-limits";
 
 interface SettingsDialogV2Props {
-  isOpen: boolean
-  onClose: () => void
-  defaultTab?: TabKey
+  isOpen: boolean;
+  onClose: () => void;
+  defaultTab?: TabKey;
 }
 
-type NavIcon = typeof Settings
+type NavIcon = typeof Settings;
 
 const navItems: { id: TabKey; label: string; icon: NavIcon }[] = [
   { id: "general", label: "General", icon: Settings },
@@ -27,27 +32,31 @@ const navItems: { id: TabKey; label: string; icon: NavIcon }[] = [
   { id: "zendesk", label: "Zendesk (Admin)", icon: LifeBuoy },
   { id: "rate-limits", label: "Rate Limits", icon: Gauge },
   { id: "account", label: "Account", icon: User },
-]
+];
 
-export function SettingsDialogV2({ isOpen, onClose, defaultTab = "general" }: SettingsDialogV2Props) {
-  const [active, setActive] = useState<TabKey>(defaultTab)
+export function SettingsDialogV2({
+  isOpen,
+  onClose,
+  defaultTab = "general",
+}: SettingsDialogV2Props) {
+  const [active, setActive] = useState<TabKey>(defaultTab);
 
   const Content = useMemo(() => {
     switch (active) {
       case "general":
-        return <GeneralPanel />
+        return <GeneralPanel />;
       case "api-keys":
-        return <APIKeysPanel />
+        return <APIKeysPanel />;
       case "zendesk":
-        return <ZendeskPanel />
+        return <ZendeskPanel />;
       case "rate-limits":
-        return <RateLimitsPanel />
+        return <RateLimitsPanel />;
       case "account":
-        return <AccountPanel onClose={onClose} />
+        return <AccountPanel onClose={onClose} />;
       default:
-        return null
+        return null;
     }
-  }, [active, onClose])
+  }, [active, onClose]);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -64,7 +73,7 @@ export function SettingsDialogV2({ isOpen, onClose, defaultTab = "general" }: Se
           <aside className="w-56 border-r bg-background/60 py-2">
             <nav className="flex flex-col">
               {navItems.map(({ id, label, icon: Icon }) => {
-                const isActive = active === id
+                const isActive = active === id;
                 return (
                   <button
                     key={id}
@@ -72,14 +81,16 @@ export function SettingsDialogV2({ isOpen, onClose, defaultTab = "general" }: Se
                     className={cn(
                       "flex items-center gap-2 px-4 py-2 text-sm",
                       "hover:bg-secondary/50 transition-colors",
-                      isActive && "text-primary bg-primary/10 font-medium"
+                      isActive && "text-primary bg-primary/10 font-medium",
                     )}
                     data-testid={`nav-${id}`}
                   >
-                    <Icon className={cn("h-4 w-4", isActive && "text-primary")} />
+                    <Icon
+                      className={cn("h-4 w-4", isActive && "text-primary")}
+                    />
                     {label}
                   </button>
-                )
+                );
               })}
             </nav>
           </aside>
@@ -91,5 +102,5 @@ export function SettingsDialogV2({ isOpen, onClose, defaultTab = "general" }: Se
         </div>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

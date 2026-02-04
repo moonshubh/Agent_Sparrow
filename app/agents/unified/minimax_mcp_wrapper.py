@@ -3,6 +3,7 @@
 Filters out non-JSON lines on stdout so the MCP client doesn't choke on
 startup banners (e.g., "Starting Minimax MCP server").
 """
+
 from __future__ import annotations
 
 import json
@@ -11,7 +12,7 @@ import shlex
 import subprocess
 import sys
 import threading
-from typing import List
+from typing import Any, List
 
 
 def _get_real_command() -> str:
@@ -52,9 +53,10 @@ def _forward_stdin(proc: subprocess.Popen[bytes]) -> None:
 
 
 def _forward_stderr(proc: subprocess.Popen[bytes]) -> None:
-    if proc.stderr is None:
+    stderr = proc.stderr
+    if stderr is None:
         return
-    for chunk in iter(lambda: proc.stderr.readline(), b""):
+    for chunk in iter(lambda: stderr.readline(), b""):
         if not chunk:
             break
         try:
@@ -62,6 +64,14 @@ def _forward_stderr(proc: subprocess.Popen[bytes]) -> None:
             sys.stderr.buffer.flush()
         except Exception:
             break
+
+
+def _is_jsonrpc_message(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("jsonrpc") != "2.0":
+        return False
+    return any(key in payload for key in ("method", "result", "error"))
 
 
 def _forward_stdout_filtered(proc: subprocess.Popen[bytes]) -> None:
@@ -74,9 +84,22 @@ def _forward_stdout_filtered(proc: subprocess.Popen[bytes]) -> None:
         if not stripped:
             continue
         try:
-            json.loads(stripped.decode("utf-8"))
+            payload = json.loads(stripped.decode("utf-8"))
         except Exception:
-            # Drop non-JSON banner/log lines.
+            # Drop non-JSON banner/log lines from stdout (send to stderr for visibility).
+            try:
+                sys.stderr.buffer.write(line)
+                sys.stderr.buffer.flush()
+            except Exception:
+                pass
+            continue
+        if not _is_jsonrpc_message(payload):
+            # Forward structured logs to stderr so they don't break the JSON-RPC client.
+            try:
+                sys.stderr.buffer.write(line)
+                sys.stderr.buffer.flush()
+            except Exception:
+                pass
             continue
         try:
             sys.stdout.buffer.write(line)

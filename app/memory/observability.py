@@ -127,4 +127,10 @@ class MemoryMetrics:
 
 memory_metrics = MemoryMetrics()
 
-__all__ = ["MemoryMetrics", "MemorySnapshot", "RetrievalStats", "WriteStats", "memory_metrics"]
+__all__ = [
+    "MemoryMetrics",
+    "MemorySnapshot",
+    "RetrievalStats",
+    "WriteStats",
+    "memory_metrics",
+]

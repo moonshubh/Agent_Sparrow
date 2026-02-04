@@ -1,6 +1,6 @@
 /**
  * Artifact System Exports
- * 
+ *
  * Centralized exports for the artifact infrastructure.
  */
 
@@ -13,14 +13,14 @@ export type {
   ArtifactStore,
   ArtifactDirectiveProps,
   CodeBlockInfo,
-} from './types';
+} from "./types";
 
 export {
   generateArtifactId,
   isArtifactLanguage,
   ARTIFACT_DEFAULTS,
   ARTIFACT_LANGUAGES,
-} from './types';
+} from "./types";
 
 // Context & Store
 export {
@@ -31,13 +31,17 @@ export {
   useArtifactsVisible,
   useArtifactActions,
   getGlobalArtifactStore,
-} from './ArtifactContext';
+} from "./ArtifactContext";
 
 // Plugin
-export { artifactPlugin, extractContent, parseArtifactAttributes } from './artifactPlugin';
+export {
+  artifactPlugin,
+  extractContent,
+  parseArtifactAttributes,
+} from "./artifactPlugin";
 
 // Components
-export { ArtifactBadgeOrButton } from './ArtifactBadgeOrButton';
-export { ArtifactPanel } from './ArtifactPanel';
-export { MermaidEditor } from './MermaidEditor';
-export { ArticleEditor } from './ArticleEditor';
+export { ArtifactBadgeOrButton } from "./ArtifactBadgeOrButton";
+export { ArtifactPanel } from "./ArtifactPanel";
+export { MermaidEditor } from "./MermaidEditor";
+export { ArticleEditor } from "./ArticleEditor";

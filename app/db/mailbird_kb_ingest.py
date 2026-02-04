@@ -22,8 +22,9 @@ from langchain_google_genai import embeddings as gen_embeddings  # type: ignore
 
 import requests
 
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -35,12 +36,17 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"), override=True)
 SEED_URL = "https://support.getmailbird.com/hc/en-us"
 HOST_ALLOW = "support.getmailbird.com"
 ARTICLE_PATH_FRAGMENT = "/hc/en-us/articles/"
-INCLUDE_PREFIXES = ["https://support.getmailbird.com/hc/en-us/articles/", "https://support.getmailbird.com/hc/en-us/categories/"]
+INCLUDE_PREFIXES = [
+    "https://support.getmailbird.com/hc/en-us/articles/",
+    "https://support.getmailbird.com/hc/en-us/categories/",
+]
 EXCLUDE_SUBSTRINGS = ["/signin", "/search?", "/requests", "/attachments/"]
 
 ZENDESK_API_BASE = "https://support.getmailbird.com/api/v2"
 ZENDESK_LOCALE = "en-us"
-ZENDESK_ARTICLES_ENDPOINT = f"{ZENDESK_API_BASE}/help_center/{ZENDESK_LOCALE}/articles.json"
+ZENDESK_ARTICLES_ENDPOINT = (
+    f"{ZENDESK_API_BASE}/help_center/{ZENDESK_LOCALE}/articles.json"
+)
 ZENDESK_PER_PAGE = 100
 
 
@@ -50,7 +56,9 @@ def normalize_url(url: str) -> str:
 
 def fetch_zendesk_article_map() -> Dict[str, Dict[str, Any]]:
     articles: Dict[str, Dict[str, Any]] = {}
-    next_url: Optional[str] = f"{ZENDESK_ARTICLES_ENDPOINT}?per_page={ZENDESK_PER_PAGE}&page=1"
+    next_url: Optional[str] = (
+        f"{ZENDESK_ARTICLES_ENDPOINT}?per_page={ZENDESK_PER_PAGE}&page=1"
+    )
     page = 1
     max_pages = 100  # safety guard
 
@@ -136,10 +144,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
-CONCURRENCY = _env_int("FIRECRAWL_CONCURRENCY", 5)  # upgraded plan supports higher parallelism
-REQUEST_MIN_INTERVAL_SEC = _env_float("FIRECRAWL_MIN_INTERVAL_SEC", 2.0)  # throttle to stay within RPM limits
-EMBED_MIN_INTERVAL_SEC = _env_float("GEMINI_MIN_INTERVAL_SEC", 4.0)  # Gemini often limited to ~15 RPM on default quota
-PAGE_CAP = 320   # ample for >200 articles + indexes
+CONCURRENCY = _env_int(
+    "FIRECRAWL_CONCURRENCY", 5
+)  # upgraded plan supports higher parallelism
+REQUEST_MIN_INTERVAL_SEC = _env_float(
+    "FIRECRAWL_MIN_INTERVAL_SEC", 2.0
+)  # throttle to stay within RPM limits
+EMBED_MIN_INTERVAL_SEC = _env_float(
+    "GEMINI_MIN_INTERVAL_SEC", 4.0
+)  # Gemini often limited to ~15 RPM on default quota
+PAGE_CAP = 320  # ample for >200 articles + indexes
 
 PREWIPE = _env_bool("PREWIPE", True)
 INGEST_LIMIT = _env_int("INGEST_LIMIT", 0)  # 0 = no limit
@@ -152,7 +166,9 @@ def get_supabase() -> Client:
     url = _env("SUPABASE_URL")
     key = _env("SUPABASE_SERVICE_KEY") or _env("SUPABASE_ANON_KEY")
     if not url or not key:
-        raise RuntimeError("Supabase not configured (SUPABASE_URL, SUPABASE_SERVICE_KEY/ANON missing)")
+        raise RuntimeError(
+            "Supabase not configured (SUPABASE_URL, SUPABASE_SERVICE_KEY/ANON missing)"
+        )
     return create_client(url, key)
 
 
@@ -178,7 +194,7 @@ def upload_png_bytes(supabase: Client, data: bytes, key_hint: str) -> Optional[s
         supabase.storage.from_(BUCKET_NAME).upload(
             file=data,
             path=path,
-            file_options={"content-type": "image/png", "x-upsert": "true"}
+            file_options={"content-type": "image/png", "x-upsert": "true"},
         )
         url = supabase.storage.from_(BUCKET_NAME).get_public_url(path)
         if isinstance(url, dict):
@@ -193,7 +209,10 @@ def extract_links_from_html(html: str) -> List[str]:
     soup = BeautifulSoup(html or "", "lxml")
     links: List[str] = []
     for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
+        href_value = a.get("href")
+        if not href_value:
+            continue
+        href = str(href_value).strip()
         if href.startswith("//"):
             href = "https:" + href
         if href.startswith("/"):
@@ -217,7 +236,9 @@ def is_article_url(u: str) -> bool:
 def platform_from_text(text: str) -> str:
     t = text.lower()
     has_win = any(w in t for w in ["windows", "win10", "win11", "win7", "win8"])
-    has_mac = any(m in t for m in ["macos", "mac os", "os x", "mac "])  # space to avoid "machine"
+    has_mac = any(
+        m in t for m in ["macos", "mac os", "os x", "mac "]
+    )  # space to avoid "machine"
     if has_win and has_mac:
         return "both"
     if has_win:
@@ -257,9 +278,9 @@ def get_embedding_model():
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY missing")
     from app.db.embedding_config import MODEL_NAME
+
     return gen_embeddings.GoogleGenerativeAIEmbeddings(
-        model=MODEL_NAME,
-        google_api_key=api_key
+        model=MODEL_NAME, google_api_key=api_key
     )
 
 
@@ -288,24 +309,52 @@ def to_canonical_json(
             if level <= 2:
                 if current:
                     sections.append(current)
-                current = {"heading": text, "type": "general", "paragraphs": [], "steps": []}
+                current = {
+                    "heading": text,
+                    "type": "general",
+                    "paragraphs": [],
+                    "steps": [],
+                }
         elif re.match(r"^\d+\.", line.strip()):
             if not current:
-                current = {"heading": None, "type": "howto", "paragraphs": [], "steps": []}
+                current = {
+                    "heading": None,
+                    "type": "howto",
+                    "paragraphs": [],
+                    "steps": [],
+                }
             current.setdefault("steps", []).append(line.strip())
         elif line.strip():
             if not current:
-                current = {"heading": None, "type": "general", "paragraphs": [], "steps": []}
+                current = {
+                    "heading": None,
+                    "type": "general",
+                    "paragraphs": [],
+                    "steps": [],
+                }
             current.setdefault("paragraphs", []).append(line.strip())
     if current:
         sections.append(current)
 
     label_text = " ".join(labels)
-    text_for_platform = f"{title}\n\n{label_text}\n\n{markdown}" if markdown else (meta.get("description") or label_text)
+    text_for_platform = (
+        f"{title}\n\n{label_text}\n\n{markdown}"
+        if markdown
+        else (meta.get("description") or label_text)
+    )
     platform = platform_from_text(text_for_platform)
 
-    summary = meta.get("description") or (sections[0]["paragraphs"][0] if sections and sections[0].get("paragraphs") else None)
-    last_updated = meta.get("date") or meta.get("lastModified") or zendesk_meta.get("updated_at") or None
+    summary = meta.get("description") or (
+        sections[0]["paragraphs"][0]
+        if sections and sections[0].get("paragraphs")
+        else None
+    )
+    last_updated = (
+        meta.get("date")
+        or meta.get("lastModified")
+        or zendesk_meta.get("updated_at")
+        or None
+    )
     article_id = zendesk_meta.get("id")
     if not article_id:
         m = re.search(r"/articles/(\d+)", url)
@@ -319,9 +368,10 @@ def to_canonical_json(
     try:
         soup = BeautifulSoup(html or "", "lxml")
         for img in soup.find_all("img"):
-            src = img.get("src")
+            src_value = img.get("src")
             alt = img.get("alt")
-            if src:
+            if src_value:
+                src = str(src_value)
                 if src.startswith("/"):
                     src = f"https://{HOST_ALLOW}{src}"
                 images.append({"alt": alt, "src": src})
@@ -344,7 +394,9 @@ def to_canonical_json(
         "anchors": [],
         "images": images,
         "screenshot_urls": [screenshot_url] if screenshot_url else [],
-        "checksum_sha256": hashlib.sha256((markdown or html or title or url).encode("utf-8")).hexdigest(),
+        "checksum_sha256": hashlib.sha256(
+            (markdown or html or title or url).encode("utf-8")
+        ).hexdigest(),
         "kb_json_version": "v1",
         "labels": labels,
         "zendesk": {
@@ -385,8 +437,12 @@ def download_binary(url: str) -> Optional[bytes]:
         return None
 
 
-def extract_screenshot_url(doc_dict: Dict[str, Any], supabase: Client, article_url: str) -> Optional[str]:
-    raw_shot = (doc_dict or {}).get("screenshot") or (doc_dict or {}).get("metadata", {}).get("screenshot")
+def extract_screenshot_url(
+    doc_dict: Dict[str, Any], supabase: Client, article_url: str
+) -> Optional[str]:
+    raw_shot = (doc_dict or {}).get("screenshot") or (doc_dict or {}).get(
+        "metadata", {}
+    ).get("screenshot")
     if not isinstance(raw_shot, str):
         return None
 
@@ -406,7 +462,9 @@ def extract_screenshot_url(doc_dict: Dict[str, Any], supabase: Client, article_u
     return None
 
 
-def discover_article_urls_via_bfs(fc: Firecrawl, rate_limiter: Optional[Callable[[], None]] = None) -> List[str]:
+def discover_article_urls_via_bfs(
+    fc: Firecrawl, rate_limiter: Optional[Callable[[], None]] = None
+) -> List[str]:
     seen: Set[str] = set()
     queue: List[str] = [SEED_URL]
     articles: List[str] = []
@@ -456,6 +514,7 @@ def discover_article_urls_via_bfs(fc: Firecrawl, rate_limiter: Optional[Callable
 
 def make_rate_limiter(min_interval_sec: float) -> Callable[[], None]:
     if min_interval_sec <= 0:
+
         def no_op() -> None:
             return
 
@@ -534,7 +593,9 @@ def ingest():
 
     if not urls:
         urls = discover_article_urls_via_bfs(fc, firecrawl_wait)
-        logger.warning("Zendesk API yielded no URLs; falling back to BFS-only discovery")
+        logger.warning(
+            "Zendesk API yielded no URLs; falling back to BFS-only discovery"
+        )
 
     if PAGE_CAP and len(urls) > PAGE_CAP:
         logger.warning(f"URL count {len(urls)} exceeds PAGE_CAP {PAGE_CAP}; truncating")
@@ -565,7 +626,11 @@ def ingest():
         for attempt in range(1, max_attempts + 1):
             try:
                 firecrawl_wait()
-                data = fc.scrape(url=u, formats=["markdown", "html", "screenshot"], only_main_content=True)
+                data = fc.scrape(
+                    url=u,
+                    formats=["markdown", "html", "screenshot"],
+                    only_main_content=True,
+                )
                 try:
                     doc_dict = data.model_dump()  # type: ignore[attr-defined]
                 except Exception:
@@ -588,6 +653,7 @@ def ingest():
                 embedding = emb_model.embed_query(text_for_embedding)
                 try:
                     from app.db.embedding_config import assert_dim
+
                     assert_dim(embedding, "mailbird_kb_ingest.embedding")
                 except Exception as e:
                     logger.error(str(e))
@@ -602,7 +668,9 @@ def ingest():
                     "metadata": {"source": "mailbird_support", "article": article_json},
                 }
 
-                supabase.table("mailbird_knowledge").upsert(row, on_conflict="url").execute()
+                supabase.table("mailbird_knowledge").upsert(
+                    row, on_conflict="url"
+                ).execute()
                 return (u, True, None)
             except Exception as e:
                 msg = str(e)
@@ -610,7 +678,9 @@ def ingest():
                 lower_msg = msg.lower()
                 if any(token in lower_msg for token in rate_limit_tokens):
                     wait_seconds = min(120, 15 * attempt)
-                    logger.warning(f"Rate limit on {u} (attempt {attempt}/{max_attempts}); sleeping {wait_seconds}s")
+                    logger.warning(
+                        f"Rate limit on {u} (attempt {attempt}/{max_attempts}); sleeping {wait_seconds}s"
+                    )
                     time.sleep(wait_seconds)
                     continue
                 return (u, False, msg)
@@ -646,7 +716,9 @@ def ingest():
     try:
         logs_dir = os.path.join(PROJECT_ROOT, "system_logs")
         os.makedirs(logs_dir, exist_ok=True)
-        with open(os.path.join(logs_dir, "mailbird_kb_manifest.json"), "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(logs_dir, "mailbird_kb_manifest.json"), "w", encoding="utf-8"
+        ) as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.warning(f"failed to write manifest: {e}")

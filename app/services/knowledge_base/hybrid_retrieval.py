@@ -54,7 +54,9 @@ class HybridRetrieval:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.embedder.embed_query, query)
 
-    async def _vector_search(self, embedding: List[float], top_k: int, min_score: float) -> List[Dict[str, Any]]:
+    async def _vector_search(
+        self, embedding: List[float], top_k: int, min_score: float
+    ) -> List[Dict[str, Any]]:
         if getattr(self.supabase, "mock_mode", False):
             logger.warning("Supabase mock mode active; skipping vector KB search")
             return []
@@ -103,7 +105,9 @@ class HybridRetrieval:
         }
 
         def _call_rpc():
-            return self.supabase.client.rpc("search_mailbird_knowledge_full_text", params).execute()
+            return self.supabase.client.rpc(
+                "search_mailbird_knowledge_full_text", params
+            ).execute()
 
         try:
             response = await asyncio.to_thread(_call_rpc)
@@ -121,7 +125,9 @@ class HybridRetrieval:
             logger.warning("Full-text RPC search failed: %s", exc)
             return []
 
-    async def _legacy_text_search(self, query_text: str, top_k: int) -> List[Dict[str, Any]]:
+    async def _legacy_text_search(
+        self, query_text: str, top_k: int
+    ) -> List[Dict[str, Any]]:
         safe_query = " ".join((query_text or "").split())
         if not safe_query:
             return []
@@ -146,20 +152,23 @@ class HybridRetrieval:
         pattern = f"%{pattern_body}%"
 
         def _run_query():
-            builder = (
-                self.supabase.client
-                .table("mailbird_knowledge")
-                .select("id,title,url,markdown,content,metadata,tags")
+            builder = self.supabase.client.table("mailbird_knowledge").select(
+                "id,title,url,markdown,content,metadata,tags"
             )
             try:
-                from postgrest import or_  # type: ignore
-
-                query_builder = builder.or_(f"content.ilike.{pattern},markdown.ilike.{pattern}")
+                query_builder = builder.or_(
+                    f"content.ilike.{pattern},markdown.ilike.{pattern}"
+                )
             except ImportError:
-                logger.warning("postgrest.or_ unavailable; falling back to content-only search")
+                logger.warning(
+                    "postgrest.or_ unavailable; falling back to content-only search"
+                )
                 query_builder = builder.ilike("content", pattern)
             except APIError as exc:
-                logger.warning("Combined content/markdown search failed, falling back to content: %s", exc)
+                logger.warning(
+                    "Combined content/markdown search failed, falling back to content: %s",
+                    exc,
+                )
                 query_builder = builder.ilike("content", pattern)
 
             return query_builder.limit(top_k).execute()
@@ -171,7 +180,9 @@ class HybridRetrieval:
             logger.warning("Fallback full-text KB search failed: %s", exc)
             return []
 
-    def _passes_filters(self, row: Dict[str, Any], filters: Optional[Dict[str, Any]]) -> bool:
+    def _passes_filters(
+        self, row: Dict[str, Any], filters: Optional[Dict[str, Any]]
+    ) -> bool:
         if not filters:
             return True
         metadata = row.get("metadata") or {}
@@ -186,7 +197,10 @@ class HybridRetrieval:
         target_version = filters.get("product_version")
         if target_version:
             version_val = metadata.get("product_version") or metadata.get("version")
-            if not version_val or str(target_version).lower() not in str(version_val).lower():
+            if (
+                not version_val
+                or str(target_version).lower() not in str(version_val).lower()
+            ):
                 return False
         return True
 
@@ -226,7 +240,9 @@ class HybridRetrieval:
 
         def _update(rows: List[Dict[str, Any]], offset: int) -> None:
             for rank, row in enumerate(rows):
-                key = row.get("id") or row.get("url") or (row.get("title"), rank + offset)
+                key = (
+                    row.get("id") or row.get("url") or (row.get("title"), rank + offset)
+                )
                 fused_score = 1.0 / (constant + rank + 1)
                 scores[key] = scores.get(key, 0.0) + fused_score
                 if key not in blended:
@@ -237,5 +253,5 @@ class HybridRetrieval:
         _update(vector_rows, 0)
         _update(text_rows, len(vector_rows))
 
-        ranked_keys = sorted(scores, key=scores.get, reverse=True)
+        ranked_keys = sorted(scores, key=lambda k: scores.get(k, 0.0), reverse=True)
         return [blended[key] for key in ranked_keys[:top_k]]

@@ -22,12 +22,11 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage
 from loguru import logger
 
 # Import shared utilities from canonical location
@@ -38,13 +37,16 @@ if TYPE_CHECKING:
 
 try:
     from langchain.agents.middleware import AgentMiddleware
+
     _MIDDLEWARE_AVAILABLE = True
 except ImportError:
     _MIDDLEWARE_AVAILABLE = False
-    AgentMiddleware = object  # type: ignore
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
 
 
-class HandoffCaptureMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else object):
+class HandoffCaptureMiddleware(AgentMiddleware):
     """Middleware that captures handoff context before summarization.
 
     This middleware monitors context size and captures important session
@@ -89,7 +91,9 @@ class HandoffCaptureMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obj
         self.workspace_store = workspace_store
         self.context_window = context_window
         self.capture_threshold = int(context_window * capture_threshold_fraction)
-        self.summarization_threshold = int(context_window * summarization_threshold_fraction)
+        self.summarization_threshold = int(
+            context_window * summarization_threshold_fraction
+        )
         self.max_summary_tokens = max_summary_tokens
 
         self._capture_pending = False
@@ -130,12 +134,12 @@ class HandoffCaptureMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obj
 
         # Run async capture in event loop
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             import concurrent.futures
+
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 pool.submit(
-                    asyncio.run,
-                    self._capture_handoff(messages, scratchpad)
+                    asyncio.run, self._capture_handoff(messages, scratchpad)
                 ).result()
         except RuntimeError:
             asyncio.run(self._capture_handoff(messages, scratchpad))
@@ -267,13 +271,23 @@ class HandoffCaptureMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obj
                 content = self._get_message_text(msg)
                 if content:
                     # Look for conclusion-like statements
-                    for sentence in re.split(r'[.!?]', content):
+                    for sentence in re.split(r"[.!?]", content):
                         sentence = sentence.strip()
                         if len(sentence) > 50 and len(sentence) < 300:
                             # Prefer sentences with key phrases
-                            key_phrases = ["found", "discovered", "concluded", "determined",
-                                         "the solution", "fixed", "implemented", "completed"]
-                            if any(phrase in sentence.lower() for phrase in key_phrases):
+                            key_phrases = [
+                                "found",
+                                "discovered",
+                                "concluded",
+                                "determined",
+                                "the solution",
+                                "fixed",
+                                "implemented",
+                                "completed",
+                            ]
+                            if any(
+                                phrase in sentence.lower() for phrase in key_phrases
+                            ):
                                 if sentence not in ai_points:
                                     ai_points.append(sentence)
                                     if len(ai_points) >= 3:
@@ -303,10 +317,12 @@ class HandoffCaptureMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obj
         if "todos" in scratchpad:
             for todo in scratchpad["todos"]:
                 if isinstance(todo, dict):
-                    todos.append({
-                        "content": todo.get("content", str(todo)),
-                        "status": todo.get("status", "pending"),
-                    })
+                    todos.append(
+                        {
+                            "content": todo.get("content", str(todo)),
+                            "status": todo.get("status", "pending"),
+                        }
+                    )
                 else:
                     todos.append({"content": str(todo), "status": "pending"})
 
@@ -337,9 +353,9 @@ class HandoffCaptureMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obj
             for line in lines:
                 line = line.strip()
                 # Match numbered steps like "1.", "1)", "Step 1:"
-                if re.match(r'^(\d+[.)\]]|\*|-|•|Step \d)', line):
+                if re.match(r"^(\d+[.)\]]|\*|-|•|Step \d)", line):
                     # Clean up the line
-                    clean = re.sub(r'^(\d+[.)\]]|\*|-|•|Step \d+:?)\s*', '', line)
+                    clean = re.sub(r"^(\d+[.)\]]|\*|-|•|Step \d+:?)\s*", "", line)
                     if clean and len(clean) < 200:
                         if clean not in next_steps:
                             next_steps.append(clean)
@@ -405,7 +421,7 @@ class HandoffCaptureMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obj
             Formatted markdown progress notes.
         """
         lines = [
-            f"# Session Progress Notes",
+            "# Session Progress Notes",
             f"_Last updated: {handoff.get('timestamp', 'Unknown')}_",
             f"_Capture #{handoff.get('capture_number', 1)}_",
             "",

@@ -21,7 +21,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from langchain_core.tools import BaseTool
 
@@ -281,8 +281,10 @@ class FirecrawlMCPClient:
                 if self._initialized and self._client:
                     return True
 
-                config = {"firecrawl": _build_firecrawl_mcp_config(resolved_key)}
-                self._client = MultiServerMCPClient(config)
+                config: Dict[str, Any] = {
+                    "firecrawl": _build_firecrawl_mcp_config(resolved_key)
+                }
+                self._client = MultiServerMCPClient(cast(Any, config))
                 self._initialized = True
                 self._tools = []
                 logger.info("mcp_client_initialized", server="firecrawl")
@@ -372,21 +374,22 @@ class FirecrawlMCPClient:
             tool_name, config.rate_limit_rpm
         )
         logging_interceptor = await self._get_logging_interceptor()
-        retry_interceptor = await create_retry_interceptor(
-            max(1, config.retry_count)
-        )
+        retry_interceptor = await create_retry_interceptor(max(1, config.retry_count))
         cache_ttl = _resolve_cache_ttl(tool_name, config)
         cache_interceptor = await create_cache_interceptor(
             self._cache_namespace, tool_name, cache_ttl
         )
 
-        interceptors = [
+        raw_interceptors = [
             cache_interceptor,
             rate_interceptor,
             retry_interceptor,
             logging_interceptor,
         ]
-        interceptors = [i for i in interceptors if i is not None]
+        interceptors = cast(
+            List[Callable[..., Any]],
+            [i for i in raw_interceptors if i is not None],
+        )
 
         request = MCPToolRequest(name=tool_name, args=args)
         result = await _apply_interceptors(request, handler, interceptors)
@@ -473,7 +476,8 @@ def get_tool_config(tool_name: str) -> MCPToolConfig:
         MCPToolConfig with tool-specific settings.
     """
     return FIRECRAWL_TOOL_CONFIGS.get(
-        tool_name, MCPToolConfig(name=tool_name)  # Default config
+        tool_name,
+        MCPToolConfig(name=tool_name),  # Default config
     )
 
 
@@ -508,14 +512,21 @@ async def _apply_interceptors(
     if not interceptors:
         return await handler(request)
 
-    async def call(req: MCPToolRequest) -> Any:
+    async def _call(req: MCPToolRequest) -> Any:
         return await handler(req)
 
-    for interceptor in reversed(interceptors):
-        next_handler = call
-
-        async def call(req: MCPToolRequest, interceptor=interceptor, next_handler=next_handler):
+    def _wrap_interceptor(
+        interceptor: Callable[[MCPToolRequest, Callable[[MCPToolRequest], Any]], Any],
+        next_handler: Callable[[MCPToolRequest], Any],
+    ) -> Callable[[MCPToolRequest], Any]:
+        async def _wrapped(req: MCPToolRequest) -> Any:
             return await interceptor(req, next_handler)
+
+        return _wrapped
+
+    call: Callable[[MCPToolRequest], Any] = _call
+    for interceptor in reversed(interceptors):
+        call = _wrap_interceptor(interceptor, call)
 
     return await call(request)
 
@@ -535,10 +546,11 @@ async def create_rate_limiting_interceptor(
         Interceptor function for rate limiting.
     """
     if rate_limit_rpm <= 0:
-        async def interceptor(request, handler):
+
+        async def noop_interceptor(request, handler):
             return await handler(request)
 
-        return interceptor
+        return noop_interceptor
 
     # Simple token bucket implementation
     tokens = float(rate_limit_rpm)
@@ -601,7 +613,9 @@ async def create_logging_interceptor() -> Callable:
     return interceptor
 
 
-async def create_retry_interceptor(max_retries: int = 3, base_delay: float = 1.0) -> Callable:
+async def create_retry_interceptor(
+    max_retries: int = 3, base_delay: float = 1.0
+) -> Callable:
     """Create a retry interceptor with exponential backoff.
 
     Args:
@@ -677,7 +691,9 @@ async def create_cache_interceptor(
             return cached
 
         result = await handler(request)
-        if isinstance(result, dict) and (result.get("error") or result.get("success") is False):
+        if isinstance(result, dict) and (
+            result.get("error") or result.get("success") is False
+        ):
             return result
         _cache_set(cache_key, ttl_sec, result)
         logger.info("mcp_tool_cache_store", tool_name=request.name)

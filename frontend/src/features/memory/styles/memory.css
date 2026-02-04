@@ -8,7 +8,7 @@
 /* Import Fonts - Distinctive Typography            */
 /* ================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap");
 
 /* ================================================ */
 /* CSS Variables - Mailbird Brand Colors            */
@@ -16,7 +16,7 @@
 
 :root {
   /* Core Colors - Mailbird Blue Primary */
-  --memory-primary: #0078D4;
+  --memory-primary: #0078d4;
   --memory-primary-hover: #1a8ae6;
   --memory-primary-muted: rgba(0, 120, 212, 0.15);
   --memory-primary-glow: rgba(0, 120, 212, 0.4);
@@ -46,7 +46,7 @@
   --memory-danger-muted: rgba(239, 68, 68, 0.15);
 
   /* Entity Colors - Updated palette */
-  --entity-product: #0078D4;
+  --entity-product: #0078d4;
   --entity-feature: #10b981;
   --entity-issue: #ef4444;
   --entity-solution: #22c55e;
@@ -68,8 +68,8 @@
   --memory-transition-fast: all 0.15s ease;
 
   /* Typography */
-  --font-display: 'Plus Jakarta Sans', -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+  --font-display: "Plus Jakarta Sans", -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", monospace;
 }
 
 /* ================================================ */
@@ -221,7 +221,7 @@
 }
 
 .memory-nav-item.active::before {
-  content: '';
+  content: "";
   position: absolute;
   left: 0;
   top: 50%;
@@ -893,7 +893,7 @@
 }
 
 .stats-card::before {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   left: 0;
@@ -916,14 +916,23 @@
 
 .stats-card-skeleton {
   height: 100px;
-  background: linear-gradient(90deg, var(--memory-surface) 25%, var(--memory-surface-hover) 50%, var(--memory-surface) 75%);
+  background: linear-gradient(
+    90deg,
+    var(--memory-surface) 25%,
+    var(--memory-surface-hover) 50%,
+    var(--memory-surface) 75%
+  );
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
 
 @keyframes shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .stats-card-icon {
@@ -988,7 +997,7 @@
   font-size: 32px;
   font-weight: 700;
   color: var(--memory-text);
-  font-feature-settings: 'tnum';
+  font-feature-settings: "tnum";
   letter-spacing: -0.02em;
   line-height: 1;
 }
@@ -1072,13 +1081,25 @@
   transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.stats-bar-success { background: var(--memory-success); }
-.stats-bar-warning { background: var(--memory-warning); }
-.stats-bar-danger { background: var(--memory-danger); }
+.stats-bar-success {
+  background: var(--memory-success);
+}
+.stats-bar-warning {
+  background: var(--memory-warning);
+}
+.stats-bar-danger {
+  background: var(--memory-danger);
+}
 
-.stats-icon-success { color: var(--memory-success); }
-.stats-icon-warning { color: var(--memory-warning); }
-.stats-icon-danger { color: var(--memory-danger); }
+.stats-icon-success {
+  color: var(--memory-success);
+}
+.stats-icon-warning {
+  color: var(--memory-warning);
+}
+.stats-icon-danger {
+  color: var(--memory-danger);
+}
 
 /* ================================================ */
 /* Entity Type Filter                               */
@@ -1167,7 +1188,9 @@
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .memory-loading p {
@@ -1226,21 +1249,41 @@
   min-height: 600px;
   /* Deep space gradient optimized for graph contrast */
   background:
-    radial-gradient(ellipse at 50% 88%, rgba(255, 204, 128, 0.05) 0%, transparent 58%),
-    radial-gradient(ellipse at 30% 18%, rgba(0, 120, 212, 0.045) 0%, transparent 55%),
-    radial-gradient(ellipse at 70% 78%, rgba(34, 211, 238, 0.025) 0%, transparent 55%),
+    radial-gradient(
+      ellipse at 50% 88%,
+      rgba(255, 204, 128, 0.05) 0%,
+      transparent 58%
+    ),
+    radial-gradient(
+      ellipse at 30% 18%,
+      rgba(0, 120, 212, 0.045) 0%,
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse at 70% 78%,
+      rgba(34, 211, 238, 0.025) 0%,
+      transparent 55%
+    ),
     radial-gradient(ellipse at 50% 50%, #0a0a12 0%, #04040a 100%);
   overflow: hidden;
 }
 
 .memory-graph-container::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse at 50% 105%, rgba(34, 211, 238, 0.06) 0%, transparent 62%),
-    radial-gradient(ellipse at 20% 30%, rgba(255, 205, 64, 0.03) 0%, transparent 55%),
+    radial-gradient(
+      ellipse at 50% 105%,
+      rgba(34, 211, 238, 0.06) 0%,
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse at 20% 30%,
+      rgba(255, 205, 64, 0.03) 0%,
+      transparent 55%
+    ),
     repeating-linear-gradient(
       135deg,
       rgba(255, 255, 255, 0.02) 0px,
@@ -1253,17 +1296,41 @@
 
 .memory-graph-container--celebrate {
   background:
-    radial-gradient(ellipse at 55% 15%, rgba(255, 152, 101, 0.1) 0%, transparent 52%),
-    radial-gradient(ellipse at 45% 88%, rgba(255, 205, 64, 0.06) 0%, transparent 62%),
-    radial-gradient(ellipse at 78% 62%, rgba(0, 120, 212, 0.03) 0%, transparent 55%),
+    radial-gradient(
+      ellipse at 55% 15%,
+      rgba(255, 152, 101, 0.1) 0%,
+      transparent 52%
+    ),
+    radial-gradient(
+      ellipse at 45% 88%,
+      rgba(255, 205, 64, 0.06) 0%,
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse at 78% 62%,
+      rgba(0, 120, 212, 0.03) 0%,
+      transparent 55%
+    ),
     radial-gradient(ellipse at 50% 50%, #0b0a12 0%, #04040a 100%);
 }
 
 .memory-graph-container--surface-gaps {
   background:
-    radial-gradient(ellipse at 55% 18%, rgba(96, 165, 250, 0.085) 0%, transparent 55%),
-    radial-gradient(ellipse at 45% 88%, rgba(168, 85, 247, 0.05) 0%, transparent 62%),
-    radial-gradient(ellipse at 25% 75%, rgba(34, 211, 238, 0.028) 0%, transparent 58%),
+    radial-gradient(
+      ellipse at 55% 18%,
+      rgba(96, 165, 250, 0.085) 0%,
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse at 45% 88%,
+      rgba(168, 85, 247, 0.05) 0%,
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse at 25% 75%,
+      rgba(34, 211, 238, 0.028) 0%,
+      transparent 58%
+    ),
     radial-gradient(ellipse at 50% 50%, #090a16 0%, #04040a 100%);
 }
 
@@ -2350,7 +2417,7 @@
   gap: 10px;
 }
 
-.relationship-editor__slider input[type='range'] {
+.relationship-editor__slider input[type="range"] {
   width: 100%;
 }
 
@@ -2447,7 +2514,8 @@
   -webkit-line-clamp: 3;
 }
 
-.relationship-editor__evidence-card.is-expanded .relationship-editor__evidence-card-body {
+.relationship-editor__evidence-card.is-expanded
+  .relationship-editor__evidence-card-body {
   display: block;
   -webkit-line-clamp: unset;
   -webkit-box-orient: unset;
@@ -3351,7 +3419,7 @@
   gap: 10px;
 }
 
-.cluster-preview__slider input[type='range'] {
+.cluster-preview__slider input[type="range"] {
   width: 100%;
 }
 
@@ -3631,7 +3699,7 @@
 }
 
 .node-related-item.is-edited::before {
-  content: '';
+  content: "";
   position: absolute;
   top: 12px;
   left: 12px;
@@ -4110,9 +4178,18 @@
   font-family: var(--font-mono);
 }
 
-.confidence-badge-sm { padding: 2px 8px; font-size: 11px; }
-.confidence-badge-md { padding: 4px 10px; font-size: 12px; }
-.confidence-badge-lg { padding: 6px 12px; font-size: 14px; }
+.confidence-badge-sm {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.confidence-badge-md {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.confidence-badge-lg {
+  padding: 6px 12px;
+  font-size: 14px;
+}
 
 .confidence-badge-indicator {
   width: 6px;
@@ -4379,14 +4456,24 @@
 /* Accent gradient bar at top */
 .add-memory-accent {
   height: 3px;
-  background: linear-gradient(90deg, var(--memory-primary) 0%, #00a6ff 50%, var(--memory-primary) 100%);
+  background: linear-gradient(
+    90deg,
+    var(--memory-primary) 0%,
+    #00a6ff 50%,
+    var(--memory-primary) 100%
+  );
   background-size: 200% 100%;
   animation: shimmer-accent 3s ease infinite;
 }
 
 @keyframes shimmer-accent {
-  0%, 100% { background-position: 200% 0; }
-  50% { background-position: 0% 0; }
+  0%,
+  100% {
+    background-position: 200% 0;
+  }
+  50% {
+    background-position: 0% 0;
+  }
 }
 
 /* Header */
@@ -4745,12 +4832,10 @@
   min-height: 0;
 }
 
-
 .add-memory-tool-btn.active {
   background: rgba(255, 255, 255, 0.08);
   color: var(--memory-text);
 }
-
 
 .add-memory-toolbar-spacer {
   flex: 1;
@@ -4898,7 +4983,6 @@
   background: rgba(255, 255, 255, 0.06);
   color: var(--memory-text);
 }
-
 
 /* Metadata Toggle */
 .add-memory-metadata-toggle {
@@ -5542,8 +5626,6 @@
     max-width: 95vw;
     min-height: auto;
   }
-
-
 
   .add-memory-footer {
     flex-wrap: wrap;

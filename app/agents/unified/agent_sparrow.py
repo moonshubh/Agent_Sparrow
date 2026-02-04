@@ -11,10 +11,16 @@ import re
 import textwrap
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Iterable
+from typing import TYPE_CHECKING, Any, Optional, Iterable, cast
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.config import RunnableConfig, get_stream_writer
 from loguru import logger
 
@@ -25,8 +31,13 @@ if TYPE_CHECKING:
 try:
     from langchain.agents.middleware import TodoListMiddleware
     from langchain.agents.middleware.summarization import SummarizationMiddleware
-    from deepagents.middleware.subagents import SubAgentMiddleware, TASK_SYSTEM_PROMPT
-    from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+    from deepagents.middleware.subagents import (  # type: ignore[import-untyped]
+        SubAgentMiddleware,
+        TASK_SYSTEM_PROMPT,
+    )
+    from deepagents.middleware.patch_tool_calls import (  # type: ignore[import-untyped]
+        PatchToolCallsMiddleware,
+    )
     from app.agents.harness.middleware import (
         ToolResultEvictionMiddleware,
         WorkspaceWriteSandboxMiddleware,
@@ -45,14 +56,18 @@ try:
 
     class SubAgentTodoListMiddleware(TodoListMiddleware):
         """Distinct marker to avoid duplicate detection."""
+
         pass
 
     class SubAgentSummarizationMiddleware(SummarizationMiddleware):
         """Subagent-specific summarization variant (legacy fallback)."""
+
         pass
 
 except ImportError as e:
-    logger.warning("Middleware not available ({}) - agent will run without middleware", e)
+    logger.warning(
+        "Middleware not available ({}) - agent will run without middleware", e
+    )
     MIDDLEWARE_AVAILABLE = False
     CONTEXT_MIDDLEWARE_AVAILABLE = False
 
@@ -100,8 +115,11 @@ from .thread_state import (
 )
 from app.agents.skills import get_skills_registry
 
+ResourceExhausted: type[BaseException] | None
 try:
-    from google.api_core.exceptions import ResourceExhausted
+    from google.api_core.exceptions import ResourceExhausted as _ResourceExhausted
+
+    ResourceExhausted = _ResourceExhausted
 except Exception:  # pragma: no cover - optional dependency
     ResourceExhausted = None
 
@@ -121,8 +139,8 @@ configure_llm_cache()
 # Provider-specific token limits for summarization middleware
 # Set conservatively to prevent quota/context overflow
 PROVIDER_TOKEN_LIMITS: dict[str, int] = {
-    "google": 50000,      # Gemini 3 Pro has 1M/min quota - keep very low
-    "xai": 80000,         # Grok ~400K context → 80K summarization threshold
+    "google": 50000,  # Gemini 3 Pro has 1M/min quota - keep very low
+    "xai": 80000,  # Grok ~400K context → 80K summarization threshold
     "openrouter": 50000,  # OpenRouter 262K context → 50K summarization threshold
 }
 DEFAULT_TOKEN_LIMIT = 50000  # Conservative default for unknown providers
@@ -156,6 +174,7 @@ def _select_non_google_fallback_provider() -> str | None:
         return "openrouter"
     return None
 
+
 # -----------------------------------------------------------------------------
 # Fast Task Classification (keyword-based, <5ms vs ~200ms for attachment scan)
 # -----------------------------------------------------------------------------
@@ -163,16 +182,30 @@ def _select_non_google_fallback_provider() -> str | None:
 TASK_TYPE_PATTERNS: dict[str, list[str]] = {
     "log_analysis": [
         # File extensions and explicit log mentions
-        r"\.log\b", r"\.txt\b.*log", r"log\s*file",
+        r"\.log\b",
+        r"\.txt\b.*log",
+        r"log\s*file",
         # Error/debug indicators
-        r"\berror\b", r"\bexception\b", r"traceback", r"stack\s*trace",
-        r"\bcrash", r"\bfail(?:ed|ure)?\b", r"\bdebug\b",
+        r"\berror\b",
+        r"\bexception\b",
+        r"traceback",
+        r"stack\s*trace",
+        r"\bcrash",
+        r"\bfail(?:ed|ure)?\b",
+        r"\bdebug\b",
         # Email client specific (Mailbird context)
-        r"\bimap\b", r"\bsmtp\b", r"\bpop3?\b", r"oauth.*fail",
-        r"connection.*(?:timeout|refused|lost)", r"ssl.*(?:error|fail)",
-        r"sync.*(?:error|fail)", r"authentication.*fail",
+        r"\bimap\b",
+        r"\bsmtp\b",
+        r"\bpop3?\b",
+        r"oauth.*fail",
+        r"connection.*(?:timeout|refused|lost)",
+        r"ssl.*(?:error|fail)",
+        r"sync.*(?:error|fail)",
+        r"authentication.*fail",
         # Log-like patterns
-        r"\d{4}-\d{2}-\d{2}.*(?:error|warn|info)", r"\[error\]", r"\[warn",
+        r"\d{4}-\d{2}-\d{2}.*(?:error|warn|info)",
+        r"\[error\]",
+        r"\[warn",
     ],
 }
 
@@ -195,7 +228,11 @@ def _fast_classify_task(message: str) -> Optional[str]:
     for task_type, patterns in _COMPILED_TASK_PATTERNS.items():
         for pattern in patterns:
             if pattern.search(message):
-                logger.debug("fast_task_classification", task_type=task_type, pattern=pattern.pattern[:30])
+                logger.debug(
+                    "fast_task_classification",
+                    task_type=task_type,
+                    pattern=pattern.pattern[:30],
+                )
                 return task_type
 
     return None
@@ -210,7 +247,8 @@ def _extract_last_user_message(state: GraphState) -> str:
             if isinstance(content, list):
                 # Handle multimodal messages
                 return " ".join(
-                    part.get("text", "") for part in content
+                    part.get("text", "")
+                    for part in content
                     if isinstance(part, dict) and part.get("type") == "text"
                 )
             return content
@@ -220,6 +258,7 @@ def _extract_last_user_message(state: GraphState) -> str:
 @dataclass
 class AgentRuntimeConfig:
     """Resolved runtime configuration for a single run."""
+
     provider: str
     model: str
     task_type: str
@@ -228,6 +267,7 @@ class AgentRuntimeConfig:
 # -----------------------------------------------------------------------------
 # Configuration and Model Building
 # -----------------------------------------------------------------------------
+
 
 def _normalize_runtime_overrides(state: GraphState) -> str:
     """Normalize provider/model overrides using models.yaml."""
@@ -283,10 +323,14 @@ def _resolve_runtime_config(state: GraphState) -> AgentRuntimeConfig:
         if provider in {"xai", "openrouter"}:
             resolved_model = resolve_coordinator_config(config, provider).model_id
         else:
-            resolved_model = model_router.select_model(task_type, check_availability=False)
+            resolved_model = model_router.select_model(
+                task_type, check_availability=False
+            )
         state.model = resolved_model
 
-    return AgentRuntimeConfig(provider=provider, model=resolved_model, task_type=task_type)
+    return AgentRuntimeConfig(
+        provider=provider, model=resolved_model, task_type=task_type
+    )
 
 
 def _determine_task_type(state: GraphState) -> str:
@@ -309,7 +353,9 @@ def _determine_task_type(state: GraphState) -> str:
     attachments = getattr(state, "attachments", []) or []
 
     if fast_task == "log_analysis" and not attachments:
-        logger.info("task_type_fast_path", task_type="log_analysis", trigger="keyword_match")
+        logger.info(
+            "task_type_fast_path", task_type="log_analysis", trigger="keyword_match"
+        )
         forwarded_props["agent_type"] = "log_analysis"
         forwarded_props["task_detection_method"] = "keyword"
         state.forwarded_props = forwarded_props
@@ -321,7 +367,11 @@ def _determine_task_type(state: GraphState) -> str:
     if attachments:
         detection = _attachments_indicate_logs(state)
         if detection.get("has_log"):
-            logger.info("task_type_slow_path", task_type="log_analysis", trigger="attachment_scan")
+            logger.info(
+                "task_type_slow_path",
+                task_type="log_analysis",
+                trigger="attachment_scan",
+            )
             forwarded_props["agent_type"] = "log_analysis"
             forwarded_props["log_detection"] = detection
             forwarded_props["task_detection_method"] = "attachment"
@@ -414,6 +464,7 @@ async def _ensure_model_selection(state: GraphState) -> ModelSelectionResult:
         )
         # Create a minimal selection result for non-Gemini models
         from .model_health import ModelHealth
+
         health = ModelHealth(
             bucket=bucket_name,
             model=state.model,
@@ -528,7 +579,9 @@ def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str
         # Build context for auto-detection
         forwarded_props = getattr(state, "forwarded_props", {}) or {}
         scratchpad = getattr(state, "scratchpad", {}) or {}
-        system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+        system_bucket = (
+            scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+        )
 
         # Extract last user message for skill detection
         user_message = ""
@@ -539,7 +592,8 @@ def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str
                 if isinstance(user_message, list):
                     # Handle multimodal messages
                     user_message = " ".join(
-                        part.get("text", "") for part in user_message
+                        part.get("text", "")
+                        for part in user_message
                         if isinstance(part, dict) and part.get("type") == "text"
                     )
                 break
@@ -547,7 +601,8 @@ def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str
         skill_context = {
             "message": user_message,  # For auto-detection
             "is_final_response": True,  # Default to user-facing for coordinator
-            "task_type": system_bucket.get("task_type") or forwarded_props.get("task_type"),
+            "task_type": system_bucket.get("task_type")
+            or forwarded_props.get("task_type"),
             "is_internal_call": forwarded_props.get("is_internal_call", False),
             "is_zendesk_ticket": forwarded_props.get("is_zendesk_ticket", False),
         }
@@ -587,7 +642,6 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
     is_zendesk = (state.forwarded_props or {}).get("is_zendesk_ticket") is True
     tools = list(get_registered_tools())
 
-    workspace_store = None
     # Inject workspace tools so agents can read persisted context (e.g. playbooks,
     # similar scenarios, evicted tool results) without keeping large blobs in memory.
     workspace_tools: list[Any] = []
@@ -603,7 +657,9 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
             create_write_workspace_file,
         )
 
-        session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
+        session_id = getattr(state, "session_id", None) or getattr(
+            state, "trace_id", None
+        )
         user_id = getattr(state, "user_id", None)
         forwarded = state.forwarded_props or {}
         customer_id = None
@@ -625,9 +681,11 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
             create_search_workspace(store),
         ]
         if not is_zendesk:
-            workspace_tools.extend(
-                [create_write_workspace_file(store), create_append_workspace_file(store)]
-            )
+            extra_workspace_tools = [
+                create_write_workspace_file(store),
+                create_append_workspace_file(store),
+            ]
+            workspace_tools.extend(extra_workspace_tools)
         tools.extend(workspace_tools)
         logger.debug(
             "workspace_tools_injected",
@@ -660,7 +718,7 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         except Exception as exc:  # pragma: no cover - best effort only
             logger.debug("subagent_workspace_bridge_unavailable", error=str(exc)[:180])
     logger.debug("tool_registry_selected", mode="support" if is_zendesk else "standard")
-    subagents = get_subagent_specs(
+    subagents: list[Any] = get_subagent_specs(
         provider=runtime.provider,
         zendesk=is_zendesk,
         workspace_tools=workspace_tools,
@@ -686,24 +744,33 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
                 ticket_id=ticket_id,
                 subagents=subagent_models,
             )
-        except (KeyError, AttributeError, TypeError) as exc:  # pragma: no cover - logging only
+        except (
+            KeyError,
+            AttributeError,
+            TypeError,
+        ) as exc:  # pragma: no cover - logging only
             logger.debug("zendesk_subagent_models_log_failed", error=str(exc)[:180])
 
     todo_prompt = TODO_PROMPT if "TODO_PROMPT" in globals() else ""
     # Build coordinator prompt with dynamic model identification
     coordinator_prompt = get_coordinator_prompt(
         model=runtime.model,
-        provider=state.provider,
+        provider=state.provider or runtime.provider,
         zendesk=is_zendesk,
     )
 
     # Build skills context for auto-detected writing/empathy skills
     skills_context = _build_skills_context(state, runtime)
 
-    system_prompt_parts = [coordinator_prompt, skills_context, todo_prompt, BASE_AGENT_PROMPT]
+    system_prompt_parts = [
+        coordinator_prompt,
+        skills_context,
+        todo_prompt,
+        BASE_AGENT_PROMPT,
+    ]
     system_prompt = "\n\n".join(part for part in system_prompt_parts if part)
 
-    middleware_stack = []
+    middleware_stack: list[Any] = []
     if MIDDLEWARE_AVAILABLE:
         # Get model context window for fraction-based summarization
         # Pass provider for better fallback on unknown models (xAI, OpenRouter, etc.)
@@ -790,7 +857,11 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
             model=runtime.model,
             context_window=model_context_window,
             summarization_trigger=f"{0.7 * 100:.0f}% ({int(model_context_window * 0.7):,} tokens)",
-            context_edit_trigger=f"{0.6 * 100:.0f}% ({int(model_context_window * 0.6):,} tokens)" if CONTEXT_MIDDLEWARE_AVAILABLE else "disabled",
+            context_edit_trigger=(
+                f"{0.6 * 100:.0f}% ({int(model_context_window * 0.6):,} tokens)"
+                if CONTEXT_MIDDLEWARE_AVAILABLE
+                else "disabled"
+            ),
             middleware_count=len(default_middleware),
         )
 
@@ -811,7 +882,9 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
                 from .provider_factory import build_chat_model
 
                 config = get_models_config()
-                subagent_cfg = resolve_subagent_config(config, "_default", zendesk=is_zendesk)
+                subagent_cfg = resolve_subagent_config(
+                    config, "_default", zendesk=is_zendesk
+                )
                 subagent_default_model = build_chat_model(
                     provider=subagent_cfg.provider or "openrouter",
                     model=str(subagent_cfg.model_id),
@@ -850,9 +923,11 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
             [mw.name for mw in middleware_stack],
         )
     else:
-        logger.warning("Running unified agent without middleware - functionality may be limited")
+        logger.warning(
+            "Running unified agent without middleware - functionality may be limited"
+        )
 
-    agent = create_agent(
+    agent: Any = create_agent(
         chat_model,
         system_prompt=system_prompt,
         tools=tools,
@@ -866,12 +941,16 @@ def _build_runnable_config(
     state: GraphState,
     config: Optional[RunnableConfig],
     runtime: AgentRuntimeConfig,
-) -> dict[str, Any]:
+) -> RunnableConfig:
     """Build the runnable config for agent invocation."""
     base_config: dict[str, Any] = dict(config or {})
     recursion_limit = base_config.get("recursion_limit")
     try:
-        resolved_limit = int(recursion_limit) if recursion_limit is not None else DEFAULT_RECURSION_LIMIT
+        resolved_limit = (
+            int(recursion_limit)
+            if recursion_limit is not None
+            else DEFAULT_RECURSION_LIMIT
+        )
     except (ValueError, TypeError):
         resolved_limit = DEFAULT_RECURSION_LIMIT
     # Prevent upstream configs (e.g., adapters) from lowering recursion_limit too far.
@@ -882,11 +961,12 @@ def _build_runnable_config(
     configurable = dict(base_config.get("configurable") or {})
     configurable.setdefault("thread_id", state.session_id)
     configurable.setdefault("trace_id", state.trace_id)
-    configurable.update({
+    configurable_updates = {
         "provider": state.provider,
         "model": state.model,
         "use_server_memory": state.use_server_memory,
-    })
+    }
+    configurable.update(configurable_updates)
 
     metadata = dict(configurable.get("metadata") or {})
     metadata.setdefault("session_id", state.session_id)
@@ -901,11 +981,16 @@ def _build_runnable_config(
         metadata.setdefault("model_selection", model_selection)
 
     # Add predict_state metadata for GenUI
-    metadata.setdefault("predict_state", [{
-        "state_key": "steps",
-        "tool": "generate_task_steps_generative_ui",
-        "tool_argument": "steps",
-    }])
+    metadata.setdefault(
+        "predict_state",
+        [
+            {
+                "state_key": "steps",
+                "tool": "generate_task_steps_generative_ui",
+                "tool_argument": "steps",
+            }
+        ],
+    )
 
     configurable["metadata"] = metadata
 
@@ -929,10 +1014,12 @@ def _build_runnable_config(
             configurable.setdefault("endpoint", settings.langsmith_endpoint)
 
     base_config["configurable"] = configurable
-    return base_config
+    return cast(RunnableConfig, base_config)
 
 
-async def _maybe_autoroute_log_analysis(state: GraphState, helper: GemmaHelper) -> Optional[SystemMessage]:
+async def _maybe_autoroute_log_analysis(
+    state: GraphState, helper: GemmaHelper
+) -> Optional[SystemMessage]:
     """Inject an auto-routing instruction when log attachments are present.
 
     Phase 3 requirement: one subagent run per file (parallel) via DeepAgents `task`.
@@ -959,14 +1046,22 @@ async def _maybe_autoroute_log_analysis(state: GraphState, helper: GemmaHelper) 
     file_names: list[str] = []
     for att in attachments:
         name = getattr(att, "name", None) if att is not None else None
-        if isinstance(name, str) and name.strip() and name.strip().lower() in candidate_names:
+        if (
+            isinstance(name, str)
+            and name.strip()
+            and name.strip().lower() in candidate_names
+        ):
             file_names.append(name.strip())
 
     # Fallback if we couldn't map candidates back to the original filenames
     if not file_names and candidate_names:
         file_names = sorted(name for name in candidate_names if name)
 
-    files_block = "\n".join(f"- {name}" for name in file_names) if file_names else "- (unnamed attachments)"
+    files_block = (
+        "\n".join(f"- {name}" for name in file_names)
+        if file_names
+        else "- (unnamed attachments)"
+    )
 
     forwarded_props["autorouted"] = True
     state.forwarded_props = forwarded_props
@@ -989,6 +1084,7 @@ async def _maybe_autoroute_log_analysis(state: GraphState, helper: GemmaHelper) 
 # -----------------------------------------------------------------------------
 # Memory Functions
 # -----------------------------------------------------------------------------
+
 
 def _memory_is_enabled(state: GraphState) -> bool:
     """Return True when memory should run; emit diagnostics when misconfigured."""
@@ -1042,9 +1138,22 @@ def _coerce_visible_assistant_text(content: Any) -> str:
     if isinstance(content, dict):
         raw_type = content.get("type", "")
         block_type = raw_type.lower() if isinstance(raw_type, str) else ""
-        if block_type in ("thinking", "reasoning", "thought", "signature", "thought_signature"):
+        if block_type in (
+            "thinking",
+            "reasoning",
+            "thought",
+            "signature",
+            "thought_signature",
+        ):
             return ""
-        if block_type in ("tool", "tool_use", "tool_call", "tool_calls", "function_call", "function"):
+        if block_type in (
+            "tool",
+            "tool_use",
+            "tool_call",
+            "tool_calls",
+            "function_call",
+            "function",
+        ):
             return ""
         text = content.get("text")
         if isinstance(text, str) and text.strip():
@@ -1065,9 +1174,22 @@ def _coerce_visible_assistant_text(content: Any) -> str:
             if isinstance(part, dict):
                 raw_type = part.get("type", "")
                 block_type = raw_type.lower() if isinstance(raw_type, str) else ""
-                if block_type in ("thinking", "reasoning", "thought", "signature", "thought_signature"):
+                if block_type in (
+                    "thinking",
+                    "reasoning",
+                    "thought",
+                    "signature",
+                    "thought_signature",
+                ):
                     continue
-                if block_type in ("tool", "tool_use", "tool_call", "tool_calls", "function_call", "function"):
+                if block_type in (
+                    "tool",
+                    "tool_use",
+                    "tool_call",
+                    "tool_calls",
+                    "function_call",
+                    "function",
+                ):
                     continue
                 text = part.get("text")
                 if isinstance(text, str) and text.strip():
@@ -1147,7 +1269,9 @@ def _build_memory_system_message(
             similarity = _as_float(item.get("score"))
             confidence = _as_float(item.get("confidence_score"))
             if confidence is None:
-                confidence = _as_float((item.get("metadata") or {}).get("confidence_score"))
+                confidence = _as_float(
+                    (item.get("metadata") or {}).get("confidence_score")
+                )
             composite = None
             if similarity is not None and confidence is not None:
                 composite = similarity * confidence
@@ -1206,9 +1330,9 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
     feedback on a response, it can be propagated to the memories used.
     """
     mem0_enabled = _memory_is_enabled(state)
-    memory_ui_enabled = bool(getattr(settings, "enable_memory_ui_retrieval", False)) and bool(
-        getattr(state, "use_server_memory", False)
-    )
+    memory_ui_enabled = bool(
+        getattr(settings, "enable_memory_ui_retrieval", False)
+    ) and bool(getattr(state, "use_server_memory", False))
     if not mem0_enabled and not memory_ui_enabled:
         return None
 
@@ -1245,14 +1369,13 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
                     normalized.setdefault("source", "mem0")
                     mem0_results.append(normalized)
                 else:
-                    mem0_results.append(
-                        {
-                            "id": getattr(item, "id", None),
-                            "memory": getattr(item, "memory", None),
-                            "score": getattr(item, "score", None),
-                            "source": "mem0",
-                        }
-                    )
+                    mem0_result = {
+                        "id": getattr(item, "id", None),
+                        "memory": getattr(item, "memory", None),
+                        "score": getattr(item, "score", None),
+                        "source": "mem0",
+                    }
+                    mem0_results.append(mem0_result)
         except Exception as exc:
             logger.warning("memory_retrieve_failed", error=str(exc))
             memory_stats["retrieval_error"] = str(exc)
@@ -1264,8 +1387,10 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
             service = get_memory_ui_service()
             ui_results = await service.search_memories(
                 query=query,
-                agent_id=getattr(settings, "memory_ui_agent_id", MEMORY_AGENT_ID) or MEMORY_AGENT_ID,
-                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot",
+                agent_id=getattr(settings, "memory_ui_agent_id", MEMORY_AGENT_ID)
+                or MEMORY_AGENT_ID,
+                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot")
+                or "mailbot",
                 limit=settings.memory_top_k,
                 similarity_threshold=0.5,
             )
@@ -1275,17 +1400,16 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
                 memory_id = item.get("id")
                 if isinstance(memory_id, str) and memory_id:
                     memory_ui_retrieved_ids.append(memory_id)
-                memory_ui_results.append(
-                    {
-                        "id": memory_id,
-                        "memory": item.get("content"),
-                        "score": item.get("similarity"),
-                        "confidence_score": item.get("confidence_score"),
-                        "review_status": item.get("review_status"),
-                        "metadata": item.get("metadata") or {},
-                        "source": "memory_ui",
-                    }
-                )
+                memory_ui_result = {
+                    "id": memory_id,
+                    "memory": item.get("content"),
+                    "score": item.get("similarity"),
+                    "confidence_score": item.get("confidence_score"),
+                    "review_status": item.get("review_status"),
+                    "metadata": item.get("metadata") or {},
+                    "source": "memory_ui",
+                }
+                memory_ui_results.append(memory_ui_result)
         except Exception as exc:
             logger.warning("memory_ui_retrieve_failed", error=str(exc))
 
@@ -1348,7 +1472,11 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
                             ).execute()
                         )
                     except Exception as exc:
-                        logger.debug("memory_ui_record_retrieval_failed", memory_id=mid, error=str(exc))
+                        logger.debug(
+                            "memory_ui_record_retrieval_failed",
+                            memory_id=mid,
+                            error=str(exc),
+                        )
 
             asyncio.create_task(_record_retrievals(unique_ids))
         except Exception as exc:
@@ -1357,7 +1485,8 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
         memory_stats["retrieval_count_skipped_reason"] = "zendesk_read_only"
         _update_memory_stats(state, memory_stats)
 
-    return memory_message.content
+    content = memory_message.content
+    return content if isinstance(content, str) else None
 
 
 def _update_memory_stats(state: GraphState, stats: dict[str, Any]) -> None:
@@ -1376,7 +1505,9 @@ def _strip_memory_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     return [
         message
         for message in messages
-        if not (isinstance(message, SystemMessage) and message.name == MEMORY_SYSTEM_NAME)
+        if not (
+            isinstance(message, SystemMessage) and message.name == MEMORY_SYSTEM_NAME
+        )
     ]
 
 
@@ -1384,7 +1515,9 @@ _BULLET_PREFIX = re.compile(r"^[-*•]\s+")
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 
 
-def _summarize_response_to_facts(text: str, max_facts: int = 3, max_chars: int = 280) -> list[str]:
+def _summarize_response_to_facts(
+    text: str, max_facts: int = 3, max_chars: int = 280
+) -> list[str]:
     """Extract key facts from a response for memory storage."""
     normalized = (text or "").strip()
     if not normalized:
@@ -1433,9 +1566,9 @@ def _split_into_sentences(text: str) -> list[str]:
 async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
     """Record memory from AI response."""
     mem0_enabled = _memory_is_enabled(state)
-    memory_ui_enabled = bool(getattr(settings, "enable_memory_ui_capture", False)) and bool(
-        getattr(state, "use_server_memory", False)
-    )
+    memory_ui_enabled = bool(
+        getattr(settings, "enable_memory_ui_capture", False)
+    ) and bool(getattr(state, "use_server_memory", False))
     if not mem0_enabled and not memory_ui_enabled:
         return
     if not isinstance(ai_message, BaseMessage):
@@ -1454,7 +1587,7 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
     facts = _summarize_response_to_facts(fact_text)
 
     # Initialize memory write stats for LangSmith
-    write_stats = {
+    write_stats: dict[str, Any] = {
         "write_attempted": True,
         "facts_extracted": len(facts) if facts else 0,
         "response_length": len(fact_text),
@@ -1496,7 +1629,10 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
             from app.memory.memory_ui_service import get_memory_ui_service
 
             service = get_memory_ui_service()
-            agent_id = getattr(settings, "memory_ui_agent_id", MEMORY_AGENT_ID) or MEMORY_AGENT_ID
+            agent_id = (
+                getattr(settings, "memory_ui_agent_id", MEMORY_AGENT_ID)
+                or MEMORY_AGENT_ID
+            )
             tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
 
             async def _capture_one(fact: str) -> None:
@@ -1522,6 +1658,7 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
 # -----------------------------------------------------------------------------
 # Output Formatting
 # -----------------------------------------------------------------------------
+
 
 def _format_log_analysis_result(raw: Any) -> Optional[str]:
     """Render log analysis output into a readable summary."""
@@ -1575,7 +1712,9 @@ def _format_log_analysis_result(raw: Any) -> Optional[str]:
         sev = issue.get("severity")
         details = issue.get("details") or issue.get("description") or ""
         prefix = f"[{sev}] " if sev else ""
-        body = f"{prefix}{title}".strip() if title else (prefix.strip() if prefix else "")
+        body = (
+            f"{prefix}{title}".strip() if title else (prefix.strip() if prefix else "")
+        )
         if details:
             body = f"{body}: {details}" if body else details
         return body.strip() or None
@@ -1590,7 +1729,7 @@ def _format_log_analysis_result(raw: Any) -> Optional[str]:
             return None
         title = solution.get("title") or "Recommended action"
         steps = solution.get("steps") or []
-        step_lines = [f"{idx+1}. {step}" for idx, step in enumerate(steps) if step]
+        step_lines = [f"{idx + 1}. {step}" for idx, step in enumerate(steps) if step]
         if not step_lines:
             return None
         return [f"{title}:"] + [f"   {s}" for s in step_lines]
@@ -1599,7 +1738,9 @@ def _format_log_analysis_result(raw: Any) -> Optional[str]:
     for sol in solutions:
         rendered = _solution_lines(sol)
         if rendered:
-            rendered_solutions.extend(f"- {line}" if i == 0 else line for i, line in enumerate(rendered))
+            rendered_solutions.extend(
+                f"- {line}" if i == 0 else line for i, line in enumerate(rendered)
+            )
     if rendered_solutions:
         lines.append("Recommended actions:")
         lines.extend(rendered_solutions)
@@ -1639,13 +1780,17 @@ def _extract_tool_calls(messages: list[BaseMessage]) -> dict[str, dict[str, Any]
     for msg in messages or []:
         if not isinstance(msg, AIMessage):
             continue
-        tool_calls = getattr(msg, "tool_calls", None) or (
-            (getattr(msg, "additional_kwargs", {}) or {}).get("tool_calls")
-        ) or []
+        tool_calls = (
+            getattr(msg, "tool_calls", None)
+            or ((getattr(msg, "additional_kwargs", {}) or {}).get("tool_calls"))
+            or []
+        )
         for call in tool_calls:
             if not isinstance(call, dict):
                 continue
-            call_id = call.get("id") or call.get("tool_call_id") or call.get("toolCallId")
+            call_id = (
+                call.get("id") or call.get("tool_call_id") or call.get("toolCallId")
+            )
             if isinstance(call_id, str) and call_id:
                 tool_calls_by_id[call_id] = call
     return tool_calls_by_id
@@ -1681,8 +1826,8 @@ def _extract_tool_usage(messages: list[BaseMessage]) -> dict[str, set[str]]:
             continue
         tool_call_id = getattr(msg, "tool_call_id", None)
         if isinstance(tool_call_id, str):
-            call = tool_calls_by_id.get(tool_call_id)
-            name = call.get("name") if isinstance(call, dict) else None
+            tool_call = tool_calls_by_id.get(tool_call_id)
+            name = tool_call.get("name") if isinstance(tool_call, dict) else None
             if isinstance(name, str) and name:
                 executed.add(name)
 
@@ -1700,7 +1845,9 @@ def _extract_subagent_deployments(messages: list[BaseMessage]) -> list[str]:
             continue
         args = call.get("args") or call.get("arguments") or {}
         parsed_args = _safe_json_loads(args)
-        subagent_type = parsed_args.get("subagent_type") or parsed_args.get("subagentType")
+        subagent_type = parsed_args.get("subagent_type") or parsed_args.get(
+            "subagentType"
+        )
         if isinstance(subagent_type, str) and subagent_type:
             subagents.add(subagent_type)
     return sorted(subagents)
@@ -1726,13 +1873,17 @@ def _extract_log_analysis_notes(
     for msg in messages or []:
         if not isinstance(msg, AIMessage):
             continue
-        tool_calls = getattr(msg, "tool_calls", None) or (
-            (getattr(msg, "additional_kwargs", {}) or {}).get("tool_calls")
-        ) or []
+        tool_calls = (
+            getattr(msg, "tool_calls", None)
+            or ((getattr(msg, "additional_kwargs", {}) or {}).get("tool_calls"))
+            or []
+        )
         for call in tool_calls:
             if not isinstance(call, dict):
                 continue
-            call_id = call.get("id") or call.get("tool_call_id") or call.get("toolCallId")
+            call_id = (
+                call.get("id") or call.get("tool_call_id") or call.get("toolCallId")
+            )
             if isinstance(call_id, str) and call_id:
                 tool_calls_by_id[call_id] = call
 
@@ -1817,18 +1968,26 @@ def _extract_log_analysis_notes(
         if not isinstance(payload, dict):
             continue
 
-        file_name = str(payload.get("file_name") or payload.get("fileName") or "").strip()
+        file_name = str(
+            payload.get("file_name") or payload.get("fileName") or ""
+        ).strip()
         if not file_name and tool_name == "log_diagnoser":
             file_name = str(args.get("file_name") or args.get("fileName") or "").strip()
-        customer_ready = str(payload.get("customer_ready") or payload.get("customerReady") or "").strip()
-        internal_notes = str(payload.get("internal_notes") or payload.get("internalNotes") or "").strip()
+        customer_ready = str(
+            payload.get("customer_ready") or payload.get("customerReady") or ""
+        ).strip()
+        internal_notes = str(
+            payload.get("internal_notes") or payload.get("internalNotes") or ""
+        ).strip()
 
         if tool_name == "log_diagnoser" and not customer_ready and payload.get("error"):
             customer_ready = (
                 "Log analysis failed due to a processing error. "
                 "Please try again or upload a smaller excerpt around the failure."
             )
-            internal_notes = str(payload.get("message") or payload.get("suggestion") or "").strip()
+            internal_notes = str(
+                payload.get("message") or payload.get("suggestion") or ""
+            ).strip()
 
         confidence_raw = payload.get("confidence", 0.0)
         try:
@@ -1839,10 +1998,16 @@ def _extract_log_analysis_notes(
         evidence = payload.get("evidence") or []
         if not isinstance(evidence, list):
             evidence = []
-        recommended_actions = payload.get("recommended_actions") or payload.get("recommendedActions") or []
+        recommended_actions = (
+            payload.get("recommended_actions")
+            or payload.get("recommendedActions")
+            or []
+        )
         if not isinstance(recommended_actions, list):
             recommended_actions = []
-        open_questions = payload.get("open_questions") or payload.get("openQuestions") or []
+        open_questions = (
+            payload.get("open_questions") or payload.get("openQuestions") or []
+        )
         if not isinstance(open_questions, list):
             open_questions = []
 
@@ -1852,7 +2017,9 @@ def _extract_log_analysis_notes(
             internal_notes=internal_notes,
             confidence=confidence,
             evidence=[str(item) for item in evidence if item is not None],
-            recommended_actions=[str(item) for item in recommended_actions if item is not None],
+            recommended_actions=[
+                str(item) for item in recommended_actions if item is not None
+            ],
             open_questions=[str(item) for item in open_questions if item is not None],
             created_at=_utc_now_iso(),
         )
@@ -1864,7 +2031,10 @@ def _extract_log_analysis_notes(
 # Main Agent Runner
 # -----------------------------------------------------------------------------
 
-async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
+
+async def run_unified_agent(
+    state: GraphState, config: Optional[RunnableConfig] = None
+) -> dict[str, Any]:
     """Run the unified agent with comprehensive error handling.
 
     This function orchestrates:
@@ -1882,10 +2052,16 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
     limiter = None
 
     # Initialize state tracker for observability via middleware
-    session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None) or "unknown"
+    session_id = (
+        getattr(state, "session_id", None)
+        or getattr(state, "trace_id", None)
+        or "unknown"
+    )
     state_middleware = get_state_tracking_middleware()
     tracker = state_middleware.get_tracker(session_id)
-    tracker.transition_to(AgentLoopState.PROCESSING_INPUT, metadata={"session_id": session_id})
+    tracker.transition_to(
+        AgentLoopState.PROCESSING_INPUT, metadata={"session_id": session_id}
+    )
 
     try:
         # 1. Model selection with health check
@@ -1895,7 +2071,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
 
         # 2. Initialize helpers
         helper = GemmaHelper(max_calls=10)
-        session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
+        session_id = getattr(state, "session_id", None) or getattr(
+            state, "trace_id", None
+        )
         session_cache = _get_session_cache(session_id)
 
         # 3. Rate limit preflight check with fallback (bucket-based)
@@ -1914,7 +2092,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                 logger.warning("bucket_precheck_circuit_open", bucket=bucket_name)
                 return False
             except GeminiServiceUnavailableException as exc:
-                logger.warning("bucket_precheck_unavailable", bucket=bucket_name, error=str(exc))
+                logger.warning(
+                    "bucket_precheck_unavailable", bucket=bucket_name, error=str(exc)
+                )
                 return False
 
         primary_bucket = coordinator_bucket_name(
@@ -1925,16 +2105,19 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
 
         slot_ok = await _reserve_bucket_slot(primary_bucket)
         if not slot_ok:
-            config = get_models_config()
+            models_config = get_models_config()
             bucket_prefix = "zendesk.coordinators." if is_zendesk else "coordinators."
             fallback_model = model_router.fallback_chain.get(runtime.model)
             fallback_bucket = None
             if fallback_model:
-                fallback_bucket = (
-                    find_bucket_for_model(config, fallback_model, prefix=bucket_prefix)
-                    or find_bucket_for_model(config, fallback_model)
-                )
-            if fallback_model and fallback_bucket and await _reserve_bucket_slot(fallback_bucket):
+                fallback_bucket = find_bucket_for_model(
+                    models_config, fallback_model, prefix=bucket_prefix
+                ) or find_bucket_for_model(models_config, fallback_model)
+            if (
+                fallback_model
+                and fallback_bucket
+                and await _reserve_bucket_slot(fallback_bucket)
+            ):
                 logger.info(
                     "retrying_with_fallback_model",
                     primary=runtime.model,
@@ -1975,15 +2158,14 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         try:  # pragma: no cover - best effort only
             existing_notes = getattr(state, "log_analysis_notes", None) or {}
             if existing_notes:
-                emitter.emit_genui_state(
-                    {
-                        "logAnalysisNotes": {
-                            key: note.model_dump()
-                            for key, note in existing_notes.items()
-                            if hasattr(note, "model_dump")
-                        }
+                log_notes_payload = {
+                    "logAnalysisNotes": {
+                        key: note.model_dump()
+                        for key, note in existing_notes.items()
+                        if hasattr(note, "model_dump")
                     }
-                )
+                }
+                emitter.emit_genui_state(log_notes_payload)
         except Exception as exc:
             logger.debug("log_analysis_notes_emit_failed", error=str(exc))
 
@@ -1992,7 +2174,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         # ------------------------------------------------------------------
         # 5a. One-time migration: legacy workspace /handoff/summary.json -> thread_state
         try:
-            session_key = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
+            session_key = getattr(state, "session_id", None) or getattr(
+                state, "trace_id", None
+            )
             if session_key:
                 from app.agents.harness.store import SparrowWorkspaceStore
 
@@ -2000,14 +2184,18 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                 forwarded = getattr(state, "forwarded_props", {}) or {}
                 customer_id = None
                 if isinstance(forwarded, dict):
-                    customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
+                    customer_id = forwarded.get("customer_id") or forwarded.get(
+                        "customerId"
+                    )
 
                 workspace_store = SparrowWorkspaceStore(
                     session_id=session_key,
                     user_id=str(user_id) if user_id is not None else None,
                     customer_id=customer_id,
                 )
-                migrated = await maybe_ingest_legacy_handoff(state=state, workspace_store=workspace_store)
+                migrated = await maybe_ingest_legacy_handoff(
+                    state=state, workspace_store=workspace_store
+                )
                 if migrated:
                     emitter.add_trace_step(
                         step_type="thought",
@@ -2065,7 +2253,8 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
 
         # Store prep stats in scratchpad
         if isinstance(state.scratchpad, dict):
-            state.scratchpad.setdefault("_system", {})["message_preparation"] = prep_stats
+            system_bucket = state.scratchpad.setdefault("_system", {})
+            system_bucket["message_preparation"] = prep_stats
 
         # Auto-delegate to the log diagnoser when attachments indicate logs
         autoroute_msg = await _maybe_autoroute_log_analysis(state, helper)
@@ -2115,7 +2304,10 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
 
         fallback_agent_factory = None
         if runtime.provider == "google":
-            def _build_fallback_agent() -> tuple[Any, RunnableConfig, AgentRuntimeConfig] | None:
+
+            def _build_fallback_agent() -> (
+                tuple[Any, RunnableConfig, AgentRuntimeConfig] | None
+            ):
                 models_config = get_models_config()
                 fallback_runtime = None
 
@@ -2155,7 +2347,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                     state.provider = fallback_runtime.provider
                     state.model = fallback_runtime.model
                     fallback_agent = _build_deep_agent(state, fallback_runtime)
-                    fallback_config = _build_runnable_config(state, config, fallback_runtime)
+                    fallback_config = _build_runnable_config(
+                        state, config, fallback_runtime
+                    )
                     return fallback_agent, fallback_config, fallback_runtime
                 except Exception:
                     state.provider = original_provider
@@ -2185,7 +2379,11 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         if final_output is None:
             try:
                 final_output = await agent.ainvoke(
-                    {"messages": list(messages), "attachments": state.attachments, "scratchpad": state.scratchpad},
+                    {
+                        "messages": list(messages),
+                        "attachments": state.attachments,
+                        "scratchpad": state.scratchpad,
+                    },
                     config=run_config,
                 )
             except Exception as exc:
@@ -2201,12 +2399,15 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                             error=str(exc),
                         )
                         models_config = get_models_config()
-                        bucket_prefix = "zendesk.coordinators." if is_zendesk else "coordinators."
-                        fallback_bucket = (
-                            find_bucket_for_model(models_config, fallback_model, prefix=bucket_prefix)
-                            or find_bucket_for_model(models_config, fallback_model)
+                        bucket_prefix = (
+                            "zendesk.coordinators." if is_zendesk else "coordinators."
                         )
-                        if fallback_bucket and await _reserve_bucket_slot(fallback_bucket):
+                        fallback_bucket = find_bucket_for_model(
+                            models_config, fallback_model, prefix=bucket_prefix
+                        ) or find_bucket_for_model(models_config, fallback_model)
+                        if fallback_bucket and await _reserve_bucket_slot(
+                            fallback_bucket
+                        ):
                             runtime = AgentRuntimeConfig(
                                 provider=runtime.provider,
                                 model=fallback_model,
@@ -2251,7 +2452,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                                 with_subagents=with_subagents,
                                 zendesk=is_zendesk,
                             )
-                            if fallback_bucket and await _reserve_bucket_slot(fallback_bucket):
+                            if fallback_bucket and await _reserve_bucket_slot(
+                                fallback_bucket
+                            ):
                                 runtime = AgentRuntimeConfig(
                                     provider=fallback_provider,
                                     model=coordinator_cfg.model_id,
@@ -2260,7 +2463,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                                 state.provider = fallback_provider
                                 state.model = coordinator_cfg.model_id
                                 agent = _build_deep_agent(state, runtime)
-                                run_config = _build_runnable_config(state, config, runtime)
+                                run_config = _build_runnable_config(
+                                    state, config, runtime
+                                )
                                 final_output = await agent.ainvoke(
                                     {
                                         "messages": list(messages),
@@ -2272,7 +2477,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                                 fallback_handled = True
 
                     if not fallback_handled:
-                        raise GeminiQuotaExhaustedException(runtime.model) from fallback_error
+                        raise GeminiQuotaExhaustedException(
+                            runtime.model
+                        ) from fallback_error
                 else:
                     raise
 
@@ -2280,7 +2487,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         messages_payload = _extract_messages_from_output(state, final_output)
 
         if messages_payload is None:
-            logger.error("Unified agent response missing messages; returning original state")
+            logger.error(
+                "Unified agent response missing messages; returning original state"
+            )
             return {"messages": state.messages, "thread_state": state.thread_state}
 
         updated_messages = _strip_memory_messages(messages_payload)
@@ -2298,21 +2507,49 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
             or {}
         )
         forwarded_props = (
-            (final_output.get("forwarded_props") if isinstance(final_output, dict) else None)
+            (
+                final_output.get("forwarded_props")
+                if isinstance(final_output, dict)
+                else None
+            )
             or state.forwarded_props
             or {}
         )
         if is_zendesk:
             try:
-                ticket_id = forwarded_props.get("zendesk_ticket_id") or forwarded_props.get("ticket_id")
-                system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
-                subagent_models = system_bucket.get("zendesk_subagent_models") if isinstance(system_bucket, dict) else None
-                memory_stats = system_bucket.get("memory_stats") if isinstance(system_bucket, dict) else {}
+                ticket_id = forwarded_props.get(
+                    "zendesk_ticket_id"
+                ) or forwarded_props.get("ticket_id")
+                system_bucket = (
+                    scratchpad.get("_system", {})
+                    if isinstance(scratchpad, dict)
+                    else {}
+                )
+                subagent_models = (
+                    system_bucket.get("zendesk_subagent_models")
+                    if isinstance(system_bucket, dict)
+                    else None
+                )
+                memory_stats = (
+                    system_bucket.get("memory_stats")
+                    if isinstance(system_bucket, dict)
+                    else {}
+                )
+                if not isinstance(memory_stats, dict):
+                    memory_stats = {}
                 tool_usage = _extract_tool_usage(updated_messages)
-                tools_requested, tools_requested_count = _limit_list(tool_usage.get("requested", set()))
-                tools_executed, tools_executed_count = _limit_list(tool_usage.get("executed", set()))
-                web_tools = set(tool_usage.get("executed", set())) & WEB_SEARCH_TOOL_NAMES
-                web_search_tools, web_search_tool_count = _limit_list(web_tools, max_items=10)
+                tools_requested, tools_requested_count = _limit_list(
+                    tool_usage.get("requested", set())
+                )
+                tools_executed, tools_executed_count = _limit_list(
+                    tool_usage.get("executed", set())
+                )
+                web_tools = (
+                    set(tool_usage.get("executed", set())) & WEB_SEARCH_TOOL_NAMES
+                )
+                web_search_tools, web_search_tool_count = _limit_list(
+                    web_tools, max_items=10
+                )
                 subagents_deployed = _extract_subagent_deployments(updated_messages)
                 subagents_deployed_list, subagents_deployed_count = _limit_list(
                     subagents_deployed,
@@ -2338,7 +2575,11 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                     mem0_retrieved=memory_stats.get("mem0_retrieved"),
                     memory_retrieval_error=memory_stats.get("retrieval_error"),
                 )
-            except (KeyError, AttributeError, TypeError) as exc:  # pragma: no cover - logging only
+            except (
+                KeyError,
+                AttributeError,
+                TypeError,
+            ) as exc:  # pragma: no cover - logging only
                 logger.debug("zendesk_run_telemetry_failed", error=str(exc)[:180])
 
         # ------------------------------------------------------------------
@@ -2350,20 +2591,21 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                 merged_notes = dict(getattr(state, "log_analysis_notes", {}) or {})
                 merged_notes.update(extracted_notes)
                 state.log_analysis_notes = merged_notes
-                emitter.emit_genui_state(
-                    {
-                        "logAnalysisNotes": {
-                            key: note.model_dump()
-                            for key, note in merged_notes.items()
-                            if hasattr(note, "model_dump")
-                        }
+                log_notes_payload = {
+                    "logAnalysisNotes": {
+                        key: note.model_dump()
+                        for key, note in merged_notes.items()
+                        if hasattr(note, "model_dump")
                     }
-                )
+                }
+                emitter.emit_genui_state(log_notes_payload)
         except Exception as exc:  # pragma: no cover - best effort only
             logger.debug("log_analysis_notes_extract_failed", error=str(exc))
 
         # 12. Format log analysis results if applicable
-        log_agent = (state.agent_type or state.forwarded_props.get("agent_type")) == "log_analysis"
+        log_agent = (
+            state.agent_type or state.forwarded_props.get("agent_type")
+        ) == "log_analysis"
         if log_agent:
             updated_messages = _format_log_analysis_messages(updated_messages)
 
@@ -2372,7 +2614,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         updated_messages = _sanitize_user_facing_messages(updated_messages)
 
         # 13. Record memory from response
-        last_ai_message = next((m for m in reversed(updated_messages) if isinstance(m, AIMessage)), None)
+        last_ai_message = next(
+            (m for m in reversed(updated_messages) if isinstance(m, AIMessage)), None
+        )
         if last_ai_message is not None:
             await _record_memory(state, last_ai_message)
 
@@ -2403,10 +2647,12 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
             model=getattr(runtime, "model", "unknown"),
             error=str(e),
         )
-        rate_limit_msg = AIMessage(content=(
-            "I'm temporarily paused because the LLM rate limit was hit. "
-            "Please wait a few seconds and try again; I'll reuse cached prep and keep the same model when capacity is free."
-        ))
+        rate_limit_msg = AIMessage(
+            content=(
+                "I'm temporarily paused because the LLM rate limit was hit. "
+                "Please wait a few seconds and try again; I'll reuse cached prep and keep the same model when capacity is free."
+            )
+        )
 
         # Add error state to scratchpad
         scratchpad = dict(state.scratchpad or {})
@@ -2424,7 +2670,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         }
     except Exception as e:
         tracker.set_error(f"Critical error: {str(e)[:100]}")
-        logger.opt(exception=True).error("Critical error in unified agent execution: {}", e)
+        logger.opt(exception=True).error(
+            "Critical error in unified agent execution: {}", e
+        )
 
         # Add error state to scratchpad
         scratchpad = dict(state.scratchpad or {})
@@ -2438,9 +2686,13 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
             "forwarded_props": state.forwarded_props or {},
             "thread_state": getattr(state, "thread_state", None),
             "log_analysis_notes": getattr(state, "log_analysis_notes", {}) or {},
-            "error": str(e)
+            "error": str(e),
         }
-def _extract_messages_from_output(state: GraphState, final_output: Any) -> Optional[list[BaseMessage]]:
+
+
+def _extract_messages_from_output(
+    state: GraphState, final_output: Any
+) -> Optional[list[BaseMessage]]:
     """Extract messages list from agent output."""
     if isinstance(final_output, BaseMessage):
         return list(state.messages) + [final_output]
@@ -2461,6 +2713,7 @@ def _extract_messages_from_output(state: GraphState, final_output: Any) -> Optio
 
 def _format_log_analysis_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     """Format log analysis results in messages."""
+
     def _format_msg(msg: BaseMessage) -> Optional[str]:
         return _format_log_analysis_result(_coerce_message_text(msg))
 
@@ -2471,7 +2724,10 @@ def _format_log_analysis_messages(messages: list[BaseMessage]) -> list[BaseMessa
         if getattr(candidate, "role", None) == "assistant":
             formatted = _format_msg(candidate)
             if formatted:
-                messages[idx] = AIMessage(content=formatted, additional_kwargs=getattr(candidate, "additional_kwargs", {}))
+                messages[idx] = AIMessage(
+                    content=formatted,
+                    additional_kwargs=getattr(candidate, "additional_kwargs", {}),
+                )
             break
 
     # Fallback to latest tool result if no assistant message was found

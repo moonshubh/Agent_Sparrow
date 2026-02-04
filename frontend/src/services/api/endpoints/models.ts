@@ -1,111 +1,127 @@
-import { apiClient } from '@/services/api/api-client'
+import { apiClient } from "@/services/api/api-client";
 
-export type Provider = 'google' | 'xai' | 'openrouter'
-export type AgentType = 'primary' | 'log_analysis'
-export type ModelTier = 'pro' | 'standard' | 'lite'
+export type Provider = "google" | "xai" | "openrouter";
+export type AgentType = "primary" | "log_analysis";
+export type ModelTier = "pro" | "standard" | "lite";
 
-export type ProviderModels = Partial<Record<Provider, string[]>>
-export type ProviderAvailability = Record<Provider, boolean>
+export type ProviderModels = Partial<Record<Provider, string[]>>;
+export type ProviderAvailability = Record<Provider, boolean>;
 
 // Model info from registry
 export interface ModelInfo {
-  display_name: string
-  provider: Provider
-  tier: ModelTier
-  supports_reasoning: boolean
-  supports_vision: boolean
+  display_name: string;
+  provider: Provider;
+  tier: ModelTier;
+  supports_reasoning: boolean;
+  supports_vision: boolean;
 }
 
 // Full model config from registry
 export interface ModelConfig {
-  models: Record<string, ModelInfo>
-  defaults: Record<Provider, string>
-  fallback_chains: Record<Provider, Record<string, string | null>>
-  available_providers: ProviderAvailability
+  models: Record<string, ModelInfo>;
+  defaults: Record<Provider, string>;
+  fallback_chains: Record<Provider, Record<string, string | null>>;
+  available_providers: ProviderAvailability;
 }
 
 // Fallback models when API is unavailable - main coordinator models only
 const FALLBACK_MODELS: Record<Provider, string[]> = {
-  google: ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
-  xai: ['grok-4-1-fast-reasoning'],
-  openrouter: ['x-ai/grok-4.1-fast', 'minimax/minimax-m2.1'],
-}
+  google: [
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+  ],
+  xai: ["grok-4-1-fast-reasoning"],
+  openrouter: ["x-ai/grok-4.1-fast", "minimax/minimax-m2.1"],
+};
 
 // Official model display names (from ai.google.dev & docs.x.ai)
 const FALLBACK_DISPLAY_NAMES: Record<string, string> = {
   // Google Gemini (official names)
-  'gemini-3-flash-preview': 'Gemini 3.0 Flash',
-  'gemini-2.5-flash': 'Gemini 2.5 Flash',
-  'gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
+  "gemini-3-flash-preview": "Gemini 3.0 Flash",
+  "gemini-2.5-flash": "Gemini 2.5 Flash",
+  "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
   // xAI Grok
-  'grok-4-1-fast-reasoning': 'Grok 4.1 Fast',
+  "grok-4-1-fast-reasoning": "Grok 4.1 Fast",
   // OpenRouter
-  'x-ai/grok-4.1-fast': 'Grok 4.1 Fast',
-  'minimax/minimax-m2.1': 'MiniMax M2.1',
-}
+  "x-ai/grok-4.1-fast": "Grok 4.1 Fast",
+  "minimax/minimax-m2.1": "MiniMax M2.1",
+};
 
 // Human-readable provider labels
 export const PROVIDER_LABELS: Record<Provider, string> = {
-  google: 'Google',
-  xai: 'xAI',
-  openrouter: 'OpenRouter',
-}
+  google: "Google",
+  xai: "xAI",
+  openrouter: "OpenRouter",
+};
 
 // Cache TTL in milliseconds (5 minutes)
-const CACHE_TTL_MS = 5 * 60 * 1000
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 // Cached model config with timestamp
 interface CachedModelConfig {
-  config: ModelConfig
-  timestamp: number
+  config: ModelConfig;
+  timestamp: number;
 }
 
-let cachedConfig: CachedModelConfig | null = null
+let cachedConfig: CachedModelConfig | null = null;
 
 /**
  * Check if cached config is still valid based on TTL.
  */
 function isCacheValid(): boolean {
-  if (!cachedConfig) return false
-  return Date.now() - cachedConfig.timestamp < CACHE_TTL_MS
+  if (!cachedConfig) return false;
+  return Date.now() - cachedConfig.timestamp < CACHE_TTL_MS;
 }
 
 function normalizeModelsResponse(data: unknown): ProviderModels | null {
-  if (!data || typeof data !== 'object') return null
-  const obj = data as Record<string, unknown>
+  if (!data || typeof data !== "object") return null;
+  const obj = data as Record<string, unknown>;
 
   // Accept either { providers: { google: [], xai: [] } } or { google: [], xai: [] }
-  const providers = (obj.providers && typeof obj.providers === 'object'
-    ? (obj.providers as Record<string, unknown>)
-    : obj) as Record<string, unknown>
+  const providers = (
+    obj.providers && typeof obj.providers === "object"
+      ? (obj.providers as Record<string, unknown>)
+      : obj
+  ) as Record<string, unknown>;
 
-  const google = Array.isArray(providers.google) ? (providers.google as string[]) : undefined
-  const xai = Array.isArray(providers.xai) ? (providers.xai as string[]) : undefined
-  const openrouter = Array.isArray(providers.openrouter) ? (providers.openrouter as string[]) : undefined
+  const google = Array.isArray(providers.google)
+    ? (providers.google as string[])
+    : undefined;
+  const xai = Array.isArray(providers.xai)
+    ? (providers.xai as string[])
+    : undefined;
+  const openrouter = Array.isArray(providers.openrouter)
+    ? (providers.openrouter as string[])
+    : undefined;
 
-  if (!google && !xai && !openrouter) return null
+  if (!google && !xai && !openrouter) return null;
 
-  const result: ProviderModels = {}
-  if (google && google.length) result.google = google
-  if (xai && xai.length) result.xai = xai
-  if (openrouter && openrouter.length) result.openrouter = openrouter
+  const result: ProviderModels = {};
+  if (google && google.length) result.google = google;
+  if (xai && xai.length) result.xai = xai;
+  if (openrouter && openrouter.length) result.openrouter = openrouter;
 
-  return result
+  return result;
 }
 
-function normalizeProvidersResponse(data: unknown): ProviderAvailability | null {
-  if (!data || typeof data !== 'object') return null
-  const obj = data as Record<string, unknown>
+function normalizeProvidersResponse(
+  data: unknown,
+): ProviderAvailability | null {
+  if (!data || typeof data !== "object") return null;
+  const obj = data as Record<string, unknown>;
 
-  const providers = (obj.providers && typeof obj.providers === 'object'
-    ? (obj.providers as Record<string, unknown>)
-    : obj) as Record<string, unknown>
+  const providers = (
+    obj.providers && typeof obj.providers === "object"
+      ? (obj.providers as Record<string, unknown>)
+      : obj
+  ) as Record<string, unknown>;
 
   return {
     google: Boolean(providers.google),
     xai: Boolean(providers.xai),
     openrouter: Boolean(providers.openrouter),
-  }
+  };
 }
 
 export const modelsAPI = {
@@ -115,17 +131,29 @@ export const modelsAPI = {
    */
   async list(agent: AgentType): Promise<ProviderModels> {
     try {
-      const qs = new URLSearchParams({ agent_type: agent })
-      const res = await apiClient.get<unknown>(`/api/v1/models?${qs.toString()}`)
-      const normalized = normalizeModelsResponse(res)
+      const qs = new URLSearchParams({ agent_type: agent });
+      const res = await apiClient.get<unknown>(
+        `/api/v1/models?${qs.toString()}`,
+      );
+      const normalized = normalizeModelsResponse(res);
       // Return only configured providers, or fallback to Google
-      return normalized || { google: FALLBACK_MODELS.google, xai: FALLBACK_MODELS.xai, openrouter: FALLBACK_MODELS.openrouter }
+      return (
+        normalized || {
+          google: FALLBACK_MODELS.google,
+          xai: FALLBACK_MODELS.xai,
+          openrouter: FALLBACK_MODELS.openrouter,
+        }
+      );
     } catch (e: unknown) {
-      if (process.env.NODE_ENV === 'development') {
-        console.debug('modelsAPI.list fallback due to error:', e)
+      if (process.env.NODE_ENV === "development") {
+        console.debug("modelsAPI.list fallback due to error:", e);
       }
       // Graceful fallback to Google only
-      return { google: FALLBACK_MODELS.google, xai: FALLBACK_MODELS.xai, openrouter: FALLBACK_MODELS.openrouter }
+      return {
+        google: FALLBACK_MODELS.google,
+        xai: FALLBACK_MODELS.xai,
+        openrouter: FALLBACK_MODELS.openrouter,
+      };
     }
   },
 
@@ -134,15 +162,18 @@ export const modelsAPI = {
    */
   async getAvailableProviders(): Promise<ProviderAvailability> {
     try {
-      const res = await apiClient.get<unknown>('/api/v1/providers')
-      const normalized = normalizeProvidersResponse(res)
-      return normalized || { google: true, xai: false, openrouter: false }
+      const res = await apiClient.get<unknown>("/api/v1/providers");
+      const normalized = normalizeProvidersResponse(res);
+      return normalized || { google: true, xai: false, openrouter: false };
     } catch (e: unknown) {
-      if (process.env.NODE_ENV === 'development') {
-        console.debug('modelsAPI.getAvailableProviders fallback due to error:', e)
+      if (process.env.NODE_ENV === "development") {
+        console.debug(
+          "modelsAPI.getAvailableProviders fallback due to error:",
+          e,
+        );
       }
       // Assume Google is always available as fallback
-      return { google: true, xai: false, openrouter: false }
+      return { google: true, xai: false, openrouter: false };
     }
   },
 
@@ -151,9 +182,13 @@ export const modelsAPI = {
    */
   getDefaultModel(provider: Provider): string {
     if (isCacheValid() && cachedConfig) {
-      return cachedConfig.config.defaults[provider] || FALLBACK_MODELS[provider]?.[0] || 'gemini-3-flash-preview'
+      return (
+        cachedConfig.config.defaults[provider] ||
+        FALLBACK_MODELS[provider]?.[0] ||
+        "gemini-3-flash-preview"
+      );
     }
-    return FALLBACK_MODELS[provider]?.[0] || 'gemini-3-flash-preview'
+    return FALLBACK_MODELS[provider]?.[0] || "gemini-3-flash-preview";
   },
 
   /**
@@ -164,22 +199,22 @@ export const modelsAPI = {
   async getConfig(): Promise<ModelConfig> {
     // Return cached config if still valid
     if (isCacheValid() && cachedConfig) {
-      return cachedConfig.config
+      return cachedConfig.config;
     }
 
     try {
-      const res = await apiClient.get<ModelConfig>('/api/v1/models/config')
-      if (res && typeof res === 'object' && 'models' in res) {
+      const res = await apiClient.get<ModelConfig>("/api/v1/models/config");
+      if (res && typeof res === "object" && "models" in res) {
         // Cache with timestamp for TTL
         cachedConfig = {
           config: res,
           timestamp: Date.now(),
-        }
-        return res
+        };
+        return res;
       }
     } catch (e: unknown) {
-      if (process.env.NODE_ENV === 'development') {
-        console.debug('modelsAPI.getConfig fallback due to error:', e)
+      if (process.env.NODE_ENV === "development") {
+        console.debug("modelsAPI.getConfig fallback due to error:", e);
       }
     }
 
@@ -188,43 +223,43 @@ export const modelsAPI = {
       models: Object.fromEntries(
         Object.entries(FALLBACK_DISPLAY_NAMES).map(([id, name]) => {
           // Determine provider from model ID
-          let provider: Provider = 'google'
-          if (id.startsWith('grok-')) provider = 'xai'
-          else if (id.includes('/')) provider = 'openrouter'
+          let provider: Provider = "google";
+          if (id.startsWith("grok-")) provider = "xai";
+          else if (id.includes("/")) provider = "openrouter";
 
           return [
             id,
             {
               display_name: name,
               provider,
-              tier: id.includes('pro') ? 'pro' : 'standard',
+              tier: id.includes("pro") ? "pro" : "standard",
               supports_reasoning: true,
-              supports_vision: provider === 'google',
+              supports_vision: provider === "google",
             } as ModelInfo,
-          ]
-        })
+          ];
+        }),
       ),
       defaults: {
-        google: 'gemini-3-flash-preview',
-        xai: 'grok-4-1-fast-reasoning',
-        openrouter: 'x-ai/grok-4.1-fast',
+        google: "gemini-3-flash-preview",
+        xai: "grok-4-1-fast-reasoning",
+        openrouter: "x-ai/grok-4.1-fast",
       },
       fallback_chains: {
         google: {
-          'gemini-2.5-flash-lite': 'gemini-2.5-flash',
-          'gemini-2.5-flash': 'gemini-3-flash-preview',
-          'gemini-3-flash-preview': null,
+          "gemini-2.5-flash-lite": "gemini-2.5-flash",
+          "gemini-2.5-flash": "gemini-3-flash-preview",
+          "gemini-3-flash-preview": null,
         },
         xai: {
-          'grok-4-1-fast-reasoning': null,
+          "grok-4-1-fast-reasoning": null,
         },
         openrouter: {
-          'x-ai/grok-4.1-fast': 'minimax/minimax-m2.1',
-          'minimax/minimax-m2.1': null,
+          "x-ai/grok-4.1-fast": "minimax/minimax-m2.1",
+          "minimax/minimax-m2.1": null,
         },
       },
       available_providers: { google: true, xai: false, openrouter: false },
-    }
+    };
   },
 
   /**
@@ -232,23 +267,23 @@ export const modelsAPI = {
    */
   getDisplayName(modelId: string): string {
     if (isCacheValid() && cachedConfig?.config.models[modelId]) {
-      return cachedConfig.config.models[modelId].display_name
+      return cachedConfig.config.models[modelId].display_name;
     }
-    return FALLBACK_DISPLAY_NAMES[modelId] || modelId
+    return FALLBACK_DISPLAY_NAMES[modelId] || modelId;
   },
 
   /**
    * Clear the cached config (useful for testing or forcing refresh).
    */
   clearCache(): void {
-    cachedConfig = null
+    cachedConfig = null;
   },
 
   /**
    * Force refresh the cached config from the server.
    */
   async refreshConfig(): Promise<ModelConfig> {
-    cachedConfig = null
-    return this.getConfig()
+    cachedConfig = null;
+    return this.getConfig();
   },
-}
+};

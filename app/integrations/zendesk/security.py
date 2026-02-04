@@ -56,7 +56,9 @@ def verify_webhook_signature(
     return hmac.compare_digest(expected, provided)
 
 
-def compute_expected_signature(timestamp: str, raw_body: bytes, signing_secret: str) -> str:
+def compute_expected_signature(
+    timestamp: str, raw_body: bytes, signing_secret: str
+) -> str:
     """Compute Zendesk expected signature for debugging: base64(HMAC_SHA256(ts + raw_body)).
     Do not log full values; callers must scrub outputs before logging.
     """

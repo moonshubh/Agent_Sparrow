@@ -14,7 +14,6 @@ import requests
 
 from app.core.settings import settings
 
-
 logger = logging.getLogger(__name__)
 
 _ZENDESK_RPM_LOCK = threading.Lock()
@@ -27,7 +26,11 @@ def zendesk_throttle(rpm_limit: int | None = None) -> None:
     This does not protect across multiple replicas/processes, but it prevents a single
     worker from bursting above the configured per-minute rate.
     """
-    rpm = int(rpm_limit) if rpm_limit is not None else int(getattr(settings, "zendesk_rpm_limit", 240))
+    rpm = (
+        int(rpm_limit)
+        if rpm_limit is not None
+        else int(getattr(settings, "zendesk_rpm_limit", 240))
+    )
     if rpm <= 0:
         return
     min_interval_sec = 60.0 / float(rpm)
@@ -90,8 +93,12 @@ class ZendeskRateLimitError(RuntimeError):
         )
 
     @classmethod
-    def from_response(cls, resp: requests.Response, *, operation: str) -> "ZendeskRateLimitError":
-        rid = resp.headers.get("X-Request-Id") or resp.headers.get("X-Zendesk-Request-Id")
+    def from_response(
+        cls, resp: requests.Response, *, operation: str
+    ) -> "ZendeskRateLimitError":
+        rid = resp.headers.get("X-Request-Id") or resp.headers.get(
+            "X-Zendesk-Request-Id"
+        )
         return cls(
             operation=operation,
             status_code=int(resp.status_code),
@@ -170,8 +177,12 @@ class ZendeskClient:
         if resp.status_code == 429:
             raise ZendeskRateLimitError.from_response(resp, operation="upload_file")
         if resp.status_code >= 400:
-            rid = resp.headers.get("X-Request-Id") or resp.headers.get("X-Zendesk-Request-Id")
-            logger.warning("Zendesk upload failed (%s) req_id=%s", resp.status_code, rid)
+            rid = resp.headers.get("X-Request-Id") or resp.headers.get(
+                "X-Zendesk-Request-Id"
+            )
+            logger.warning(
+                "Zendesk upload failed (%s) req_id=%s", resp.status_code, rid
+            )
             raise RuntimeError(f"Zendesk upload failed: {resp.status_code}")
 
         # Zendesk sometimes returns JSON with a `text/plain` content-type.
@@ -192,7 +203,11 @@ class ZendeskClient:
         attachment_dict: Dict[str, Any] | None = None
         if isinstance(attachment, dict):
             attachment_dict = attachment
-        elif isinstance(attachments, list) and attachments and isinstance(attachments[0], dict):
+        elif (
+            isinstance(attachments, list)
+            and attachments
+            and isinstance(attachments[0], dict)
+        ):
             attachment_dict = attachments[0]
 
         return {
@@ -223,9 +238,13 @@ class ZendeskClient:
         # Build comment with optional HTML
         comment: Dict[str, Any] = {"public": False}
         if uploads:
-            comment["uploads"] = [u for u in uploads if isinstance(u, str) and u.strip()]
+            comment["uploads"] = [
+                u for u in uploads if isinstance(u, str) and u.strip()
+            ]
         # Auto-detect if string appears to contain HTML when use_html not explicitly set
-        is_html_candidate = bool(use_html and isinstance(body, str) and ("<" in body and ">" in body))
+        is_html_candidate = bool(
+            use_html and isinstance(body, str) and ("<" in body and ">" in body)
+        )
         if is_html_candidate:
             comment["html_body"] = body or ""
         else:
@@ -237,7 +256,11 @@ class ZendeskClient:
             try:
                 cur = self.get_ticket(ticket_id) or {}
                 existing = cur.get("tags") if isinstance(cur, dict) else None
-                existing_tags = [t for t in existing if isinstance(t, str)] if isinstance(existing, list) else []
+                existing_tags = (
+                    [t for t in existing if isinstance(t, str)]
+                    if isinstance(existing, list)
+                    else []
+                )
                 merged = list(existing_tags)
                 if add_tag not in merged:
                     merged.append(add_tag)
@@ -251,13 +274,21 @@ class ZendeskClient:
         payload = {"ticket": ticket}
         if self.dry_run:
             logger.info("[DRY_RUN] Would add internal note to ticket %s", ticket_id)
-            return {"dry_run": True, "ticket_id": ticket_id, "uploads": comment.get("uploads")}
+            return {
+                "dry_run": True,
+                "ticket_id": ticket_id,
+                "uploads": comment.get("uploads"),
+            }
 
         # First attempt (maybe with html_body)
         self._throttle()
-        resp = self.session.put(url, headers=self._headers, data=json.dumps(payload), timeout=20)
+        resp = self.session.put(
+            url, headers=self._headers, data=json.dumps(payload), timeout=20
+        )
         if resp.status_code == 429:
-            raise ZendeskRateLimitError.from_response(resp, operation="add_internal_note")
+            raise ZendeskRateLimitError.from_response(
+                resp, operation="add_internal_note"
+            )
         if resp.status_code >= 400 and "html_body" in comment:
             # Fallback to plain body if HTML rejected
             try:
@@ -265,7 +296,9 @@ class ZendeskClient:
                 comment["body"] = body or ""
                 payload = {"ticket": ticket}
                 self._throttle()
-                resp = self.session.put(url, headers=self._headers, data=json.dumps(payload), timeout=20)
+                resp = self.session.put(
+                    url, headers=self._headers, data=json.dumps(payload), timeout=20
+                )
                 if resp.status_code == 429:
                     raise ZendeskRateLimitError.from_response(
                         resp, operation="add_internal_note_fallback_plain"
@@ -273,7 +306,9 @@ class ZendeskClient:
             except Exception:
                 pass
         if resp.status_code >= 400:
-            rid = resp.headers.get("X-Request-Id") or resp.headers.get("X-Zendesk-Request-Id")
+            rid = resp.headers.get("X-Request-Id") or resp.headers.get(
+                "X-Zendesk-Request-Id"
+            )
             logger.warning("Zendesk PUT failed (%s) req_id=%s", resp.status_code, rid)
             raise RuntimeError(f"Zendesk update failed: {resp.status_code}")
         try:
@@ -281,7 +316,9 @@ class ZendeskClient:
         except Exception:
             return {"status": "ok", "code": resp.status_code}
 
-    def get_ticket_comments(self, ticket_id: int | str, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_ticket_comments(
+        self, ticket_id: int | str, limit: int = 5
+    ) -> List[Dict[str, Any]]:
         """Return up to 'limit' most recent comments for a ticket (best-effort).
 
         Notes:
@@ -294,7 +331,11 @@ class ZendeskClient:
             resp = self.session.get(url, headers=self._headers, timeout=20)
             if resp.status_code >= 400:
                 return []
-            data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+            data = (
+                resp.json()
+                if resp.headers.get("Content-Type", "").startswith("application/json")
+                else {}
+            )
             comments = data.get("comments") or []
             if not isinstance(comments, list):
                 return []
@@ -312,15 +353,25 @@ class ZendeskClient:
             self._throttle()
             resp = self.session.get(url, headers=self._headers, timeout=30)
             if resp.status_code == 429:
-                raise ZendeskRateLimitError.from_response(resp, operation="get_ticket_comments_all")
+                raise ZendeskRateLimitError.from_response(
+                    resp, operation="get_ticket_comments_all"
+                )
             if resp.status_code >= 400:
                 return []
-            data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+            data = (
+                resp.json()
+                if resp.headers.get("Content-Type", "").startswith("application/json")
+                else {}
+            )
             comments = data.get("comments") or []
             if not isinstance(comments, list):
                 return []
             if public_only:
-                return [c for c in comments if isinstance(c, dict) and c.get("public") is True]
+                return [
+                    c
+                    for c in comments
+                    if isinstance(c, dict) and c.get("public") is True
+                ]
             return comments
         except ZendeskRateLimitError:
             raise
@@ -343,17 +394,25 @@ class ZendeskClient:
         max_pages = max(1, int(max_pages))
 
         results: List[Dict[str, Any]] = []
-        next_url = f"{self.base_url}/search.json?query={quote(q)}&per_page={page_limit}"
+        next_url: Optional[str] = (
+            f"{self.base_url}/search.json?query={quote(q)}&per_page={page_limit}"
+        )
         pages = 0
 
         while next_url and pages < max_pages:
             self._throttle()
             resp = self.session.get(next_url, headers=self._headers, timeout=30)
             if resp.status_code == 429:
-                raise ZendeskRateLimitError.from_response(resp, operation="search_tickets")
+                raise ZendeskRateLimitError.from_response(
+                    resp, operation="search_tickets"
+                )
             if resp.status_code >= 400:
                 break
-            data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+            data = (
+                resp.json()
+                if resp.headers.get("Content-Type", "").startswith("application/json")
+                else {}
+            )
             batch = data.get("results") or []
             if isinstance(batch, list):
                 for item in batch:
@@ -364,7 +423,9 @@ class ZendeskClient:
 
         return results
 
-    def get_last_public_comment_snippet(self, ticket_id: int | str, max_chars: int = 600) -> Optional[str]:
+    def get_last_public_comment_snippet(
+        self, ticket_id: int | str, max_chars: int = 600
+    ) -> Optional[str]:
         """Return the latest public comment body (plain text) truncated to max_chars.
 
         HTML bodies are stripped naively; sensitive data should be redacted by callers if needed.
@@ -388,7 +449,7 @@ class ZendeskClient:
                 body = strip_html(body).strip()
                 if not body:
                     continue
-                snippet = body[: max_chars]
+                snippet = body[:max_chars]
                 return snippet
             except Exception:
                 continue
@@ -407,7 +468,11 @@ class ZendeskClient:
                 raise ZendeskRateLimitError.from_response(resp, operation="get_ticket")
             if resp.status_code >= 400:
                 return {}
-            data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+            data = (
+                resp.json()
+                if resp.headers.get("Content-Type", "").startswith("application/json")
+                else {}
+            )
             return data.get("ticket") or {}
         except ZendeskRateLimitError:
             raise
@@ -427,6 +492,7 @@ class ZendeskClient:
         Rate limit: caller-configured (sleep_between_pages used as a fallback throttle).
         Filters: status in ("solved", "closed")
         """
+
         def _ticket_epoch(ticket: Dict[str, Any]) -> Optional[int]:
             for key in ("updated_at", "solved_at", "closed_at", "created_at"):
                 raw = ticket.get(key)
@@ -449,10 +515,20 @@ class ZendeskClient:
                 self._throttle()
                 resp = self.session.get(url, headers=self._headers, timeout=30)
                 if resp.status_code >= 400:
-                    rid = resp.headers.get("X-Request-Id") or resp.headers.get("X-Zendesk-Request-Id")
-                    logger.warning("Zendesk export failed (%s) req_id=%s", resp.status_code, rid)
+                    rid = resp.headers.get("X-Request-Id") or resp.headers.get(
+                        "X-Zendesk-Request-Id"
+                    )
+                    logger.warning(
+                        "Zendesk export failed (%s) req_id=%s", resp.status_code, rid
+                    )
                     break
-                data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+                data = (
+                    resp.json()
+                    if resp.headers.get("Content-Type", "").startswith(
+                        "application/json"
+                    )
+                    else {}
+                )
             except Exception:
                 break
 
@@ -468,7 +544,12 @@ class ZendeskClient:
                         if last_seen_time is not None and t_epoch < last_seen_time:
                             can_stop_early = False
                         last_seen_time = t_epoch
-                if end_time and page_times and len(page_times) == len(tickets) and can_stop_early:
+                if (
+                    end_time
+                    and page_times
+                    and len(page_times) == len(tickets)
+                    and can_stop_early
+                ):
                     if min(page_times) > int(end_time):
                         break
 
@@ -512,7 +593,13 @@ class ZendeskClient:
                 resp = self.session.get(url, headers=self._headers, timeout=30)
                 if resp.status_code >= 400:
                     break
-                data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+                data = (
+                    resp.json()
+                    if resp.headers.get("Content-Type", "").startswith(
+                        "application/json"
+                    )
+                    else {}
+                )
             except Exception:
                 break
 
@@ -543,13 +630,20 @@ class ZendeskClient:
             return cached
 
         url = f"{self.base_url}/users/{user_id}.json"
+        data: Dict[str, Any] = {}
         try:
             self._throttle()
             resp = self.session.get(url, headers=self._headers, timeout=20)
             if resp.status_code >= 400:
                 data = {}
             else:
-                data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+                data = (
+                    resp.json()
+                    if resp.headers.get("Content-Type", "").startswith(
+                        "application/json"
+                    )
+                    else {}
+                )
         except Exception:
             data = {}
 

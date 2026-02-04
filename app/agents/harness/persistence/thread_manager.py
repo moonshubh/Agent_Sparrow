@@ -29,16 +29,13 @@ class ThreadManager:
 
     async def get_or_create_thread(self, user_id: str, session_id: int) -> str:
         async with self.pool.connection() as conn:
-            select_query = (
-                """
+            select_query = """
                 SELECT id
                 FROM langgraph_threads
                 WHERE user_id = %s AND session_id = %s
                 LIMIT 1
                 """
-            )
-            insert_query = (
-                """
+            insert_query = """
                 INSERT INTO langgraph_threads (
                     user_id,
                     session_id,
@@ -54,7 +51,6 @@ class ThreadManager:
                     updated_at = NOW()
                 RETURNING id
                 """
-            )
             # Some test fixtures provide AsyncMocks for transaction(); ensure we await
             # the coroutine and use the resulting async context manager.
             tx = await conn.transaction()
@@ -80,14 +76,12 @@ class ThreadManager:
 
     async def switch_thread(self, user_id: str, thread_id: str) -> dict[str, Any]:
         async with self.pool.connection() as conn:
-            select_query = (
-                """
+            select_query = """
                 SELECT id, metadata, config, last_checkpoint_id
                 FROM langgraph_threads
                 WHERE id = %s AND user_id = %s
                 LIMIT 1
                 """
-            )
             cursor = await conn.execute(select_query, (thread_id, user_id))
             row = await cursor.fetchone()
             if row:
@@ -108,8 +102,7 @@ class ThreadManager:
 
             metadata_json = json.dumps({})
             config_json = json.dumps({})
-            insert_query = (
-                """
+            insert_query = """
                 INSERT INTO langgraph_threads (
                     id,
                     user_id,
@@ -126,7 +119,6 @@ class ThreadManager:
                 ON CONFLICT (id) DO NOTHING
                 RETURNING id
                 """
-            )
             cursor = await conn.execute(
                 insert_query,
                 (thread_id, user_id, f"Thread {thread_id}", metadata_json, config_json),
@@ -148,7 +140,9 @@ class ThreadManager:
                 thread_metadata = self._ensure_dict(self._get_value(row, "metadata", 1))
                 thread_config = self._ensure_dict(self._get_value(row, "config", 2))
                 last_checkpoint_id = self._get_value(row, "last_checkpoint_id", 3)
-                checkpoint_payload = {"id": str(last_checkpoint_id)} if last_checkpoint_id else {"v": 1}
+                checkpoint_payload = (
+                    {"id": str(last_checkpoint_id)} if last_checkpoint_id else {"v": 1}
+                )
                 return {
                     "id": str(self._get_value(row, "id", 0)),
                     "checkpoint": checkpoint_payload,
@@ -164,41 +158,49 @@ class ThreadManager:
                 "config": {},
             }
 
-    async def fork_thread(self, source_thread_id: str, checkpoint_id: str, note: str) -> str:
+    async def fork_thread(
+        self, source_thread_id: str, checkpoint_id: str, note: str
+    ) -> str:
         new_thread_id = str(uuid.uuid4())
         async with self.pool.connection() as conn:
             try:
                 tx = await conn.transaction()
                 async with tx:
-                    source_query = (
-                        """
+                    source_query = """
                         SELECT id, user_id, session_id, title, status, thread_type, metadata, config
                         FROM langgraph_threads
                         WHERE id = %s
                         LIMIT 1
                         """
+                    source_cursor = await conn.execute(
+                        source_query, (source_thread_id,)
                     )
-                    source_cursor = await conn.execute(source_query, (source_thread_id,))
                     source_row = await source_cursor.fetchone()
                     if not source_row:
                         raise ValueError(f"Source thread {source_thread_id} not found")
 
                     source_user_id = self._get_value(source_row, "user_id", 1)
                     source_session_id = self._get_value(source_row, "session_id", 2)
-                    source_title = self._get_value(source_row, "title", 3) or "Forked Thread"
+                    source_title = (
+                        self._get_value(source_row, "title", 3) or "Forked Thread"
+                    )
                     source_status = self._get_value(source_row, "status", 4) or "active"
-                    source_type = self._get_value(source_row, "thread_type", 5) or "conversation"
-                    source_metadata = self._ensure_dict(self._get_value(source_row, "metadata", 6))
-                    source_config = self._ensure_dict(self._get_value(source_row, "config", 7))
+                    source_type = (
+                        self._get_value(source_row, "thread_type", 5) or "conversation"
+                    )
+                    source_metadata = self._ensure_dict(
+                        self._get_value(source_row, "metadata", 6)
+                    )
+                    source_config = self._ensure_dict(
+                        self._get_value(source_row, "config", 7)
+                    )
 
-                    checkpoint_query = (
-                        """
+                    checkpoint_query = """
                         SELECT id, state, metadata, version, channel, checkpoint_type
                         FROM langgraph_checkpoints
                         WHERE id = %s AND thread_id = %s
                         LIMIT 1
                         """
-                    )
                     checkpoint_cursor = await conn.execute(
                         checkpoint_query, (checkpoint_id, source_thread_id)
                     )
@@ -214,9 +216,15 @@ class ThreadManager:
                     checkpoint_metadata = self._ensure_dict(
                         self._get_value(checkpoint_row, "metadata", 2)
                     )
-                    checkpoint_version = self._get_value(checkpoint_row, "version", 3) or 1
-                    checkpoint_channel = self._get_value(checkpoint_row, "channel", 4) or "main"
-                    checkpoint_type = self._get_value(checkpoint_row, "checkpoint_type", 5) or "delta"
+                    checkpoint_version = (
+                        self._get_value(checkpoint_row, "version", 3) or 1
+                    )
+                    checkpoint_channel = (
+                        self._get_value(checkpoint_row, "channel", 4) or "main"
+                    )
+                    checkpoint_type = (
+                        self._get_value(checkpoint_row, "checkpoint_type", 5) or "delta"
+                    )
 
                     fork_metadata = dict(source_metadata)
                     fork_metadata.update(
@@ -230,8 +238,7 @@ class ThreadManager:
 
                     new_checkpoint_id = str(uuid.uuid4())
 
-                    insert_thread_query = (
-                        """
+                    insert_thread_query = """
                         INSERT INTO langgraph_threads (
                             id,
                             user_id,
@@ -248,7 +255,6 @@ class ThreadManager:
                         )
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s::jsonb, %s::jsonb)
                         """
-                    )
                     await conn.execute(
                         insert_thread_query,
                         (
@@ -266,8 +272,7 @@ class ThreadManager:
                         ),
                     )
 
-                    insert_checkpoint_query = (
-                        """
+                    insert_checkpoint_query = """
                         INSERT INTO langgraph_checkpoints (
                             id,
                             thread_id,
@@ -281,7 +286,6 @@ class ThreadManager:
                         )
                         VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, TRUE)
                         """
-                    )
                     merged_metadata = dict(checkpoint_metadata)
                     merged_metadata.update({"forked_from_checkpoint": checkpoint_id})
                     await conn.execute(
@@ -301,20 +305,20 @@ class ThreadManager:
                 return new_thread_id
             except Exception:
                 logger.exception(
-                    "Failed to fork thread %s using checkpoint %s", source_thread_id, checkpoint_id
+                    "Failed to fork thread %s using checkpoint %s",
+                    source_thread_id,
+                    checkpoint_id,
                 )
                 raise
 
     async def get_thread_history(self, thread_id: str) -> list[dict[str, Any]]:
         async with self.pool.connection() as conn:
-            history_query = (
-                """
+            history_query = """
                 SELECT id, version, checkpoint_type, channel, state, metadata, created_at
                 FROM langgraph_checkpoints
                 WHERE thread_id = %s
                 ORDER BY created_at DESC
                 """
-            )
             cursor = await conn.execute(history_query, (thread_id,))
             # Test fixtures stub fetchall() on the connection directly
             try:
@@ -324,17 +328,17 @@ class ThreadManager:
                 rows = await cursor.fetchall()
             return self._rows_to_dicts(cursor, rows)
 
-    async def cleanup_old_checkpoints(self, days: int = 30, dry_run: bool = True) -> int:
+    async def cleanup_old_checkpoints(
+        self, days: int = 30, dry_run: bool = True
+    ) -> int:
         async with self.pool.connection() as conn:
             interval_param = f"{max(days, 0)} days"
             if dry_run:
-                query = (
-                    """
+                query = """
                     SELECT COUNT(*) AS deleted_count
                     FROM langgraph_checkpoints
                     WHERE created_at < NOW() - %s::interval
                     """
-                )
                 await conn.execute(query, (interval_param,))
                 try:
                     row = await conn.fetchone()  # type: ignore[attr-defined]
@@ -344,13 +348,11 @@ class ThreadManager:
                 deleted_count = self._get_value(row, "deleted_count", 0) or 0
                 return int(deleted_count)
 
-            delete_query = (
-                """
+            delete_query = """
                 DELETE FROM langgraph_checkpoints
                 WHERE created_at < NOW() - %s::interval
                 RETURNING id
                 """
-            )
             cursor = await conn.execute(delete_query, (interval_param,))
             # Prefer a single-row count if the mock provides it
             try:

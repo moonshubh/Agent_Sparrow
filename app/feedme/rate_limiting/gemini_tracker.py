@@ -3,6 +3,7 @@ Simple in-process daily + per-minute pacing for Gemini requests.
 Not a global distributed limiter; intended to keep within free-tier limits
 on a single worker and provide best-effort pacing with backoff.
 """
+
 from __future__ import annotations
 
 import threading
@@ -122,8 +123,12 @@ class GeminiRateTracker:
                 "utilization": {
                     "daily": self._count_today / max(1, self.daily_limit),
                     "rpm": self._calls_in_window / max(1, self.rpm_limit),
-                    "tpm": (self._tokens_in_window / float(self.tpm_limit)) if self.tpm_limit > 0 else 0.0
-                }
+                    "tpm": (
+                        (self._tokens_in_window / float(self.tpm_limit))
+                        if self.tpm_limit > 0
+                        else 0.0
+                    ),
+                },
             }
 
 
@@ -138,19 +143,28 @@ def get_tracker(daily_limit: int, rpm_limit: int) -> GeminiRateTracker:
     if _tracker is None:
         with _tracker_lock:
             if _tracker is None:  # Double-check pattern
-                _tracker = GeminiRateTracker(daily_limit=daily_limit, rpm_limit=rpm_limit)
+                _tracker = GeminiRateTracker(
+                    daily_limit=daily_limit, rpm_limit=rpm_limit
+                )
     return _tracker
+
 
 def get_tracker_info(daily_limit: int, rpm_limit: int) -> dict:
     return get_tracker(daily_limit, rpm_limit).info()
 
-def get_embed_tracker(daily_limit: int, rpm_limit: int, tpm_limit: int) -> GeminiRateTracker:
+
+def get_embed_tracker(
+    daily_limit: int, rpm_limit: int, tpm_limit: int
+) -> GeminiRateTracker:
     global _embed_tracker
     if _embed_tracker is None:
         with _embed_tracker_lock:
             if _embed_tracker is None:  # Double-check pattern
-                _embed_tracker = GeminiRateTracker(daily_limit=daily_limit, rpm_limit=rpm_limit, tpm_limit=tpm_limit)
+                _embed_tracker = GeminiRateTracker(
+                    daily_limit=daily_limit, rpm_limit=rpm_limit, tpm_limit=tpm_limit
+                )
     return _embed_tracker
+
 
 def get_embed_tracker_info(daily_limit: int, rpm_limit: int, tpm_limit: int) -> dict:
     return get_embed_tracker(daily_limit, rpm_limit, tpm_limit).info()

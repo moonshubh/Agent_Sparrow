@@ -1,55 +1,57 @@
-"use client"
+"use client";
 
-import React, { useState } from 'react'
-import { LightDarkToggle } from '@/shared/ui/LightDarkToggle'
-import { FeedMeButton } from '@/shared/ui/FeedMeButton'
-import { SettingsButtonV2 } from '@/shared/ui/SettingsButtonV2'
+import React, { useState } from "react";
+import { LightDarkToggle } from "@/shared/ui/LightDarkToggle";
+import { FeedMeButton } from "@/shared/ui/FeedMeButton";
+import { SettingsButtonV2 } from "@/shared/ui/SettingsButtonV2";
 
-import { useAuth } from '@/features/auth/hooks/useAuth'
-import { UserMenu } from '@/features/auth/components/UserMenu'
-import { Button } from '@/shared/ui/button'
-import { LogIn, Loader2 } from 'lucide-react'
-import { useRouter } from 'next/navigation'
-import { toast } from 'sonner'
-import Image from 'next/image'
+import { useAuth } from "@/features/auth/hooks/useAuth";
+import { UserMenu } from "@/features/auth/components/UserMenu";
+import { Button } from "@/shared/ui/button";
+import { LogIn, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import Image from "next/image";
 
 export function Header() {
-  const { user, isAuthenticated, logout } = useAuth()
-  const router = useRouter()
-  const [isNavigating, setIsNavigating] = useState(false)
+  const { user, isAuthenticated, logout } = useAuth();
+  const router = useRouter();
+  const [isNavigating, setIsNavigating] = useState(false);
 
   const handleLogin = async () => {
     try {
-      setIsNavigating(true)
+      setIsNavigating(true);
 
       // Attempt navigation to login page
-      if (typeof window !== 'undefined') {
+      if (typeof window !== "undefined") {
         try {
-          await router.push('/login')
+          await router.push("/login");
         } catch {
-          window.location.href = '/login'
+          window.location.href = "/login";
         }
       }
     } catch (error) {
       // Handle navigation errors gracefully
-      console.error('Navigation to login page failed:', error)
+      console.error("Navigation to login page failed:", error);
 
       // Show user-friendly error message
-      toast.error('Unable to navigate to login page. Please try again.')
+      toast.error("Unable to navigate to login page. Please try again.");
 
       // Optionally, try alternative navigation method
-      if (typeof window !== 'undefined') {
+      if (typeof window !== "undefined") {
         try {
-          window.location.href = '/login'
+          window.location.href = "/login";
         } catch (fallbackError) {
-          console.error('Fallback navigation also failed:', fallbackError)
-          toast.error('Navigation failed. Please refresh the page and try again.')
+          console.error("Fallback navigation also failed:", fallbackError);
+          toast.error(
+            "Navigation failed. Please refresh the page and try again.",
+          );
         }
       }
     } finally {
-      setTimeout(() => setIsNavigating(false), 100)
+      setTimeout(() => setIsNavigating(false), 100);
     }
-  }
+  };
 
   return (
     <header
@@ -67,10 +69,11 @@ export function Header() {
             priority
           />
         </div>
-        <span className="text-base font-semibold text-accent">Agent Sparrow</span>
+        <span className="text-base font-semibold text-accent">
+          Agent Sparrow
+        </span>
       </div>
       <div className="flex items-center gap-3">
-
         <FeedMeButton />
         <SettingsButtonV2 />
         <LightDarkToggle />
@@ -91,10 +94,10 @@ export function Header() {
             ) : (
               <LogIn className="h-4 w-4" />
             )}
-            {isNavigating ? 'Loading...' : 'Sign In'}
+            {isNavigating ? "Loading..." : "Sign In"}
           </Button>
         )}
       </div>
     </header>
-  )
+  );
 }

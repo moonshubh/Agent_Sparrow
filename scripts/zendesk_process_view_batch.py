@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import argparse
 import asyncio
 import base64
@@ -20,7 +22,6 @@ from app.core.settings import settings
 from app.integrations.zendesk.client import ZendeskClient
 from app.integrations.zendesk.scheduler import _generate_reply, _quality_gate_issues
 
-
 logger = logging.getLogger("zendesk_batch")
 
 
@@ -34,7 +35,15 @@ def _require_settings() -> Tuple[str, str, str]:
     subdomain = getattr(settings, "zendesk_subdomain", None)
     email = getattr(settings, "zendesk_email", None)
     api_token = getattr(settings, "zendesk_api_token", None)
-    missing = [k for k, v in (("ZENDESK_SUBDOMAIN", subdomain), ("ZENDESK_EMAIL", email), ("ZENDESK_API_TOKEN", api_token)) if not v]
+    missing = [
+        k
+        for k, v in (
+            ("ZENDESK_SUBDOMAIN", subdomain),
+            ("ZENDESK_EMAIL", email),
+            ("ZENDESK_API_TOKEN", api_token),
+        )
+        if not v
+    ]
     if missing:
         raise SystemExit(f"Missing required env vars: {', '.join(missing)}")
     return str(subdomain), str(email), str(api_token)
@@ -50,10 +59,16 @@ def _auth_headers(email: str, api_token: str) -> Dict[str, str]:
     }
 
 
-def _zendesk_get_json(session: requests.Session, url: str, headers: Dict[str, str]) -> Dict[str, Any]:
+def _zendesk_get_json(
+    session: requests.Session, url: str, headers: Dict[str, str]
+) -> Dict[str, Any]:
     resp = session.get(url, headers=headers, timeout=30)
     resp.raise_for_status()
-    data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+    data = (
+        resp.json()
+        if resp.headers.get("Content-Type", "").startswith("application/json")
+        else {}
+    )
     return data if isinstance(data, dict) else {}
 
 
@@ -114,7 +129,9 @@ def iter_view_ticket_ids(
     per_page: int = 100,
 ) -> Iterable[int]:
     base = f"https://{subdomain}.zendesk.com/api/v2"
-    url: Optional[str] = f"{base}/views/{view_id}/tickets.json?per_page={max(1, min(100, int(per_page)))}"
+    url: Optional[str] = (
+        f"{base}/views/{view_id}/tickets.json?per_page={max(1, min(100, int(per_page)))}"
+    )
     session = requests.Session()
     headers = _auth_headers(email, api_token)
 
@@ -160,8 +177,12 @@ async def process_tickets(
     started_at = time.monotonic()
 
     for i, ticket_id in enumerate(ticket_ids, start=1):
-        if max_runtime_sec is not None and (time.monotonic() - started_at) >= float(max_runtime_sec):
-            logger.info("Time limit reached (%.1fs); stopping early", float(max_runtime_sec))
+        if max_runtime_sec is not None and (time.monotonic() - started_at) >= float(
+            max_runtime_sec
+        ):
+            logger.info(
+                "Time limit reached (%.1fs); stopping early", float(max_runtime_sec)
+            )
             break
         if len(processed) >= max_successes:
             break
@@ -170,14 +191,22 @@ async def process_tickets(
             ticket = await asyncio.to_thread(zc.get_ticket, ticket_id)
             if skip_if_tagged:
                 tags = ticket.get("tags") if isinstance(ticket, dict) else None
-                if isinstance(tags, list) and any(isinstance(t, str) and t == skip_if_tagged for t in tags):
-                    logger.info("ticket=%s skipped (tagged=%s)", ticket_id, skip_if_tagged)
+                if isinstance(tags, list) and any(
+                    isinstance(t, str) and t == skip_if_tagged for t in tags
+                ):
+                    logger.info(
+                        "ticket=%s skipped (tagged=%s)", ticket_id, skip_if_tagged
+                    )
                     skipped.append(ticket_id)
                     continue
 
             subject = ticket.get("subject") if isinstance(ticket, dict) else None
-            description = ticket.get("description") if isinstance(ticket, dict) else None
-            run = await _generate_reply(ticket_id, subject, description, provider=provider, model=model)
+            description = (
+                ticket.get("description") if isinstance(ticket, dict) else None
+            )
+            run = await _generate_reply(
+                ticket_id, subject, description, provider=provider, model=model
+            )
             reply = run.reply
             use_html = bool(getattr(settings, "zendesk_use_html", True))
             gate_issues = _quality_gate_issues(reply, use_html=use_html)
@@ -203,19 +232,68 @@ async def process_tickets(
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Process Zendesk tickets from a View and post internal notes.")
-    parser.add_argument("--view-id", type=int, default=0, help="Zendesk view ID (preferred if known)")
-    parser.add_argument("--view-title", type=str, default="New Win", help='Substring match for view title (default: "New Win")')
-    parser.add_argument("--start-ticket", type=int, required=True, help="Ticket ID to start from (inclusive)")
-    parser.add_argument("--count", type=int, default=10, help="Number of tickets to post notes to")
-    parser.add_argument("--provider", type=str, default="google", help='Agent provider (default: "google")')
-    parser.add_argument("--model", type=str, default="gemini-2.5-pro", help='Agent model (default: "gemini-2.5-pro")')
-    parser.add_argument("--post", action="store_true", help="Actually post internal notes (otherwise dry-run)")
-    parser.add_argument("--tag", type=str, default="mb_auto_triaged", help='Tag to add on update (default: "mb_auto_triaged")')
-    parser.add_argument("--skip-if-tagged", type=str, default="mb_auto_triaged", help="Skip tickets that already have this tag")
-    parser.add_argument("--sleep-sec", type=float, default=0.5, help="Sleep between tickets (seconds)")
-    parser.add_argument("--max-minutes", type=float, default=0.0, help="Stop after N minutes (0 = no limit)")
-    parser.add_argument("--log-level", type=str, default="INFO", help="Logging level (INFO, DEBUG, ...)")
+    parser = argparse.ArgumentParser(
+        description="Process Zendesk tickets from a View and post internal notes."
+    )
+    parser.add_argument(
+        "--view-id", type=int, default=0, help="Zendesk view ID (preferred if known)"
+    )
+    parser.add_argument(
+        "--view-title",
+        type=str,
+        default="New Win",
+        help='Substring match for view title (default: "New Win")',
+    )
+    parser.add_argument(
+        "--start-ticket",
+        type=int,
+        required=True,
+        help="Ticket ID to start from (inclusive)",
+    )
+    parser.add_argument(
+        "--count", type=int, default=10, help="Number of tickets to post notes to"
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default="google",
+        help='Agent provider (default: "google")',
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="gemini-2.5-pro",
+        help='Agent model (default: "gemini-2.5-pro")',
+    )
+    parser.add_argument(
+        "--post",
+        action="store_true",
+        help="Actually post internal notes (otherwise dry-run)",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default="mb_auto_triaged",
+        help='Tag to add on update (default: "mb_auto_triaged")',
+    )
+    parser.add_argument(
+        "--skip-if-tagged",
+        type=str,
+        default="mb_auto_triaged",
+        help="Skip tickets that already have this tag",
+    )
+    parser.add_argument(
+        "--sleep-sec", type=float, default=0.5, help="Sleep between tickets (seconds)"
+    )
+    parser.add_argument(
+        "--max-minutes",
+        type=float,
+        default=0.0,
+        help="Stop after N minutes (0 = no limit)",
+    )
+    parser.add_argument(
+        "--log-level", type=str, default="INFO", help="Logging level (INFO, DEBUG, ...)"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -276,7 +354,9 @@ async def main() -> None:
             break
 
     if not started:
-        raise SystemExit(f"Start ticket {start_ticket} not found in view {view.view_id} ({view.title})")
+        raise SystemExit(
+            f"Start ticket {start_ticket} not found in view {view.view_id} ({view.title})"
+        )
 
     result = await process_tickets(
         ticket_ids=window,
@@ -287,7 +367,9 @@ async def main() -> None:
         add_tag=str(args.tag),
         skip_if_tagged=str(args.skip_if_tagged) if args.skip_if_tagged else None,
         sleep_sec=float(args.sleep_sec),
-        max_runtime_sec=(float(args.max_minutes) * 60.0) if float(args.max_minutes) > 0 else None,
+        max_runtime_sec=(
+            (float(args.max_minutes) * 60.0) if float(args.max_minutes) > 0 else None
+        ),
     )
 
     processed_ids = result["processed"]

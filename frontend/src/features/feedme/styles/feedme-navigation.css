@@ -10,7 +10,7 @@
 /* CSS variables for sidebar widths */
 :root {
   --sidebar-width-expanded: 16rem; /* 256px */
-  --sidebar-width-collapsed: 4rem;  /* 64px */
+  --sidebar-width-collapsed: 4rem; /* 64px */
   --app-bar-height: 4rem; /* 64px - adjust based on your app bar */
 }
 
@@ -136,7 +136,7 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-  
+
   .folder-scroll {
     scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
   }

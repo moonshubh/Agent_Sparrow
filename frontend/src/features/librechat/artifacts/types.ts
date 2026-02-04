@@ -1,6 +1,6 @@
 /**
  * Artifact Types & Interfaces for Agent Sparrow
- * 
+ *
  * Defines the core type system for the artifact infrastructure.
  * Artifacts are structured code/diagram outputs that can be viewed
  * in a dedicated panel with preview capabilities.
@@ -16,7 +16,14 @@
  * - kb-article: Knowledge base article draft
  * - article: Rich article with images (editable)
  */
-export type ArtifactType = 'react' | 'html' | 'mermaid' | 'code' | 'image' | 'kb-article' | 'article';
+export type ArtifactType =
+  | "react"
+  | "html"
+  | "mermaid"
+  | "code"
+  | "image"
+  | "kb-article"
+  | "article";
 
 /**
  * Core artifact interface
@@ -123,11 +130,11 @@ export function generateArtifactId(
   type: string,
   title: string,
   messageId: string,
-  index?: number
+  index?: number,
 ): string {
-  const suffix = typeof index === 'number' ? `_idx${index}` : '';
+  const suffix = typeof index === "number" ? `_idx${index}` : "";
   return `${identifier}_${type}_${title}_${messageId}${suffix}`
-    .replace(/\s+/g, '_')
+    .replace(/\s+/g, "_")
     .toLowerCase();
 }
 
@@ -135,15 +142,15 @@ export function generateArtifactId(
  * Default values for artifacts
  */
 export const ARTIFACT_DEFAULTS = {
-  title: 'Untitled',
-  type: 'code' as ArtifactType,
-  identifier: 'artifact',
+  title: "Untitled",
+  type: "code" as ArtifactType,
+  identifier: "artifact",
 } as const;
 
 /**
  * Languages that can be auto-detected as artifacts
  */
-export const ARTIFACT_LANGUAGES = ['mermaid', 'jsx', 'tsx', 'html'] as const;
+export const ARTIFACT_LANGUAGES = ["mermaid", "jsx", "tsx", "html"] as const;
 
 /**
  * Check if a language is an artifact-capable language

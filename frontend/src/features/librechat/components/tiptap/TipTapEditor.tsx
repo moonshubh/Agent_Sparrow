@@ -1,9 +1,15 @@
-'use client';
+"use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { EditorContent, useEditor } from '@tiptap/react';
-import type { Editor } from '@tiptap/core';
-import { createExtensions, type ExtensionOptions } from './extensions';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { EditorContent, useEditor } from "@tiptap/react";
+import type { Editor } from "@tiptap/core";
+import { createExtensions, type ExtensionOptions } from "./extensions";
 
 export interface TipTapEditorProps {
   initialContent: string;
@@ -21,7 +27,7 @@ export interface TipTapEditorProps {
   className?: string;
 }
 
-type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 export function TipTapEditor({
   initialContent,
@@ -44,7 +50,7 @@ export function TipTapEditor({
   const lastSavedRef = useRef(initialContent);
   const isSavingRef = useRef(false);
 
-  const [status, setStatus] = useState<SaveStatus>('idle');
+  const [status, setStatus] = useState<SaveStatus>("idle");
 
   const extensionOptions: ExtensionOptions = useMemo(
     () => ({
@@ -54,65 +60,78 @@ export function TipTapEditor({
       enableTaskList,
       enableImages,
     }),
-    [placeholder, enableMath, enableTables, enableTaskList, enableImages]
+    [placeholder, enableMath, enableTables, enableTaskList, enableImages],
   );
 
-  const extensions = useMemo(() => createExtensions(extensionOptions), [extensionOptions]);
+  const extensions = useMemo(
+    () => createExtensions(extensionOptions),
+    [extensionOptions],
+  );
 
   const markSaved = useCallback(() => {
-    setStatus('saved');
+    setStatus("saved");
     if (statusTimeoutRef.current) {
       clearTimeout(statusTimeoutRef.current);
     }
-    statusTimeoutRef.current = setTimeout(() => setStatus('idle'), 1500);
+    statusTimeoutRef.current = setTimeout(() => setStatus("idle"), 1500);
   }, []);
 
-  const runSave = useCallback(async (editor: Editor): Promise<boolean> => {
-    if (readOnly || !onSave) return true;
-    if (isSavingRef.current) return false;
-    const markdown = editor.getMarkdown();
-    if (markdown === lastSavedRef.current) return true;
+  const runSave = useCallback(
+    async (editor: Editor): Promise<boolean> => {
+      if (readOnly || !onSave) return true;
+      if (isSavingRef.current) return false;
+      const markdown = editor.getMarkdown();
+      if (markdown === lastSavedRef.current) return true;
 
-    isSavingRef.current = true;
-    setStatus('saving');
+      isSavingRef.current = true;
+      setStatus("saving");
 
-    try {
-      await onSave(markdown);
-      lastSavedRef.current = markdown;
-      markSaved();
-      return true;
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        console.error('[TipTapEditor] Failed to save content', error.message, error.stack);
-      } else {
-        console.error('[TipTapEditor] Failed to save content', String(error));
+      try {
+        await onSave(markdown);
+        lastSavedRef.current = markdown;
+        markSaved();
+        return true;
+      } catch (error: unknown) {
+        if (error instanceof Error) {
+          console.error(
+            "[TipTapEditor] Failed to save content",
+            error.message,
+            error.stack,
+          );
+        } else {
+          console.error("[TipTapEditor] Failed to save content", String(error));
+        }
+        setStatus("error");
+        return false;
+      } finally {
+        isSavingRef.current = false;
       }
-      setStatus('error');
-      return false;
-    } finally {
-      isSavingRef.current = false;
-    }
-  }, [markSaved, onSave, readOnly]);
+    },
+    [markSaved, onSave, readOnly],
+  );
 
-  const scheduleSave = useCallback((editor: Editor) => {
-    if (!autoSave || readOnly || !onSave) return;
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
-    saveTimeoutRef.current = setTimeout(() => {
-      void runSave(editor);
-    }, autoSaveDelay);
-  }, [autoSave, autoSaveDelay, onSave, readOnly, runSave]);
+  const scheduleSave = useCallback(
+    (editor: Editor) => {
+      if (!autoSave || readOnly || !onSave) return;
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      saveTimeoutRef.current = setTimeout(() => {
+        void runSave(editor);
+      }, autoSaveDelay);
+    },
+    [autoSave, autoSaveDelay, onSave, readOnly, runSave],
+  );
 
   const editor = useEditor({
     extensions,
     content: initialContent,
-    contentType: 'markdown',
+    contentType: "markdown",
     editable: !readOnly,
     immediatelyRender: false,
     editorProps: {
       attributes: {
-        class: 'lc-tiptap-editor',
+        class: "lc-tiptap-editor",
       },
     },
     onCreate: ({ editor }) => {
@@ -126,9 +145,9 @@ export function TipTapEditor({
   useEffect(() => {
     if (!editor) return;
     if (initialContent === lastSavedRef.current) return;
-    editor.commands.setContent(initialContent, { contentType: 'markdown' });
+    editor.commands.setContent(initialContent, { contentType: "markdown" });
     lastSavedRef.current = initialContent;
-    setStatus('idle');
+    setStatus("idle");
   }, [editor, initialContent]);
 
   useEffect(() => {
@@ -157,28 +176,31 @@ export function TipTapEditor({
       });
     };
 
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
 
     return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
     };
   }, [autoSave, editor, onExit, onSave, readOnly, runSave]);
 
-  const handleKeyDownCapture = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
+  const handleKeyDownCapture = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+        }
+        if (onCancel) {
+          onCancel();
+          return;
+        }
+        onExit?.();
       }
-      if (onCancel) {
-        onCancel();
-        return;
-      }
-      onExit?.();
-    }
-  }, [onCancel, onExit]);
+    },
+    [onCancel, onExit],
+  );
 
   if (!editor) {
     return null;
@@ -187,23 +209,25 @@ export function TipTapEditor({
   return (
     <div
       ref={containerRef}
-      className={className ? `lc-tiptap-wrapper ${className}` : 'lc-tiptap-wrapper'}
+      className={
+        className ? `lc-tiptap-wrapper ${className}` : "lc-tiptap-wrapper"
+      }
       onKeyDownCapture={handleKeyDownCapture}
     >
       <EditorContent editor={editor} />
-      {!readOnly && status !== 'idle' && (
+      {!readOnly && status !== "idle" && (
         <div
           className={
-            status === 'error'
-              ? 'lc-tiptap-status lc-tiptap-status-error'
-              : 'lc-tiptap-status'
+            status === "error"
+              ? "lc-tiptap-status lc-tiptap-status-error"
+              : "lc-tiptap-status"
           }
           role="status"
           aria-live="polite"
         >
-          {status === 'saving' && 'Saving...'}
-          {status === 'saved' && 'Saved'}
-          {status === 'error' && 'Save failed'}
+          {status === "saving" && "Saving..."}
+          {status === "saved" && "Saved"}
+          {status === "error" && "Save failed"}
         </div>
       )}
     </div>

@@ -1,25 +1,30 @@
-"use client"
+"use client";
 
-import { useCallback, useState } from 'react'
-import Image from 'next/image'
-import { useRouter } from 'next/navigation'
-import { PanelsTopLeft } from 'lucide-react'
+import { useCallback, useState } from "react";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { PanelsTopLeft } from "lucide-react";
 
-import { Button } from '@/shared/ui/button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shared/ui/tooltip'
+import { Button } from "@/shared/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/shared/ui/tooltip";
 
 interface FeedMeButtonProps {
-  onClick?: () => void
+  onClick?: () => void;
 }
 
 export function FeedMeButton({ onClick }: FeedMeButtonProps) {
-  const router = useRouter()
-  const [isHovered, setIsHovered] = useState(false)
+  const router = useRouter();
+  const [isHovered, setIsHovered] = useState(false);
 
   const handleNavigate = useCallback(() => {
-    onClick?.()
-    router.push('/feedme')
-  }, [onClick, router])
+    onClick?.();
+    router.push("/feedme");
+  }, [onClick, router]);
 
   return (
     <>
@@ -41,7 +46,7 @@ export function FeedMeButton({ onClick }: FeedMeButtonProps) {
                 alt="FeedMe"
                 width={20}
                 height={20}
-                className={`transition-opacity ${isHovered ? 'opacity-100' : 'opacity-70'}`}
+                className={`transition-opacity ${isHovered ? "opacity-100" : "opacity-70"}`}
               />
               <span className="text-sm">FeedMe</span>
             </Button>
@@ -50,5 +55,5 @@ export function FeedMeButton({ onClick }: FeedMeButtonProps) {
         </Tooltip>
       </TooltipProvider>
     </>
-  )
+  );
 }

@@ -9,35 +9,42 @@
 // Enums
 // =============================================================================
 
-export type SourceType = 'auto_extracted' | 'manual';
+export type SourceType = "auto_extracted" | "manual";
 
 export type FeedbackType =
-  | 'thumbs_up'
-  | 'thumbs_down'
-  | 'resolution_success'
-  | 'resolution_failure';
+  | "thumbs_up"
+  | "thumbs_down"
+  | "resolution_success"
+  | "resolution_failure";
 
 export type EntityType =
-  | 'product'
-  | 'feature'
-  | 'issue'
-  | 'solution'
-  | 'platform'
-  | 'version'
-  | 'customer'
-  | 'error';
+  | "product"
+  | "feature"
+  | "issue"
+  | "solution"
+  | "platform"
+  | "version"
+  | "customer"
+  | "error";
 
 export type RelationshipType =
-  | 'RESOLVED_BY'
-  | 'AFFECTS'
-  | 'REQUIRES'
-  | 'CAUSED_BY'
-  | 'REPORTED_BY'
-  | 'WORKS_ON'
-  | 'RELATED_TO'
-  | 'SUPERSEDES';
+  | "RESOLVED_BY"
+  | "AFFECTS"
+  | "REQUIRES"
+  | "CAUSED_BY"
+  | "REPORTED_BY"
+  | "WORKS_ON"
+  | "RELATED_TO"
+  | "SUPERSEDES";
 
-export type DuplicateStatus = 'pending' | 'merged' | 'dismissed' | 'superseded';
+export type DuplicateStatus = "pending" | "merged" | "dismissed" | "superseded";
+
+export type ReviewStatus =
+  | "approved"
+  | "pending_review"
+  | "rejected"
+  | "edited"
+  | "pending";
 
 // =============================================================================
 // Core Models
@@ -48,7 +55,7 @@ export interface Memory {
   content: string;
   metadata: Record<string, unknown>;
   source_type: SourceType;
-  review_status?: string | null;
+  review_status?: ReviewStatus | null;
   reviewed_by?: string | null;
   reviewed_at?: string | null;
   confidence_score: number;
@@ -168,7 +175,7 @@ export interface GraphData {
 // Radial Tree Types (Memory Visualization)
 // =============================================================================
 
-export type TreeViewMode = 'celebrate_strengths' | 'surface_gaps';
+export type TreeViewMode = "celebrate_strengths" | "surface_gaps";
 
 export interface TreeEdge {
   sourceId: string;
@@ -261,7 +268,7 @@ export interface ExportFilters {
 }
 
 export interface ExportMemoriesRequest {
-  format: 'json';
+  format: "json";
   filters?: ExportFilters;
 }
 
@@ -283,7 +290,8 @@ export interface ListMemoriesRequest {
   agent_id?: string;
   tenant_id?: string;
   source_type?: SourceType;
-  sort_order?: 'asc' | 'desc';
+  sort_order?: "asc" | "desc";
+  review_status?: ReviewStatus;
 }
 
 export interface ImportMemorySourcesRequest {
@@ -363,6 +371,8 @@ export interface UpdateMemoryResponse {
   content: string;
   updated_at: string;
 }
+
+export type ApproveMemoryResponse = Memory;
 
 export interface DeleteMemoryResponse {
   deleted: boolean;
@@ -503,13 +513,13 @@ export interface RelationshipChecklistItem {
 }
 
 export type RelationshipSuggestedActionKind =
-  | 'update_relationship'
-  | 'merge_relationships'
-  | 'split_relationship_commit'
-  | 'update_memory'
-  | 'delete_memory'
-  | 'merge_memories_arbitrary'
-  | 'delete_relationship';
+  | "update_relationship"
+  | "merge_relationships"
+  | "split_relationship_commit"
+  | "update_memory"
+  | "delete_memory"
+  | "merge_memories_arbitrary"
+  | "delete_relationship";
 
 export interface RelationshipSuggestedAction {
   id: string;
@@ -550,12 +560,12 @@ export interface MemoryFilters {
   entityTypes: EntityType[];
   minConfidence: number;
   sourceType: SourceType | null;
-  sortBy: 'confidence' | 'created_at' | 'retrieval_count';
-  sortOrder: 'asc' | 'desc';
+  sortBy: "confidence" | "created_at" | "retrieval_count";
+  sortOrder: "asc" | "desc";
 }
 
 export interface MemoryViewMode {
-  mode: 'graph' | 'table' | 'duplicates';
+  mode: "graph" | "table" | "duplicates";
 }
 
 export interface SelectedMemory {
@@ -569,14 +579,14 @@ export interface SelectedMemory {
 // =============================================================================
 
 export const ALL_ENTITY_TYPES: readonly EntityType[] = [
-  'product',
-  'feature',
-  'issue',
-  'solution',
-  'platform',
-  'version',
-  'customer',
-  'error',
+  "product",
+  "feature",
+  "issue",
+  "solution",
+  "platform",
+  "version",
+  "customer",
+  "error",
 ] as const;
 
 // =============================================================================
@@ -584,34 +594,34 @@ export const ALL_ENTITY_TYPES: readonly EntityType[] = [
 // =============================================================================
 
 export const ENTITY_COLORS: Record<EntityType, string> = {
-  product: '#0078D4',       // Mailbird Blue (Primary)
-  feature: '#10B981',       // Emerald
-  issue: '#EF4444',         // Red
-  solution: '#22C55E',      // Green
-  platform: '#F59E0B',      // Amber
-  version: '#38BDF8',       // Sky Blue
-  customer: '#14B8A6',      // Teal
-  error: '#F43F5E',         // Rose
+  product: "#0078D4", // Mailbird Blue (Primary)
+  feature: "#10B981", // Emerald
+  issue: "#EF4444", // Red
+  solution: "#22C55E", // Green
+  platform: "#F59E0B", // Amber
+  version: "#38BDF8", // Sky Blue
+  customer: "#14B8A6", // Teal
+  error: "#F43F5E", // Rose
 };
 
 export const ENTITY_LABELS: Record<EntityType, string> = {
-  product: 'Product',
-  feature: 'Feature',
-  issue: 'Issue',
-  solution: 'Solution',
-  platform: 'Platform',
-  version: 'Version',
-  customer: 'Customer',
-  error: 'Error',
+  product: "Product",
+  feature: "Feature",
+  issue: "Issue",
+  solution: "Solution",
+  platform: "Platform",
+  version: "Version",
+  customer: "Customer",
+  error: "Error",
 };
 
 export const RELATIONSHIP_LABELS: Record<RelationshipType, string> = {
-  RESOLVED_BY: 'Resolved By',
-  AFFECTS: 'Affects',
-  REQUIRES: 'Requires',
-  CAUSED_BY: 'Caused By',
-  REPORTED_BY: 'Reported By',
-  WORKS_ON: 'Works On',
-  RELATED_TO: 'Related To',
-  SUPERSEDES: 'Supersedes',
+  RESOLVED_BY: "Resolved By",
+  AFFECTS: "Affects",
+  REQUIRES: "Requires",
+  CAUSED_BY: "Caused By",
+  REPORTED_BY: "Reported By",
+  WORKS_ON: "Works On",
+  RELATED_TO: "Related To",
+  SUPERSEDES: "Supersedes",
 };

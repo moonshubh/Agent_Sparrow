@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { Html } from '@react-three/drei';
-import { useMemo, useState, type RefObject } from 'react';
-import * as THREE from 'three';
-import { ENTITY_COLORS } from '../types';
-import type { GraphNode, OrphanEntity } from '../types';
-import { hashStringToUint32, mulberry32 } from '../lib/tree3DGeometry';
-import { getLeafTexture } from '../lib/textureLoader';
+import { Html } from "@react-three/drei";
+import { useMemo, useState, type RefObject } from "react";
+import * as THREE from "three";
+import { ENTITY_COLORS } from "../types";
+import type { GraphNode, OrphanEntity } from "../types";
+import { hashStringToUint32, mulberry32 } from "../lib/tree3DGeometry";
+import { getLeafTexture } from "../lib/textureLoader";
 
 function toTimeMs(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -14,14 +14,14 @@ function toTimeMs(value: string | null | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-function getFreshness(node: GraphNode): 'fresh' | 'stale' {
+function getFreshness(node: GraphNode): "fresh" | "stale" {
   const acknowledgedMs = toTimeMs(node.acknowledgedAt);
-  if (!acknowledgedMs) return 'fresh';
+  if (!acknowledgedMs) return "fresh";
 
   const lastModifiedMs = toTimeMs(node.lastModifiedAt);
-  if (!lastModifiedMs) return 'stale';
+  if (!lastModifiedMs) return "stale";
 
-  return lastModifiedMs > acknowledgedMs ? 'fresh' : 'stale';
+  return lastModifiedMs > acknowledgedMs ? "fresh" : "stale";
 }
 
 function mixColor(a: string, b: string, t: number): string {
@@ -64,10 +64,11 @@ export function OrphanScatter({
       const scale = 0.75 + rng() * 0.75;
 
       const freshness = getFreshness(orphan.node);
-      const base = ENTITY_COLORS[orphan.node.entityType] ?? '#6B7280';
-      const earthy = freshness === 'fresh'
-        ? mixColor(base, '#4CAF50', 0.22)
-        : mixColor(base, '#5D4037', 0.55);
+      const base = ENTITY_COLORS[orphan.node.entityType] ?? "#6B7280";
+      const earthy =
+        freshness === "fresh"
+          ? mixColor(base, "#4CAF50", 0.22)
+          : mixColor(base, "#5D4037", 0.55);
 
       return {
         id: orphan.id,
@@ -82,7 +83,7 @@ export function OrphanScatter({
   }, [groundSize, orphans]);
 
   const hovered = hoveredId
-    ? placements.find((p) => p.id === hoveredId) ?? null
+    ? (placements.find((p) => p.id === hoveredId) ?? null)
     : null;
 
   return (
@@ -126,12 +127,17 @@ export function OrphanScatter({
 
       {hovered && (
         <Html
-          position={[hovered.position.x, hovered.position.y + 0.5, hovered.position.z]}
+          position={[
+            hovered.position.x,
+            hovered.position.y + 0.5,
+            hovered.position.z,
+          ]}
           center
           portal={htmlPortal}
         >
           <div className="particle-tree-hint">
-            Disconnected · {hovered.node.displayLabel} · {hovered.node.entityType}
+            Disconnected · {hovered.node.displayLabel} ·{" "}
+            {hovered.node.entityType}
           </div>
         </Html>
       )}

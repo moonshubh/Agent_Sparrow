@@ -6,7 +6,7 @@ import asyncio
 import random
 import time
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Iterator, Tuple
 
 import redis.asyncio as redis
 
@@ -25,7 +25,13 @@ from .exceptions import (
     GeminiServiceUnavailableException,
 )
 from .redis_limiter import RedisRateLimiter
-from .schemas import CircuitState, CircuitBreakerStatus, RateLimitMetadata, RateLimitResult, UsageStats
+from .schemas import (
+    CircuitState,
+    CircuitBreakerStatus,
+    RateLimitMetadata,
+    RateLimitResult,
+    UsageStats,
+)
 
 
 class BucketRateLimiter:
@@ -84,7 +90,8 @@ class BucketRateLimiter:
                 token_identifier=result.token_identifier,
             )
             if not tpm_result.allowed:
-                await self.redis_limiter.release(bucket, result.token_identifier)
+                if result.token_identifier is not None:
+                    await self.redis_limiter.release(bucket, result.token_identifier)
                 return tpm_result
 
             result = tpm_result
@@ -92,7 +99,7 @@ class BucketRateLimiter:
         return result
 
     async def release_slot(self, bucket: str, token_identifier: Optional[str]) -> None:
-        if not token_identifier:
+        if token_identifier is None:
             return
         try:
             await self.redis_limiter.release(bucket, token_identifier)
@@ -107,7 +114,9 @@ class BucketRateLimiter:
         token_count: Optional[int] = None,
         **kwargs,
     ) -> Any:
-        rate_limit_result = await self._await_rate_limit_slot(bucket, token_count=token_count)
+        rate_limit_result = await self._await_rate_limit_slot(
+            bucket, token_count=token_count
+        )
         circuit_breaker = self._get_circuit_breaker(bucket)
 
         try:
@@ -157,13 +166,18 @@ class BucketRateLimiter:
                 rpd_remaining=max(0, effective_rpd - rpd_used),
                 tpm_limit=effective_tpm,
                 tpm_used=tpm_used,
-                tpm_remaining=(max(0, effective_tpm - tpm_used) if effective_tpm else None),
-                reset_time_rpm=now.replace(second=0, microsecond=0) + timedelta(minutes=1),
+                tpm_remaining=(
+                    max(0, effective_tpm - tpm_used) if effective_tpm else None
+                ),
+                reset_time_rpm=now.replace(second=0, microsecond=0)
+                + timedelta(minutes=1),
                 reset_time_rpd=now.replace(hour=0, minute=0, second=0, microsecond=0)
                 + timedelta(days=1),
-                reset_time_tpm=now.replace(second=0, microsecond=0) + timedelta(minutes=1)
-                if effective_tpm is not None
-                else None,
+                reset_time_tpm=(
+                    now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+                    if effective_tpm is not None
+                    else None
+                ),
                 safety_margin=safety_margin,
             )
             buckets[bucket] = metadata
@@ -199,7 +213,7 @@ class BucketRateLimiter:
             await breaker.reset()
 
     async def health_check(self) -> Dict[str, Any]:
-        health = {
+        health: Dict[str, Any] = {
             "overall": "healthy",
             "redis": False,
             "circuit_breakers": {},
@@ -267,8 +281,12 @@ class BucketRateLimiter:
                     model=bucket,
                 )
 
-            wait_seconds = result.retry_after or self.config.backpressure_max_wait_seconds
-            wait_seconds = min(wait_seconds, self.config.backpressure_max_wait_seconds)
+            wait_seconds: float = float(
+                result.retry_after or self.config.backpressure_max_wait_seconds
+            )
+            wait_seconds = min(
+                wait_seconds, float(self.config.backpressure_max_wait_seconds)
+            )
             wait_seconds += random.uniform(0, self.config.backpressure_jitter_seconds)
             attempts += 1
             self.logger.warning(
@@ -319,17 +337,22 @@ class BucketRateLimiter:
 
         tpm_used = await self._get_tpm_usage(bucket)
         rpm_limit = (
-            rpm_metadata.rpm_limit if rpm_metadata else int(model_cfg.rate_limits.rpm * (1.0 - safety_margin))
+            rpm_metadata.rpm_limit
+            if rpm_metadata
+            else int(model_cfg.rate_limits.rpm * (1.0 - safety_margin))
         )
         rpd_limit = (
-            rpm_metadata.rpd_limit if rpm_metadata else int(model_cfg.rate_limits.rpd * (1.0 - safety_margin))
+            rpm_metadata.rpd_limit
+            if rpm_metadata
+            else int(model_cfg.rate_limits.rpd * (1.0 - safety_margin))
         )
         rpm_used = rpm_metadata.rpm_used if rpm_metadata else 0
         rpd_used = rpm_metadata.rpd_used if rpm_metadata else 0
         reset_time_rpm = (
             rpm_metadata.reset_time_rpm
             if rpm_metadata
-            else datetime.utcnow().replace(second=0, microsecond=0) + timedelta(minutes=1)
+            else datetime.utcnow().replace(second=0, microsecond=0)
+            + timedelta(minutes=1)
         )
         reset_time_rpd = (
             rpm_metadata.reset_time_rpd
@@ -352,7 +375,8 @@ class BucketRateLimiter:
             tpm_remaining=max(0, effective_tpm - tpm_used),
             reset_time_rpm=reset_time_rpm,
             reset_time_rpd=reset_time_rpd,
-            reset_time_tpm=datetime.utcnow().replace(second=0, microsecond=0) + timedelta(minutes=1),
+            reset_time_tpm=datetime.utcnow().replace(second=0, microsecond=0)
+            + timedelta(minutes=1),
             safety_margin=safety_margin,
         )
 
@@ -388,9 +412,11 @@ class BucketRateLimiter:
     def _calculate_uptime(self, circuits: Dict[str, CircuitBreakerStatus]) -> float:
         if not circuits:
             return 100.0
-        open_count = sum(1 for status in circuits.values() if status.state == CircuitState.OPEN)
+        open_count = sum(
+            1 for status in circuits.values() if status.state == CircuitState.OPEN
+        )
         return max(0.0, 100.0 - (open_count / max(1, len(circuits))) * 100.0)
 
-    def _iter_bucket_configs(self, config) -> Dict[str, Any]:
+    def _iter_bucket_configs(self, config) -> Iterator[Tuple[str, Any]]:
         for bucket, model_cfg in iter_rate_limit_buckets(config):
             yield bucket, model_cfg

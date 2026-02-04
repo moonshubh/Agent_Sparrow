@@ -10,15 +10,15 @@ from .easyocr_engine import (
     OCRLanguage,
     ProcessingQuality,
     create_ocr_engine,
-    EASYOCR_AVAILABLE
+    EASYOCR_AVAILABLE,
 )
 
 __all__ = [
-    'EasyOCREngine',
-    'OCRResult', 
-    'GemmaEnhancementResult',
-    'OCRLanguage',
-    'ProcessingQuality',
-    'create_ocr_engine',
-    'EASYOCR_AVAILABLE'
+    "EasyOCREngine",
+    "OCRResult",
+    "GemmaEnhancementResult",
+    "OCRLanguage",
+    "ProcessingQuality",
+    "create_ocr_engine",
+    "EASYOCR_AVAILABLE",
 ]

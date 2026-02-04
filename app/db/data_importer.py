@@ -16,19 +16,21 @@ Prerequisites:
   - FIRECRAWL_API_KEY
   - (Optional) MAILBIRD_URLS_TO_SCRAPE (comma-separated string)
 """
+
 import os
-import json
 import logging
 import time
 from datetime import datetime
 
-import psycopg2
+import psycopg2  # type: ignore[import-untyped]
 from dotenv import load_dotenv
-from firecrawl import FirecrawlApp
-from psycopg2.extras import Json
+from firecrawl import FirecrawlApp  # type: ignore[import-untyped]
+from psycopg2.extras import Json  # type: ignore[import-untyped]
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
@@ -47,11 +49,11 @@ DEFAULT_URLS = [
     "https://www.getmailbird.com/",
     "https://www.getmailbird.com/features/",
     "https://www.getmailbird.com/pricing/",
-    "https://support.getmailbird.com/hc/en-us"
+    "https://support.getmailbird.com/hc/en-us",
 ]
 MAILBIRD_URLS_TO_SCRAPE = os.getenv("MAILBIRD_URLS_TO_SCRAPE")
 if MAILBIRD_URLS_TO_SCRAPE:
-    TARGET_URLS = [url.strip() for url in MAILBIRD_URLS_TO_SCRAPE.split(',')]
+    TARGET_URLS = [url.strip() for url in MAILBIRD_URLS_TO_SCRAPE.split(",")]
 else:
     TARGET_URLS = DEFAULT_URLS
 
@@ -64,7 +66,7 @@ def get_db_connection():
             port=DB_PORT,
             user=DB_USER,
             password=DB_PASSWORD,
-            dbname=DB_NAME
+            dbname=DB_NAME,
         )
         logger.info("Successfully connected to the database.")
         return conn
@@ -72,13 +74,16 @@ def get_db_connection():
         logger.error(f"Error connecting to PostgreSQL database: {e}")
         raise
 
+
 def scrape_url_with_firecrawl(fc_app: FirecrawlApp, url: str):
     """Scrapes a single URL using Firecrawl."""
     logger.info(f"Scraping URL: {url}")
     try:
         # FirecrawlApp.scrape_url params: url, page_options, crawler_options, timeout
         # Default page_options should be fine for now.
-        scraped_data = fc_app.scrape_url(url=url, params={'pageOptions': {'onlyMainContent': True}})
+        scraped_data = fc_app.scrape_url(
+            url=url, params={"pageOptions": {"onlyMainContent": True}}
+        )
         if scraped_data:
             logger.info(f"Successfully scraped: {url}")
             return scraped_data
@@ -89,14 +94,17 @@ def scrape_url_with_firecrawl(fc_app: FirecrawlApp, url: str):
         logger.error(f"Error scraping URL {url} with Firecrawl: {e}")
         return None
 
+
 def insert_scraped_data(conn, url: str, scraped_content: dict):
     """Inserts or updates scraped data into the mailbird_knowledge table."""
-    markdown_content = scraped_content.get('markdown')
-    raw_content = scraped_content.get('content') # HTML or raw text
-    page_metadata = scraped_content.get('metadata', {})
+    markdown_content = scraped_content.get("markdown")
+    raw_content = scraped_content.get("content")  # HTML or raw text
+    page_metadata = scraped_content.get("metadata", {})
 
     if not markdown_content and not raw_content:
-        logger.warning(f"No content (markdown or raw) found for URL: {url}. Skipping insertion.")
+        logger.warning(
+            f"No content (markdown or raw) found for URL: {url}. Skipping insertion."
+        )
         return False
 
     sql = """
@@ -111,14 +119,17 @@ def insert_scraped_data(conn, url: str, scraped_content: dict):
     """
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, (
-                url,
-                raw_content, # Store raw_content as fallback
-                markdown_content,
-                datetime.now(psycopg2.tz.utc),
-                None,  # Embedding is NULL initially
-                Json(page_metadata) if page_metadata else None
-            ))
+            cur.execute(
+                sql,
+                (
+                    url,
+                    raw_content,  # Store raw_content as fallback
+                    markdown_content,
+                    datetime.now(psycopg2.tz.utc),
+                    None,  # Embedding is NULL initially
+                    Json(page_metadata) if page_metadata else None,
+                ),
+            )
         conn.commit()
         logger.info(f"Successfully inserted/updated data for URL: {url}")
         return True
@@ -128,16 +139,23 @@ def insert_scraped_data(conn, url: str, scraped_content: dict):
         return False
     except Exception as e:
         conn.rollback()
-        logger.error(f"An unexpected error occurred during data insertion for URL {url}: {e}")
+        logger.error(
+            f"An unexpected error occurred during data insertion for URL {url}: {e}"
+        )
         return False
+
 
 def main():
     """Main function to orchestrate scraping and data import."""
     logger.info("Starting Mailbird knowledge base import process...")
 
     if not all([DB_USER, DB_PASSWORD, DB_NAME, FIRECRAWL_API_KEY]):
-        logger.error("Database credentials or Firecrawl API key are not fully configured. Exiting.")
-        logger.error("Please set DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, FIRECRAWL_API_KEY.")
+        logger.error(
+            "Database credentials or Firecrawl API key are not fully configured. Exiting."
+        )
+        logger.error(
+            "Please set DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, FIRECRAWL_API_KEY."
+        )
         return
 
     if not TARGET_URLS:
@@ -150,13 +168,13 @@ def main():
     try:
         db_conn = get_db_connection()
         if not db_conn:
-            return # Error already logged by get_db_connection
+            return  # Error already logged by get_db_connection
 
         successful_imports = 0
         failed_imports = 0
 
         for i, url in enumerate(TARGET_URLS):
-            logger.info(f"Processing URL {i+1}/{len(TARGET_URLS)}: {url}")
+            logger.info(f"Processing URL {i + 1}/{len(TARGET_URLS)}: {url}")
             scraped_data = scrape_url_with_firecrawl(fc_app, url)
             if scraped_data:
                 if insert_scraped_data(db_conn, url, scraped_data):
@@ -165,11 +183,11 @@ def main():
                     failed_imports += 1
             else:
                 failed_imports += 1
-            
+
             # Add a small delay to be respectful to Firecrawl API, if needed
             # Firecrawl's Python SDK might handle rate limiting, but good practice.
-            if i < len(TARGET_URLS) - 1: # Don't sleep after the last one
-                time.sleep(1) # 1 second delay
+            if i < len(TARGET_URLS) - 1:  # Don't sleep after the last one
+                time.sleep(1)  # 1 second delay
 
         logger.info("--- Import Summary ---")
         logger.info(f"Successfully imported/updated: {successful_imports} URLs")
@@ -183,6 +201,7 @@ def main():
             logger.info("Database connection closed.")
 
     logger.info("Mailbird knowledge base import process finished.")
+
 
 if __name__ == "__main__":
     main()

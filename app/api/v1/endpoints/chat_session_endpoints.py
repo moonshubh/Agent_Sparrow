@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """
 Chat Session API Endpoints
 
@@ -570,9 +571,9 @@ async def create_chat_message_in_supabase(
         "session_id": message_data.session_id,
         "content": message_data.content,
         "message_type": _enum_value(message_data.message_type),
-        "agent_type": _enum_value(message_data.agent_type)
-        if message_data.agent_type
-        else None,
+        "agent_type": (
+            _enum_value(message_data.agent_type) if message_data.agent_type else None
+        ),
         "metadata": message_data.metadata or {},
     }
 

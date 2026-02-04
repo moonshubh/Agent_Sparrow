@@ -2,7 +2,7 @@
  * API client for rate limiting endpoints
  */
 
-import { getApiBasePath } from '@/shared/lib/utils/environment';
+import { getApiBasePath } from "@/shared/lib/utils/environment";
 
 // Use environment-aware API base URL
 const API_BASE_URL = getApiBasePath();
@@ -28,7 +28,7 @@ export interface RateLimitMetadata {
 }
 
 export interface CircuitBreakerStatus {
-  state: 'closed' | 'open' | 'half_open';
+  state: "closed" | "open" | "half_open";
   failure_count: number;
   success_count: number;
   last_failure_time: string | null;
@@ -45,18 +45,21 @@ export interface UsageStats {
 }
 
 export interface RateLimitHealth {
-  overall: 'healthy' | 'warning' | 'degraded' | 'unhealthy';
+  overall: "healthy" | "warning" | "degraded" | "unhealthy";
   [key: string]: unknown;
 }
 
 export interface RateLimitStatus {
   timestamp: string;
-  status: 'healthy' | 'warning' | 'degraded' | 'unhealthy';
+  status: "healthy" | "warning" | "degraded" | "unhealthy";
   message: string;
   details: {
     usage_stats: UsageStats;
     health: RateLimitHealth;
-    utilization: Record<string, { rpm: number; rpd: number; tpm: number | null }>;
+    utilization: Record<
+      string,
+      { rpm: number; rpd: number; tpm: number | null }
+    >;
   };
 }
 
@@ -104,20 +107,22 @@ class RateLimitApiClient {
 
   private async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
   ): Promise<T> {
     const url = `${this.baseUrl}/rate-limits${endpoint}`;
-    
+
     const response = await fetch(url, {
       ...options,
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         ...options.headers,
       },
     });
 
     if (!response.ok) {
-      throw new Error(`Rate limit API error: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Rate limit API error: ${response.status} ${response.statusText}`,
+      );
     }
 
     return response.json();
@@ -127,52 +132,61 @@ class RateLimitApiClient {
    * Get current rate limiting status and usage statistics
    */
   async getStatus(): Promise<RateLimitStatus> {
-    return this.request<RateLimitStatus>('/status');
+    return this.request<RateLimitStatus>("/status");
   }
 
   /**
    * Get detailed usage statistics for all models
    */
   async getUsageStats(): Promise<UsageStats> {
-    return this.request<UsageStats>('/usage');
+    return this.request<UsageStats>("/usage");
   }
 
   /**
    * Check system health
    */
   async getHealth(): Promise<RateLimitHealth> {
-    return this.request<RateLimitHealth>('/health');
+    return this.request<RateLimitHealth>("/health");
   }
 
   /**
    * Check if a request would be allowed for the specified bucket (dry-run).
    */
   async checkRateLimit(bucket: string): Promise<RateLimitCheckResult> {
-    return this.request<RateLimitCheckResult>(`/check/${encodeURIComponent(bucket)}`, {
-      method: 'POST',
-    });
+    return this.request<RateLimitCheckResult>(
+      `/check/${encodeURIComponent(bucket)}`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   /**
    * Get current rate limiting configuration
    */
   async getConfig(): Promise<RateLimitConfig> {
-    return this.request<RateLimitConfig>('/config');
+    return this.request<RateLimitConfig>("/config");
   }
 
   /**
    * Get Prometheus-style metrics for rate limiting
    */
   async getMetrics(): Promise<RateLimitMetrics> {
-    return this.request<RateLimitMetrics>('/metrics');
+    return this.request<RateLimitMetrics>("/metrics");
   }
 
   /**
    * Reset rate limits (development/emergency use only)
    */
-  async resetLimits(bucket?: string): Promise<{ success: boolean; message: string; timestamp: string }> {
-    return this.request<{ success: boolean; message: string; timestamp: string }>('/reset', {
-      method: 'POST',
+  async resetLimits(
+    bucket?: string,
+  ): Promise<{ success: boolean; message: string; timestamp: string }> {
+    return this.request<{
+      success: boolean;
+      message: string;
+      timestamp: string;
+    }>("/reset", {
+      method: "POST",
       body: JSON.stringify({
         bucket,
         confirm: true,
@@ -185,11 +199,13 @@ class RateLimitApiClient {
 export const rateLimitApi = new RateLimitApiClient();
 
 // Export utility functions
-export const getUtilizationLevel = (utilization: number): 'low' | 'medium' | 'high' | 'critical' => {
-  if (utilization >= 0.9) return 'critical';
-  if (utilization >= 0.8) return 'high';
-  if (utilization >= 0.6) return 'medium';
-  return 'low';
+export const getUtilizationLevel = (
+  utilization: number,
+): "low" | "medium" | "high" | "critical" => {
+  if (utilization >= 0.9) return "critical";
+  if (utilization >= 0.8) return "high";
+  if (utilization >= 0.6) return "medium";
+  return "low";
 };
 
 export const getTimeToReset = (resetTime: string): number => {
@@ -199,14 +215,14 @@ export const getTimeToReset = (resetTime: string): number => {
 };
 
 export const formatTimeRemaining = (seconds: number): string => {
-  if (seconds <= 0) return 'Now';
-  
+  if (seconds <= 0) return "Now";
+
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
-  
+
   if (minutes > 0) {
     return `${minutes}m ${remainingSeconds}s`;
   }
-  
+
   return `${remainingSeconds}s`;
 };

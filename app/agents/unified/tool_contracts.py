@@ -50,7 +50,7 @@ class ToolResult:
         @tool_error_handler
         async def my_tool(query: str) -> ToolResult:
             results = await do_search(query)
-            return ToolResult.success(data=results)
+            return ToolResult.from_success(data=results)
 
     Attributes:
         success: Whether the operation succeeded.
@@ -67,7 +67,7 @@ class ToolResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def success(
+    def from_success(
         cls,
         data: Any,
         metadata: Optional[Dict[str, Any]] = None,
@@ -88,7 +88,7 @@ class ToolResult:
         )
 
     @classmethod
-    def failure(
+    def from_failure(
         cls,
         error: str,
         category: ErrorCategory = ErrorCategory.UNKNOWN,
@@ -129,7 +129,7 @@ class ToolResult:
         metadata = {}
         if retry_after is not None:
             metadata["retry_after"] = retry_after
-        return cls.failure(
+        return cls.from_failure(
             error=error,
             category=ErrorCategory.RATE_LIMIT,
             metadata=metadata,
@@ -145,7 +145,7 @@ class ToolResult:
         Returns:
             ToolResult indicating timeout.
         """
-        return cls.failure(
+        return cls.from_failure(
             error=f"Operation '{operation}' timed out",
             category=ErrorCategory.TIMEOUT,
             metadata={"operation": operation},
@@ -161,7 +161,7 @@ class ToolResult:
         Returns:
             ToolResult indicating resource not found.
         """
-        return cls.failure(
+        return cls.from_failure(
             error=f"Resource not found: {resource}",
             category=ErrorCategory.NOT_FOUND,
             metadata={"resource": resource},
@@ -241,7 +241,7 @@ def tool_error_handler(func: F) -> F:
                 return result
 
             # Wrap raw result in ToolResult
-            return ToolResult.success(data=result)
+            return ToolResult.from_success(data=result)
 
         except QuotaExceededError as e:
             retry_after = getattr(e, "retry_after", None)
@@ -265,14 +265,14 @@ def tool_error_handler(func: F) -> F:
 
         except ValidationError as e:
             logger.warning("tool_validation_error", tool=func.__name__, error=str(e))
-            return ToolResult.failure(
+            return ToolResult.from_failure(
                 error=str(e),
                 category=ErrorCategory.VALIDATION,
             )
 
         except Exception as e:
             logger.exception(f"Tool {func.__name__} failed unexpectedly")
-            return ToolResult.failure(
+            return ToolResult.from_failure(
                 error=str(e),
                 category=_classify_error(e),
                 metadata={"exception_type": type(e).__name__},
@@ -286,7 +286,7 @@ def tool_error_handler(func: F) -> F:
             if isinstance(result, ToolResult):
                 return result
 
-            return ToolResult.success(data=result)
+            return ToolResult.from_success(data=result)
 
         except QuotaExceededError as e:
             retry_after = getattr(e, "retry_after", None)
@@ -310,14 +310,14 @@ def tool_error_handler(func: F) -> F:
 
         except ValidationError as e:
             logger.warning("tool_validation_error", tool=func.__name__, error=str(e))
-            return ToolResult.failure(
+            return ToolResult.from_failure(
                 error=str(e),
                 category=ErrorCategory.VALIDATION,
             )
 
         except Exception as e:
             logger.exception(f"Tool {func.__name__} failed unexpectedly")
-            return ToolResult.failure(
+            return ToolResult.from_failure(
                 error=str(e),
                 category=_classify_error(e),
                 metadata={"exception_type": type(e).__name__},
@@ -427,7 +427,9 @@ def truncate_result(
     """
     if isinstance(data, str):
         if len(data) > max_chars:
-            return data[: max_chars - 100] + f"\n... (truncated, {len(data)} total chars)"
+            return (
+                data[: max_chars - 100] + f"\n... (truncated, {len(data)} total chars)"
+            )
         return data
 
     if isinstance(data, list):

@@ -36,8 +36,8 @@ router = APIRouter(
         403: {"description": "Forbidden - Feature disabled"},
         413: {"description": "Request entity too large"},
         429: {"description": "Too many requests"},
-        500: {"description": "Internal server error"}
-    }
+        500: {"description": "Internal server error"},
+    },
 )
 
 # Include all sub-routers
@@ -49,7 +49,7 @@ router.include_router(folders_router)
 router.include_router(analytics_router)
 
 # Re-export commonly used items for backward compatibility
-from .schemas import (
+from .schemas import (  # noqa: E402
     FeedMeFolder,
     FolderCreate,
     FolderUpdate,
@@ -57,7 +57,7 @@ from .schemas import (
     AssignFolderRequest,
     SupabaseApprovalRequest,
 )
-from .helpers import (
+from .helpers import (  # noqa: E402
     get_feedme_supabase_client,
     get_conversation_by_id,
     create_conversation_in_db,

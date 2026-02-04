@@ -3,47 +3,51 @@
  *
  * Main popover component that displays comprehensive FeedMe statistics
  * when the Stats button is clicked in the Dock.
- * 
+ *
  * Features dot-matrix style cards with smooth animations.
  */
 
-import React, { useState, useCallback } from 'react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from '@/shared/ui/dialog'
-import { ScrollArea } from '@/shared/ui/scroll-area'
-import { Separator } from '@/shared/ui/separator'
-import { Button } from '@/shared/ui/button'
-import { Badge } from '@/shared/ui/badge'
+import React, { useState, useCallback } from "react";
 import {
-  BarChart3,
-  RefreshCw,
-  X,
-  AlertCircle
-} from 'lucide-react'
-import { cn } from '@/shared/lib/utils'
-import { useStatsData, formatTimeAgo } from '@/features/feedme/hooks/use-stats-data'
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogClose,
+} from "@/shared/ui/dialog";
+import { ScrollArea } from "@/shared/ui/scroll-area";
+import { Separator } from "@/shared/ui/separator";
+import { Button } from "@/shared/ui/button";
+import { Badge } from "@/shared/ui/badge";
+import { BarChart3, RefreshCw, X, AlertCircle } from "lucide-react";
+import { cn } from "@/shared/lib/utils";
+import {
+  useStatsData,
+  formatTimeAgo,
+} from "@/features/feedme/hooks/use-stats-data";
 import {
   ConversationStatsCard,
   ProcessingMetricsCard,
   GeminiUsageCard,
   EmbeddingUsageCard,
   SystemHealthCard,
-  StatsCardSkeleton
-} from './stats/StatsCards'
-import { Alert, AlertDescription } from '@/shared/ui/alert'
-import { motion } from 'motion/react'
+  StatsCardSkeleton,
+} from "./stats/StatsCards";
+import { Alert, AlertDescription } from "@/shared/ui/alert";
+import { motion } from "motion/react";
 
 interface StatsPopoverProps {
-  open?: boolean
-  onOpenChange?: (open: boolean) => void
-  className?: string
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  className?: string;
 }
 
 export function StatsPopover({
   open = false,
   onOpenChange,
-  className
+  className,
 }: StatsPopoverProps) {
-  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Fetch stats data with auto-refresh
   const { data, isLoading, error, refetch, lastFetchTime } = useStatsData({
@@ -52,29 +56,29 @@ export function StatsPopover({
     onError: (error) => {
       // Error is already being handled by the error state in the UI
       // No need to log to console in production
-    }
-  })
+    },
+  });
 
   // Manual refresh handler without memory leak
   const handleRefresh = useCallback(async () => {
-    setIsRefreshing(true)
+    setIsRefreshing(true);
     try {
-      await refetch()
+      await refetch();
     } finally {
       // Use requestAnimationFrame instead of setTimeout to avoid memory leak
       // and ensure the animation is visible for at least one frame
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          setIsRefreshing(false)
-        })
-      })
+          setIsRefreshing(false);
+        });
+      });
     }
-  }, [refetch])
+  }, [refetch]);
 
   // Format last updated time
   const lastUpdatedText = lastFetchTime
     ? formatTimeAgo(lastFetchTime.toISOString())
-    : 'Never'
+    : "Never";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -83,7 +87,7 @@ export function StatsPopover({
         className={cn(
           "max-w-[1000px] p-0 h-[700px] overflow-hidden",
           "bg-[hsl(40_10%_96%)] dark:bg-[hsl(0_0%_10%)]",
-          className
+          className,
         )}
       >
         <DialogHeader className="sr-only">
@@ -129,7 +133,9 @@ export function StatsPopover({
                 aria-label="Refresh stats"
                 disabled={isRefreshing || isLoading}
               >
-                <RefreshCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
+                <RefreshCw
+                  className={cn("h-4 w-4", isRefreshing && "animate-spin")}
+                />
               </Button>
               <DialogClose asChild>
                 <Button
@@ -202,5 +208,5 @@ export function StatsPopover({
         </div>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

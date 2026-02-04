@@ -1,4 +1,5 @@
 """Configuration for the async PostgreSQL checkpointer."""
+
 from dataclasses import dataclass
 
 
@@ -14,6 +15,7 @@ class CheckpointerConfig:
         delta_threshold: Number of checkpoints before creating a snapshot.
         cleanup_after_days: Age threshold for checkpoint cleanup.
     """
+
     db_url: str
     pool_size: int = 5
     max_overflow: int = 10

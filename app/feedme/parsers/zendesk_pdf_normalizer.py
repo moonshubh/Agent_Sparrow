@@ -17,10 +17,11 @@ from __future__ import annotations
 import re
 from typing import Tuple, Dict, Any
 
-
 TICKET_RE_FILENAME = re.compile(r"tickets_(\d+)_print\.pdf$", re.IGNORECASE)
 TICKET_RE_TEXT = re.compile(r"Ticket\s*#?(\d{3,})", re.IGNORECASE)
-SUBJECT_RE_TEXT = re.compile(r"^\s*(Subject|Re:)\s*[:\-]?\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+SUBJECT_RE_TEXT = re.compile(
+    r"^\s*(Subject|Re:)\s*[:\-]?\s*(.+)$", re.IGNORECASE | re.MULTILINE
+)
 
 
 def _guess_ticket_id(original_filename: str | None, text: str) -> str | None:
@@ -63,8 +64,16 @@ def _is_agent_paragraph(p: str) -> bool:
     # Heuristic: paragraphs containing typical support signatures/phrases
     lower = p.lower()
     agent_markers = [
-        "best regards", "kind regards", "support team", "mailbird", "thanks for reaching out",
-        "let me know", "we apologize", "please try", "we recommend", "our team"
+        "best regards",
+        "kind regards",
+        "support team",
+        "mailbird",
+        "thanks for reaching out",
+        "let me know",
+        "we apologize",
+        "please try",
+        "we recommend",
+        "our team",
     ]
     return any(m in lower for m in agent_markers)
 
@@ -87,7 +96,11 @@ def _build_qa_flow(paragraphs: list[str]) -> str:
         else:
             # If this paragraph doesn't look like an agent response, but the next does, use next as A
             a_para = p
-            if not _is_agent_paragraph(p) and i + 1 < len(cleaned) and _is_agent_paragraph(cleaned[i + 1]):
+            if (
+                not _is_agent_paragraph(p)
+                and i + 1 < len(cleaned)
+                and _is_agent_paragraph(cleaned[i + 1])
+            ):
                 a_para = cleaned[i + 1]
                 i += 1
             out.append("A: " + a_para)
@@ -99,9 +112,7 @@ def _build_qa_flow(paragraphs: list[str]) -> str:
 
 
 def normalize_zendesk_print_text(
-    text: str,
-    original_filename: str | None = None,
-    fallback_title: str | None = None
+    text: str, original_filename: str | None = None, fallback_title: str | None = None
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Produce normalized Q/A text and metadata from Zendesk print text.
@@ -119,4 +130,3 @@ def normalize_zendesk_print_text(
         "subject": subject,
     }
     return normalized or text, meta
-

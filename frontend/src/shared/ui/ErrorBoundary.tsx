@@ -1,23 +1,26 @@
-"use client"
-import React from 'react'
+"use client";
+import React from "react";
 
 interface ErrorBoundaryProps {
-  children: React.ReactNode
+  children: React.ReactNode;
 }
 
 interface ErrorBoundaryState {
-  hasError: boolean
+  hasError: boolean;
 }
 
-export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { hasError: false }
+export class ErrorBoundary extends React.Component<
+  ErrorBoundaryProps,
+  ErrorBoundaryState
+> {
+  state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError() {
-    return { hasError: true }
+    return { hasError: true };
   }
 
   componentDidCatch(error: Error) {
-    console.error('ErrorBoundary caught error:', error)
+    console.error("ErrorBoundary caught error:", error);
   }
 
   render() {
@@ -27,8 +30,8 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
           <p className="font-semibold">Something went wrong</p>
           <p className="text-sm">Please try refreshing the page</p>
         </div>
-      )
+      );
     }
-    return this.props.children
+    return this.props.children;
   }
 }

@@ -1,6 +1,6 @@
 // Type declarations for rehype-highlight (no official @types package)
-declare module 'rehype-highlight' {
-  import type { Plugin } from 'unified';
+declare module "rehype-highlight" {
+  import type { Plugin } from "unified";
 
   interface Options {
     /**

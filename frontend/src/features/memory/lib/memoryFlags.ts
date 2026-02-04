@@ -1,19 +1,23 @@
-import type { Memory } from '../types';
+import type { Memory } from "../types";
 
 // Hard-coded admin allowlist for edit attribution
 const ADMIN_EDITORS = new Set([
-  'shubham.patel@getmailbird.com',
-  'oliver.jackson@getmailbird.com',
-  'am@getmailbird.com',
+  "shubham.patel@getmailbird.com",
+  "oliver.jackson@getmailbird.com",
+  "am@getmailbird.com",
 ]);
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function extractMetadataString(metadata: Record<string, unknown> | null | undefined, keys: string[]): string | null {
+function extractMetadataString(
+  metadata: Record<string, unknown> | null | undefined,
+  keys: string[],
+): string | null {
   if (!metadata) return null;
   for (const key of keys) {
     const value = metadata[key];
-    if (typeof value === 'string' && value.trim()) {
+    if (typeof value === "string" && value.trim()) {
       return value.trim();
     }
   }
@@ -23,7 +27,7 @@ function extractMetadataString(metadata: Record<string, unknown> | null | undefi
 function normalizeEmail(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
-  if (!trimmed.includes('@')) return null;
+  if (!trimmed.includes("@")) return null;
   return trimmed.toLowerCase();
 }
 
@@ -40,17 +44,19 @@ function normalizeUuid(value: string | null | undefined): string | null {
 export function getMemoryEditorEmail(memory: Memory): string | null {
   const metaEmail = normalizeEmail(
     extractMetadataString(memory.metadata, [
-      'edited_by_email',
-      'updated_by_email',
-      'editor_email',
-    ])
+      "edited_by_email",
+      "updated_by_email",
+      "editor_email",
+    ]),
   );
 
   const metaNameAsEmail = normalizeEmail(
-    extractMetadataString(memory.metadata, ['edited_by', 'updated_by'])
+    extractMetadataString(memory.metadata, ["edited_by", "updated_by"]),
   );
 
-  const reviewedByEmail = normalizeEmail((memory as Memory & { reviewed_by?: string | null }).reviewed_by);
+  const reviewedByEmail = normalizeEmail(
+    (memory as Memory & { reviewed_by?: string | null }).reviewed_by,
+  );
 
   const candidates = [metaEmail, metaNameAsEmail, reviewedByEmail];
   for (const candidate of candidates) {
@@ -62,7 +68,8 @@ export function getMemoryEditorEmail(memory: Memory): string | null {
 }
 
 function getMemoryReviewerId(memory: Memory): string | null {
-  const reviewedBy = (memory as Memory & { reviewed_by?: string | null }).reviewed_by;
+  const reviewedBy = (memory as Memory & { reviewed_by?: string | null })
+    .reviewed_by;
   if (normalizeEmail(reviewedBy)) return null;
   return normalizeUuid(reviewedBy);
 }
@@ -73,10 +80,10 @@ function getMemoryReviewerId(memory: Memory): string | null {
 export function getMemoryEditorDisplayName(memory: Memory): string | null {
   const editorEmail = getMemoryEditorEmail(memory);
   const name = extractMetadataString(memory.metadata, [
-    'edited_by_name',
-    'updated_by_name',
-    'edited_by',
-    'updated_by',
+    "edited_by_name",
+    "updated_by_name",
+    "edited_by",
+    "updated_by",
   ]);
   if (editorEmail) return name || editorEmail;
   return null;

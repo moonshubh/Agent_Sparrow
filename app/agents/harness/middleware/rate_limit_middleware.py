@@ -27,22 +27,27 @@ if TYPE_CHECKING:
 try:
     from langchain.agents.middleware import AgentMiddleware
     from langchain.agents.middleware.types import ModelRequest, ModelResponse
+
     AGENT_MIDDLEWARE_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency
-    AgentMiddleware = object  # type: ignore[assignment]
+
+    class AgentMiddleware:  # type: ignore[no-redef]
+        pass
+
     ModelRequest = Any  # type: ignore[misc,assignment]
     ModelResponse = Any  # type: ignore[misc,assignment]
     AGENT_MIDDLEWARE_AVAILABLE = False
 
+ResourceExhausted: type[BaseException] | None
 try:
-    from google.api_core.exceptions import ResourceExhausted
+    from google.api_core.exceptions import ResourceExhausted as _ResourceExhausted
+
+    ResourceExhausted = _ResourceExhausted
 except Exception:  # pragma: no cover - optional dependency
     ResourceExhausted = None
 
 
-
-
-class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE else object):
+class SparrowRateLimitMiddleware(AgentMiddleware):
     """Middleware for Gemini quota management and model fallback.
 
     This middleware integrates with the rate limiter to:
@@ -123,7 +128,11 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
 
         while current_model and current_model not in attempted:
             attempted.add(current_model)
-            attempt_info = {"model": current_model, "available": False, "reason": None}
+            attempt_info: Dict[str, Any] = {
+                "model": current_model,
+                "available": False,
+                "reason": None,
+            }
 
             try:
                 bucket_name = self._resolve_bucket_name(current_model)
@@ -158,16 +167,30 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
 
             except RateLimitExceededException:
                 attempt_info["reason"] = "rate_limited"
-                logger.warning("model_rate_limited", model=current_model, bucket=bucket_name)
+                logger.warning(
+                    "model_rate_limited", model=current_model, bucket=bucket_name
+                )
             except CircuitBreakerOpenException:
                 attempt_info["reason"] = "circuit_open"
-                logger.warning("model_circuit_open", model=current_model, bucket=bucket_name)
+                logger.warning(
+                    "model_circuit_open", model=current_model, bucket=bucket_name
+                )
             except GeminiServiceUnavailableException as exc:
                 attempt_info["reason"] = f"unavailable: {exc}"
-                logger.warning("model_unavailable", model=current_model, bucket=bucket_name, error=str(exc))
+                logger.warning(
+                    "model_unavailable",
+                    model=current_model,
+                    bucket=bucket_name,
+                    error=str(exc),
+                )
             except Exception as exc:
                 attempt_info["reason"] = f"error: {exc}"
-                logger.warning("model_check_failed", model=current_model, bucket=bucket_name, error=str(exc))
+                logger.warning(
+                    "model_check_failed",
+                    model=current_model,
+                    bucket=bucket_name,
+                    error=str(exc),
+                )
 
             self._stats.attempts.append(attempt_info)
 
@@ -186,7 +209,9 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
             f"All models exhausted in fallback chain starting from {model}"
         )
 
-    def get_fallback(self, model: str, attempted: Optional[Set[str]] = None) -> Optional[str]:
+    def get_fallback(
+        self, model: str, attempted: Optional[Set[str]] = None
+    ) -> Optional[str]:
         """Get fallback model, preventing cycles.
 
         Args:
@@ -241,7 +266,10 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
         if ResourceExhausted is not None and isinstance(exc, ResourceExhausted):
             return True
         message = str(exc).lower()
-        return any(token in message for token in ("resourceexhausted", "quota", "rate limit", "429"))
+        return any(
+            token in message
+            for token in ("resourceexhausted", "quota", "rate limit", "429")
+        )
 
     async def release_slots(self) -> None:
         """Release all reserved rate limit slots.
@@ -263,11 +291,15 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
 
         self._reserved_slots.clear()
 
-    def wrap_model_call(self, request: ModelRequest, handler: Callable) -> ModelResponse:
+    def wrap_model_call(
+        self, request: ModelRequest, handler: Callable
+    ) -> ModelResponse:
         """Sync wrapper for model calls (no-op rate limiting if async required)."""
         return handler(request)
 
-    async def awrap_model_call(self, request: ModelRequest, handler: Callable) -> ModelResponse:
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable
+    ) -> ModelResponse:
         """Async wrapper for model calls with quota checks and fallback."""
         from app.core.rate_limiting.exceptions import RateLimitExceededException
 
@@ -286,9 +318,12 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
                 result = await self.rate_limiter.check_and_consume(bucket_name)
                 if not getattr(result, "allowed", False):
                     metadata = getattr(result, "metadata", None)
-                    limits = metadata.dict() if hasattr(metadata, "dict") else (
-                        metadata if isinstance(metadata, dict) else None
-                    )
+                    limits = None
+                    if metadata is not None:
+                        if hasattr(metadata, "dict"):
+                            limits = metadata.dict()
+                        elif isinstance(metadata, dict):
+                            limits = metadata
                     raise RateLimitExceededException(
                         f"Rate limit exceeded for {model_name}",
                         retry_after=getattr(result, "retry_after", None),
@@ -301,7 +336,9 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
         except RateLimitExceededException:
             fallback = self.get_fallback(model_name)
             if fallback and self._apply_fallback_model(request.model, fallback):
-                logger.info("retrying_with_fallback", primary=model_name, fallback=fallback)
+                logger.info(
+                    "retrying_with_fallback", primary=model_name, fallback=fallback
+                )
                 self._current_model = fallback
                 return await handler(request)
             raise

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.agents.metadata import list_agents, get_agent_metadata
-
 
 router = APIRouter()
 
@@ -25,7 +24,10 @@ class AgentMeta(BaseModel):
 async def list_all_agents() -> List[AgentMeta]:
     agents = list_agents()
     # Pydantic coercion handles normalization
-    return [AgentMeta(**{k: v for k, v in a.items() if k in AgentMeta.model_fields}) for a in agents]
+    return [
+        AgentMeta(**{k: v for k, v in a.items() if k in AgentMeta.model_fields})
+        for a in agents
+    ]
 
 
 @router.get("/agents/{agent_id}", response_model=AgentMeta)

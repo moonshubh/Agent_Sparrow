@@ -12,16 +12,14 @@ By allocating token budgets, we can prevent context overflow before it happens.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 from loguru import logger
 
 # Shared model context metadata
 from app.agents.unified.model_context import get_model_context_window
 from app.core.config import get_models_config, iter_model_configs
-
-
 
 
 @dataclass
@@ -49,11 +47,11 @@ class TokenBudget:
     model_name: str = "unknown"
 
     # Allocation percentages (should sum to 1.0)
-    system_prompt: float = 0.15    # 15% for system prompt
-    memory_context: float = 0.10   # 10% for retrieved memories
+    system_prompt: float = 0.15  # 15% for system prompt
+    memory_context: float = 0.10  # 10% for retrieved memories
     message_history: float = 0.50  # 50% for conversation
-    tool_results: float = 0.15     # 15% for tool outputs
-    generation: float = 0.10       # 10% reserved for output
+    tool_results: float = 0.15  # 15% for tool outputs
+    generation: float = 0.10  # 10% reserved for output
 
     def __post_init__(self):
         """Validate allocations sum to 1.0."""
@@ -162,7 +160,9 @@ class TokenBudget:
         }
 
     @classmethod
-    def for_model(cls, model_name: str, provider: Optional[str] = None) -> "TokenBudget":
+    def for_model(
+        cls, model_name: str, provider: Optional[str] = None
+    ) -> "TokenBudget":
         """Create a TokenBudget for a specific model.
 
         Args:
@@ -190,6 +190,16 @@ def _build_budget_index() -> dict[str, TokenBudget]:
 
 
 BUDGETS = _build_budget_index()
+
+
+def get_budget_for_model(
+    model_name: str, provider: Optional[str] = None
+) -> TokenBudget:
+    """Return a TokenBudget for the given model, falling back to defaults."""
+    budget = BUDGETS.get(model_name)
+    if budget is not None:
+        return budget
+    return _budget(model_name, provider)
 
 
 class TokenBudgetTracker:
@@ -335,7 +345,9 @@ class TokenBudgetTracker:
         }
 
     @classmethod
-    def for_model(cls, model_name: str, provider: Optional[str] = None) -> "TokenBudgetTracker":
+    def for_model(
+        cls, model_name: str, provider: Optional[str] = None
+    ) -> "TokenBudgetTracker":
         """Create a tracker for a specific model.
 
         Args:
@@ -356,6 +368,4 @@ __all__ = [
     "BUDGETS",
     "get_budget_for_model",
     "get_model_context_window",
-    "MODEL_CONTEXT_WINDOWS",
-    "PROVIDER_DEFAULT_CONTEXT",
 ]

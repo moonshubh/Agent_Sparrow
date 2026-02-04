@@ -8,7 +8,7 @@ import type {
   TreeEdge,
   TreeNodeData,
   TreeTransformResult,
-} from '../types';
+} from "../types";
 
 type EdgeKey = `${string}|${string}`;
 
@@ -16,8 +16,11 @@ function makeEdgeKey(a: string, b: string): EdgeKey {
   return (a < b ? `${a}|${b}` : `${b}|${a}`) as EdgeKey;
 }
 
-function pickDefaultRoot(nodes: readonly GraphNode[], links: readonly GraphLink[]): string {
-  if (nodes.length === 0) return '';
+function pickDefaultRoot(
+  nodes: readonly GraphNode[],
+  links: readonly GraphLink[],
+): string {
+  if (nodes.length === 0) return "";
 
   const degree = new Map<string, number>();
   nodes.forEach((n) => degree.set(n.id, 0));
@@ -54,7 +57,9 @@ interface AggregatedUndirectedEdge {
   relationshipTypes: Set<RelationshipType>;
 }
 
-function aggregateLinks(links: readonly GraphLink[]): Map<EdgeKey, AggregatedUndirectedEdge> {
+function aggregateLinks(
+  links: readonly GraphLink[],
+): Map<EdgeKey, AggregatedUndirectedEdge> {
   const map = new Map<EdgeKey, AggregatedUndirectedEdge>();
   for (const link of links) {
     const key = makeEdgeKey(link.source, link.target);
@@ -103,7 +108,7 @@ function aggregateLinks(links: readonly GraphLink[]): Map<EdgeKey, AggregatedUnd
 
 export function buildRadialTree(
   data: GraphData,
-  options?: { rootId?: string; maxDepth?: number }
+  options?: { rootId?: string; maxDepth?: number },
 ): TreeTransformResult | null {
   if (!data.nodes.length) return null;
 
@@ -112,7 +117,10 @@ export function buildRadialTree(
 
   const aggregatedEdges = aggregateLinks(data.links);
 
-  const adjacency = new Map<string, Array<{ neighborId: string; edge: AggregatedUndirectedEdge }>>();
+  const adjacency = new Map<
+    string,
+    Array<{ neighborId: string; edge: AggregatedUndirectedEdge }>
+  >();
   data.nodes.forEach((n) => adjacency.set(n.id, []));
   aggregatedEdges.forEach((edge) => {
     adjacency.get(edge.a)?.push({ neighborId: edge.b, edge });
@@ -129,7 +137,12 @@ export function buildRadialTree(
   const treeEdgeKeys = new Set<EdgeKey>();
   const treeEdges: TreeEdge[] = [];
 
-  const createNode = (id: string, parentId: string | null, depth: number, parentEdge?: TreeEdge): TreeNodeData => {
+  const createNode = (
+    id: string,
+    parentId: string | null,
+    depth: number,
+    parentEdge?: TreeEdge,
+  ): TreeNodeData => {
     const node = nodeById.get(id);
     if (!node) {
       throw new Error(`Missing graph node for id=${id}`);
@@ -155,7 +168,10 @@ export function buildRadialTree(
     const current = byId.get(currentId);
     if (!current) continue;
 
-    if (typeof options?.maxDepth === 'number' && current.depth >= options.maxDepth) {
+    if (
+      typeof options?.maxDepth === "number" &&
+      current.depth >= options.maxDepth
+    ) {
       continue;
     }
 
@@ -181,7 +197,12 @@ export function buildRadialTree(
         })),
       };
 
-      const child = createNode(neighborId, currentId, current.depth + 1, parentEdge);
+      const child = createNode(
+        neighborId,
+        currentId,
+        current.depth + 1,
+        parentEdge,
+      );
       current.children.push(child);
       byId.set(neighborId, child);
       visited.add(neighborId);

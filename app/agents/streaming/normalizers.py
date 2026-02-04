@@ -87,6 +87,7 @@ def _parse_json_string(raw: str) -> Any | None:
     if trimmed.startswith(("{", "[")):
         try:
             import ast
+
             return ast.literal_eval(trimmed)
         except (ValueError, SyntaxError):
             pass
@@ -260,7 +261,11 @@ def _infer_type(tool_name: str, output: Any) -> str:
         return "knowledge"
     if "log" in name or "trace" in name or "observe" in name or "monitor" in name:
         return "log_analysis"
-    return "grounding" if isinstance(output, dict) and output.get("results") else "knowledge"
+    return (
+        "grounding"
+        if isinstance(output, dict) and output.get("results")
+        else "knowledge"
+    )
 
 
 def _score(v: Any) -> int | None:
@@ -283,12 +288,7 @@ def _to_card(
     fallback_url: str | None = None,
 ) -> dict[str, Any]:
     """Convert a single entry dict to an evidence card."""
-    title = (
-        entry.get("title")
-        or entry.get("name")
-        or entry.get("id")
-        or default_title
-    )
+    title = entry.get("title") or entry.get("name") or entry.get("id") or default_title
     url = entry.get("url") or entry.get("link") or fallback_url
     source = entry.get("source") or entry.get("path") or _host(url)
     snippet = (
@@ -305,7 +305,12 @@ def _to_card(
         or _score(entry.get("rank"))
     )
     conf = _score(entry.get("confidence"))
-    ts = entry.get("published_at") or entry.get("date") or entry.get("updated_at") or None
+    ts = (
+        entry.get("published_at")
+        or entry.get("date")
+        or entry.get("updated_at")
+        or None
+    )
     if isinstance(ts, (int, float)):
         try:
             ts = datetime.utcfromtimestamp(ts).isoformat() + "Z"
@@ -313,8 +318,17 @@ def _to_card(
             ts = None
 
     keep_keys = (
-        "host", "collection", "path", "doctype", "author", "tags", "severity",
-        "count", "window", "lang", "provider"
+        "host",
+        "collection",
+        "path",
+        "doctype",
+        "author",
+        "tags",
+        "severity",
+        "count",
+        "window",
+        "lang",
+        "provider",
     )
     metadata: dict[str, Any] = {}
     if url:
@@ -368,13 +382,16 @@ def build_tool_evidence_cards(
         trimmed = output.strip()
         if trimmed.startswith(("content=", "data=")):
             trimmed = trimmed.split("=", 1)[1].strip()
-        if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
+        if (trimmed.startswith("{") and trimmed.endswith("}")) or (
+            trimmed.startswith("[") and trimmed.endswith("]")
+        ):
             try:
                 parsed_str = json.loads(trimmed)
             except Exception:
                 # Try a looser parse (handles single quotes from some tool outputs)
                 try:
                     import ast
+
                     parsed_str = ast.literal_eval(trimmed)
                 except Exception:
                     parsed_str = None
@@ -389,33 +406,44 @@ def build_tool_evidence_cards(
             # If no entries but we have a query, produce a friendly summary card
             if isinstance(parsed_str, dict):
                 query_val = parsed_str.get("query") or parsed_str.get("q") or None
-                return [{
-                    "type": card_type,
-                    "title": tool_name,
-                    "source": None,
-                    "url": None,
-                    "snippet": _shorten(f"Search results for '{query_val}'" if query_val else output, 220),
-                    "fullContent": output,
-                    "relevanceScore": None,
-                    "confidence": None,
-                    "metadata": None,
-                    "timestamp": None,
-                    "status": "success",
-                }]
+                return [
+                    {
+                        "type": card_type,
+                        "title": tool_name,
+                        "source": None,
+                        "url": None,
+                        "snippet": _shorten(
+                            (
+                                f"Search results for '{query_val}'"
+                                if query_val
+                                else output
+                            ),
+                            220,
+                        ),
+                        "fullContent": output,
+                        "relevanceScore": None,
+                        "confidence": None,
+                        "metadata": None,
+                        "timestamp": None,
+                        "status": "success",
+                    }
+                ]
 
-        return [{
-            "type": card_type,
-            "title": tool_name,
-            "source": None,
-            "url": None,
-            "snippet": _shorten(output, 220),
-            "fullContent": output,
-            "relevanceScore": None,
-            "confidence": None,
-            "metadata": None,
-            "timestamp": None,
-            "status": "success",
-        }]
+        return [
+            {
+                "type": card_type,
+                "title": tool_name,
+                "source": None,
+                "url": None,
+                "snippet": _shorten(output, 220),
+                "fullContent": output,
+                "relevanceScore": None,
+                "confidence": None,
+                "metadata": None,
+                "timestamp": None,
+                "status": "success",
+            }
+        ]
 
     entries = _coerce_entries(output)
     if entries:
@@ -428,16 +456,18 @@ def build_tool_evidence_cards(
         preview = json.dumps(output, ensure_ascii=False, default=str)
     except Exception:
         preview = str(output)
-    return [{
-        "type": card_type,
-        "title": tool_name,
-        "source": None,
-        "url": None,
-        "snippet": _shorten(preview, 500),
-        "fullContent": None,
-        "relevanceScore": None,
-        "confidence": None,
-        "metadata": None,
-        "timestamp": None,
-        "status": "success",
-    }]
+    return [
+        {
+            "type": card_type,
+            "title": tool_name,
+            "source": None,
+            "url": None,
+            "snippet": _shorten(preview, 500),
+            "fullContent": None,
+            "relevanceScore": None,
+            "confidence": None,
+            "metadata": None,
+            "timestamp": None,
+            "status": "success",
+        }
+    ]

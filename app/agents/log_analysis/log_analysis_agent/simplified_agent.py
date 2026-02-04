@@ -20,14 +20,14 @@ from .simplified_schemas import (
     SimplifiedAgentState,
     LogSection,
     SimplifiedIssue,
-    SimplifiedSolution
+    SimplifiedSolution,
 )
 from .utils import build_log_sections_from_ranges, extract_json_payload
 
 
 class AgentConfig:
     """Configuration for the simplified log analysis agent."""
-    
+
     def __init__(self):
         """Load configuration from environment with sensible defaults.
 
@@ -47,15 +47,19 @@ class AgentConfig:
             self.model_name = default_cfg.model_id
 
         temp_override = os.getenv("LOG_AGENT_TEMPERATURE")
-        self.temperature = float(temp_override) if temp_override else default_cfg.temperature
+        self.temperature = (
+            float(temp_override) if temp_override else default_cfg.temperature
+        )
         self.request_timeout = int(os.getenv("SIMPLIFIED_LOG_TIMEOUT_SECONDS", "120"))
         self.max_log_size = int(os.getenv("MAX_LOG_SIZE", "500000"))
         self.context_window = int(os.getenv("LOG_CONTEXT_WINDOW", "50"))
         self.max_sections = int(os.getenv("MAX_LOG_SECTIONS", "3"))
         self.max_issues = int(os.getenv("MAX_ISSUES", "5"))
         self.max_solutions = int(os.getenv("MAX_SOLUTIONS", "5"))
-        self.bucket_name = find_bucket_for_model(models_config, self.model_name) or "internal.helper"
-        
+        self.bucket_name = (
+            find_bucket_for_model(models_config, self.model_name) or "internal.helper"
+        )
+
     def __repr__(self) -> str:
         """String representation for debugging."""
         return (
@@ -69,47 +73,47 @@ class SimplifiedLogAnalysisAgent:
     """
     Streamlined log analysis agent focusing on question-driven responses.
     Provides direct answers instead of comprehensive reports.
-    
+
     Supports async context manager for proper resource cleanup:
         async with SimplifiedLogAnalysisAgent() as agent:
             result = await agent.analyze(state)
     """
-    
+
     def __init__(self, config: Optional[AgentConfig] = None):
         """
         Initialize the simplified agent with configuration.
-        
+
         Args:
             config: Optional configuration object. Creates default if not provided.
         """
         self.config = config or AgentConfig()
         self.logger = get_logger("simplified_log_agent")
         self._llm = None  # Cache LLM instance
-    
+
     async def __aenter__(self):
         """Async context manager entry."""
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit - cleanup resources."""
         self._llm = None  # Clear cached LLM
-    
+
     async def _get_llm(self):
         """
         Get configured LLM with proper API key resolution and caching.
-        
+
         Follows the precedence: cached > user context > settings > error.
-        
+
         Returns:
             Wrapped LLM instance configured with appropriate API key.
-            
+
         Raises:
             ValueError: When no API key is available from any source.
         """
         # Return cached instance if available
         if self._llm is not None:
             return self._llm
-        
+
         # Early return pattern - cleaner than nested ifs
         user_context = get_current_user_context()
         if user_context:
@@ -117,12 +121,12 @@ class SimplifiedLogAnalysisAgent:
             if api_key:
                 self._llm = self._create_llm_with_key(api_key)
                 return self._llm
-        
+
         # Fallback to settings
         if settings.gemini_api_key:
             self._llm = self._create_llm_with_key(settings.gemini_api_key)
             return self._llm
-        
+
         # Explicit is better than implicit - provide actionable error message
         raise ValueError(
             "Gemini API key not found. Please either:\n"
@@ -130,7 +134,7 @@ class SimplifiedLogAnalysisAgent:
             "2. Set GEMINI_API_KEY environment variable\n"
             "3. Get a free key at: https://makersuite.google.com/app/apikey"
         )
-    
+
     def _create_llm_with_key(self, api_key: str):
         """Create and wrap LLM instance with given API key."""
         llm_base = ChatGoogleGenerativeAI(
@@ -139,24 +143,26 @@ class SimplifiedLogAnalysisAgent:
             google_api_key=api_key,
             timeout=self.config.request_timeout,
         )
-        return wrap_gemini_agent(llm_base, self.config.bucket_name, self.config.model_name)
-    
+        return wrap_gemini_agent(
+            llm_base, self.config.bucket_name, self.config.model_name
+        )
+
     def _preprocess_log(self, log_content: str) -> str:
         """
         Preprocess log content: truncate, clean, and normalize.
-        
+
         Args:
             log_content: Raw log content to process.
-            
+
         Returns:
             Cleaned and normalized log content.
         """
         if not log_content:
             return ""
-        
+
         # Truncate early to avoid processing unnecessarily large content
         truncated = (
-            log_content[:self.config.max_log_size]
+            log_content[: self.config.max_log_size]
             if len(log_content) > self.config.max_log_size
             else log_content
         )
@@ -166,16 +172,16 @@ class SimplifiedLogAnalysisAgent:
         if "\x00" in truncated:
             truncated = truncated.replace("\x00", "")
         truncated = truncated.lstrip("\ufeff")
-        
+
         # Use generator expression with filter for memory efficiency
         # This is more Pythonic than building a list with append
         cleaned_lines = (
-            ' '.join(line.split())  # Normalize whitespace
+            " ".join(line.split())  # Normalize whitespace
             for line in truncated.splitlines()
             if line.strip()  # Filter empty lines
         )
-        
-        return '\n'.join(cleaned_lines)
+
+        return "\n".join(cleaned_lines)
 
     def _estimate_confidence(
         self,
@@ -212,32 +218,36 @@ class SimplifiedLogAnalysisAgent:
 
         return max(0.1, min(float(base), 0.95))
 
-    async def _extract_relevant_sections(self, log_content: str, question: str) -> List[LogSection]:
+    async def _extract_relevant_sections(
+        self, log_content: str, question: str
+    ) -> List[LogSection]:
         """Extract log sections most relevant to the user's question."""
         if not question:
             # If no question, return overview sections
-            lines = log_content.split('\n')
+            lines = log_content.split("\n")
             if len(lines) <= 100:
-                return [LogSection(
-                    line_numbers="1-" + str(len(lines)),
-                    content=log_content,
-                    relevance_score=1.0
-                )]
-            
+                return [
+                    LogSection(
+                        line_numbers="1-" + str(len(lines)),
+                        content=log_content,
+                        relevance_score=1.0,
+                    )
+                ]
+
             # Return first and last sections for overview
             return [
                 LogSection(
                     line_numbers="1-50",
-                    content='\n'.join(lines[:50]),
-                    relevance_score=0.8
+                    content="\n".join(lines[:50]),
+                    relevance_score=0.8,
                 ),
                 LogSection(
-                    line_numbers=f"{len(lines)-50}-{len(lines)}",
-                    content='\n'.join(lines[-50:]),
-                    relevance_score=0.8
-                )
+                    line_numbers=f"{len(lines) - 50}-{len(lines)}",
+                    content="\n".join(lines[-50:]),
+                    relevance_score=0.8,
+                ),
             ]
-        
+
         # Question-driven extraction
         llm = await self._get_llm()
         sections_schema: Dict[str, Any] = {
@@ -273,7 +283,7 @@ Identify the most relevant sections. For each section, provide:
 Return as JSON array with format:
 [{{"line_range": "100-150", "relevance": "Contains error about X", "key_info": "Shows Y happening"}}]
 """
-        
+
         for attempt in range(2):
             try:
                 attempt_prompt = (
@@ -292,17 +302,23 @@ Return as JSON array with format:
                         response_json_schema=sections_schema,
                         **kwargs,
                     ),
-                    timeout=min(self.config.request_timeout, 45)
-                    if attempt == 1
-                    else self.config.request_timeout,
+                    timeout=(
+                        min(self.config.request_timeout, 45)
+                        if attempt == 1
+                        else self.config.request_timeout
+                    ),
                 )
 
                 # Use shared JSON extraction and section builder utilities
-                sections_data = extract_json_payload(
-                    response.content,
-                    pattern=r'\[.*?\]',
-                    fallback=[],
-                    logger_instance=self.logger,
+                fallback_sections: List[Dict[str, Any]] = []
+                sections_data = (
+                    extract_json_payload(
+                        response.content,
+                        pattern=r"\[.*?\]",
+                        fallback=fallback_sections,
+                        logger_instance=self.logger,
+                    )
+                    or []
                 )
 
                 if sections_data:
@@ -318,31 +334,36 @@ Return as JSON array with format:
             except asyncio.TimeoutError:
                 self.logger.warning(
                     "extract_relevant_sections_timeout",
-                    timeout_seconds=min(self.config.request_timeout, 45)
-                    if attempt == 1
-                    else self.config.request_timeout,
+                    timeout_seconds=(
+                        min(self.config.request_timeout, 45)
+                        if attempt == 1
+                        else self.config.request_timeout
+                    ),
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to extract sections: {e}")
-            
+
         # Fallback to simple extraction
-        lines = log_content.split('\n')
-        return [LogSection(
-            line_numbers="1-100",
-            content='\n'.join(lines[:100]),
-            relevance_score=0.5
-        )]
-    
-    async def _analyze_with_question(self, log_sections: List[LogSection], question: str) -> Dict[str, Any]:
+        lines = log_content.split("\n")
+        return [
+            LogSection(
+                line_numbers="1-100",
+                content="\n".join(lines[:100]),
+                relevance_score=0.5,
+            )
+        ]
+
+    async def _analyze_with_question(
+        self, log_sections: List[LogSection], question: str
+    ) -> Dict[str, Any]:
         """Generate focused analysis based on the question."""
         llm = await self._get_llm()
-        
+
         # Combine relevant sections
-        combined_logs = '\n\n'.join([
-            f"[Lines {s.line_numbers}]\n{s.content}" 
-            for s in log_sections
-        ])
-        
+        combined_logs = "\n\n".join(
+            [f"[Lines {s.line_numbers}]\n{s.content}" for s in log_sections]
+        )
+
         if question:
             prompt = f"""Analyze these log sections to answer the user's specific question.
 
@@ -462,7 +483,7 @@ Format your response as JSON:
                 },
                 "required": ["summary", "issues", "solutions"],
             }
-        
+
         for attempt in range(2):
             try:
                 attempt_prompt = (
@@ -481,15 +502,17 @@ Format your response as JSON:
                         response_json_schema=response_schema,
                         **kwargs,
                     ),
-                    timeout=min(self.config.request_timeout, 60)
-                    if attempt == 1
-                    else self.config.request_timeout,
+                    timeout=(
+                        min(self.config.request_timeout, 60)
+                        if attempt == 1
+                        else self.config.request_timeout
+                    ),
                 )
 
                 # Use robust JSON extraction with appropriate fallback
                 analysis = extract_json_payload(
                     response.content,
-                    pattern=r'\{.*?\}',
+                    pattern=r"\{.*?\}",
                     fallback=None,
                     logger_instance=self.logger,
                 )
@@ -500,13 +523,15 @@ Format your response as JSON:
             except asyncio.TimeoutError:
                 self.logger.warning(
                     "analyze_with_question_timeout",
-                    timeout_seconds=min(self.config.request_timeout, 60)
-                    if attempt == 1
-                    else self.config.request_timeout,
+                    timeout_seconds=(
+                        min(self.config.request_timeout, 60)
+                        if attempt == 1
+                        else self.config.request_timeout
+                    ),
                 )
             except Exception as e:
                 self.logger.error(f"Analysis failed: {e}")
-        
+
         # Structured fallback response maintaining API contract
         return {
             "answer": "Unable to analyze logs due to processing error",
@@ -514,114 +539,117 @@ Format your response as JSON:
             "issues": [],
             "solutions": [],
             "evidence": [],
-            "actions": []
+            "actions": [],
         }
-    
+
     async def analyze(self, state: SimplifiedAgentState) -> SimplifiedLogAnalysisOutput:
         """
         Main analysis function - streamlined for question-driven responses.
-        
+
         Args:
             state: Agent state containing log content and optional question.
-            
+
         Returns:
             SimplifiedLogAnalysisOutput with analysis results.
         """
         trace_id = state.trace_id or str(uuid4())
         self.logger = get_logger("simplified_log_agent", trace_id=trace_id)
         self.logger.info("Starting simplified log analysis")
-        
+
         try:
             # Early validation with informative response
             cleaned_log = self._preprocess_log(state.raw_log_content)
             if not cleaned_log:
                 return self._create_empty_response(trace_id)
-            
+
             # Core analysis pipeline
+            question = state.question or ""
             relevant_sections = await self._extract_relevant_sections(
-                cleaned_log, 
-                state.question
+                cleaned_log,
+                question,
             )
-            
+
             analysis = await self._analyze_with_question(
                 relevant_sections,
-                state.question
+                question,
             )
-            
+
             # Transform analysis to output format
             return self._build_output(
                 analysis=analysis,
                 sections=relevant_sections,
-                question=state.question,
-                trace_id=trace_id
+                question=question,
+                trace_id=trace_id,
             )
-            
+
         except Exception as e:
             self.logger.error(f"Analysis failed: {e}", exc_info=True)
             return self._create_error_response(str(e), trace_id)
-    
+
     def _create_empty_response(self, trace_id: str) -> SimplifiedLogAnalysisOutput:
         """Create response for empty log content."""
         return SimplifiedLogAnalysisOutput(
             overall_summary="No valid log content to analyze",
             health_status="Unknown",
             trace_id=trace_id,
-            confidence_level=0.0
+            confidence_level=0.0,
         )
-    
-    def _create_error_response(self, error: str, trace_id: str) -> SimplifiedLogAnalysisOutput:
+
+    def _create_error_response(
+        self, error: str, trace_id: str
+    ) -> SimplifiedLogAnalysisOutput:
         """Create response for analysis errors."""
         return SimplifiedLogAnalysisOutput(
             overall_summary=f"Analysis failed: {error}",
             health_status="Error",
             trace_id=trace_id,
-            confidence_level=0.0
+            confidence_level=0.0,
         )
-    
+
     def _build_output(
         self,
         analysis: Dict[str, Any],
         sections: List[LogSection],
         question: Optional[str],
-        trace_id: str
+        trace_id: str,
     ) -> SimplifiedLogAnalysisOutput:
         """
         Build structured output from analysis results.
-        
+
         This method handles the transformation from raw analysis
         to the structured output expected by the AI SDK.
         """
         # Extract summary based on analysis type
         if question:
-            overall_summary = analysis.get('answer', 'Analysis complete')
-            priority_concerns = analysis.get('evidence', [])[:3]
+            overall_summary = analysis.get("answer", "Analysis complete")
+            priority_concerns = analysis.get("evidence", [])[:3]
         else:
-            overall_summary = analysis.get('summary', 'Log analysis complete')
+            overall_summary = analysis.get("summary", "Log analysis complete")
             priority_concerns = [
-                issue.get('title', '') 
-                for issue in analysis.get('issues', [])[:3]
-                if issue.get('title')
+                issue.get("title", "")
+                for issue in analysis.get("issues", [])[:3]
+                if issue.get("title")
             ]
-        
+
         # Transform issues using list comprehension
         identified_issues = [
             SimplifiedIssue(
-                title=issue.get('title', 'Issue'),
-                details=issue.get('details', ''),
-                severity=issue.get('severity', 'Medium')
+                title=issue.get("title", "Issue"),
+                details=issue.get("details", ""),
+                severity=issue.get("severity", "Medium"),
             )
-            for issue in analysis.get('issues', [])[:self.config.max_issues]
+            for issue in analysis.get("issues", [])[: self.config.max_issues]
         ]
-        
+
         # Transform solutions - handle both 'solutions' and 'actions' keys
-        solutions_data = analysis.get('solutions') or analysis.get('actions', [])
+        solutions_data = analysis.get("solutions") or analysis.get("actions", [])
         proposed_solutions = [
             SimplifiedSolution(
-                title=solution.get('title', 'Solution'),
-                steps=solution.get('steps', []),
-                expected_outcome=solution.get('outcome', 'Issue will be resolved')
+                title=solution.get("title", "Solution"),
+                steps=solution.get("steps", []),
+                expected_outcome=solution.get("outcome", "Issue will be resolved"),
             )
-            for solution in solutions_data[:self.config.max_solutions]
+            for solution in solutions_data[: self.config.max_solutions]
         ]
 
         confidence_level = self._estimate_confidence(
@@ -631,10 +659,10 @@ Format your response as JSON:
             solutions=proposed_solutions,
             priority_concerns=[str(item) for item in priority_concerns if item],
         )
-        
+
         # Determine health status using severity mapping
         health_status = self._compute_health_status(identified_issues)
-        
+
         return SimplifiedLogAnalysisOutput(
             overall_summary=overall_summary,
             health_status=health_status,
@@ -645,30 +673,24 @@ Format your response as JSON:
             relevant_log_sections=sections if question else None,
             confidence_level=confidence_level,
             trace_id=trace_id,
-            analysis_method="simplified"
+            analysis_method="simplified",
         )
-    
+
     def _compute_health_status(self, issues: List[SimplifiedIssue]) -> str:
         """
         Compute overall health status from issues.
-        
+
         Uses severity levels to determine system health:
         - Critical issues → "Critical"
-        - High issues → "Degraded"  
+        - High issues → "Degraded"
         - Otherwise → "Healthy"
         """
         severity_priority = {"Critical": 3, "High": 2, "Medium": 1, "Low": 0}
         max_severity = max(
-            (severity_priority.get(issue.severity, 0) for issue in issues),
-            default=0
+            (severity_priority.get(issue.severity, 0) for issue in issues), default=0
         )
-        
-        return {
-            3: "Critical",
-            2: "Degraded",
-            1: "Healthy",
-            0: "Healthy"
-        }[max_severity]
+
+        return {3: "Critical", 2: "Degraded", 1: "Healthy", 0: "Healthy"}[max_severity]
 
 
 async def run_simplified_log_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -677,18 +699,18 @@ async def run_simplified_log_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Convert dict state to SimplifiedAgentState
     agent_state = SimplifiedAgentState(
-        raw_log_content=state.get('raw_log_content', ''),
-        question=state.get('question'),
-        trace_id=state.get('trace_id')
+        raw_log_content=state.get("raw_log_content", ""),
+        question=state.get("question"),
+        trace_id=state.get("trace_id"),
     )
-    
+
     # Run analysis
     agent = SimplifiedLogAnalysisAgent()
     result = await agent.analyze(agent_state)
-    
+
     # Return in expected format
     return {
-        'final_report': result,
-        'trace_id': result.trace_id,
-        'analysis_method': 'simplified'
+        "final_report": result,
+        "trace_id": result.trace_id,
+        "analysis_method": "simplified",
     }

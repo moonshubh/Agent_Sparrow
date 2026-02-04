@@ -16,13 +16,17 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from loguru import logger
 from PIL import Image, ImageOps
 from pypdf import PdfReader
-from app.agents.unified.attachment_utils import is_text_mime, TEXT_EXTENSIONS, TEXT_MIME_TYPES
+from app.agents.unified.attachment_utils import (
+    TEXT_MIME_TYPES as _TEXT_MIME_TYPES,
+    is_text_mime,
+)
 
 if TYPE_CHECKING:
     from app.agents.orchestration.orchestration.state import Attachment
 
 
 # MIME type categories
+TEXT_MIME_TYPES = _TEXT_MIME_TYPES
 IMAGE_MIME_PREFIX = "image/"
 IMAGE_MIME_ALIASES = {
     "image/jpg": "image/jpeg",
@@ -39,8 +43,12 @@ MAX_PDF_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_ATTACHMENTS = 10  # Increased for tickets with multiple attachments
 MAX_BASE64_CHARS = 5_000_000  # ~3.75MB raw data when base64 encoded
 MAX_TEXT_CHARS = 3_500_000  # ~3.5MB for log files - Gemini, Grok support large context
-MAX_IMAGE_PIXELS = 25_000_000  # Guardrail against decompression bombs / OOM during re-encode
-PDF_TEXT_EXTRACT_THRESHOLD_BYTES = 1_000_000  # Extract text instead of inline PDF for large files
+MAX_IMAGE_PIXELS = (
+    25_000_000  # Guardrail against decompression bombs / OOM during re-encode
+)
+PDF_TEXT_EXTRACT_THRESHOLD_BYTES = (
+    1_000_000  # Extract text instead of inline PDF for large files
+)
 PDF_TEXT_EXTRACT_MAX_PAGES = 8
 PDF_TEXT_EXTRACT_PAGE_CHARS = 4000
 PDF_TEXT_EXTRACT_TOTAL_CHARS = 40_000
@@ -162,7 +170,9 @@ class MultimodalProcessor:
                 continue
 
             if not mime:
-                mime = self._normalize_image_mime(self._detect_mime_from_data_url(data_url))
+                mime = self._normalize_image_mime(
+                    self._detect_mime_from_data_url(data_url)
+                )
 
             # Categorize by MIME type
             if self._is_image_mime(mime):
@@ -170,16 +180,22 @@ class MultimodalProcessor:
                 if block:
                     result.multimodal_blocks.append(block)
                 else:
-                    result.skipped.append({"name": name, "reason": "image_processing_failed"})
+                    result.skipped.append(
+                        {"name": name, "reason": "image_processing_failed"}
+                    )
 
             elif self._is_pdf_mime(mime):
                 base64_data = self._extract_base64(data_url)
                 if not base64_data:
                     logger.warning("pdf_base64_extraction_failed", name=name)
-                    result.skipped.append({"name": name, "reason": "pdf_base64_extraction_failed"})
+                    result.skipped.append(
+                        {"name": name, "reason": "pdf_base64_extraction_failed"}
+                    )
                     continue
 
-                should_extract_text = self._should_extract_pdf_text(size, len(base64_data))
+                should_extract_text = self._should_extract_pdf_text(
+                    size, len(base64_data)
+                )
                 if should_extract_text:
                     extracted_text = self._extract_pdf_text(name, base64_data)
                     if extracted_text:
@@ -198,21 +214,27 @@ class MultimodalProcessor:
                     else:
                         result.multimodal_blocks.append(block)
                 else:
-                    result.skipped.append({"name": name, "reason": "pdf_processing_failed"})
+                    result.skipped.append(
+                        {"name": name, "reason": "pdf_processing_failed"}
+                    )
 
             elif self._is_text_mime(mime, name):
                 text = self._process_text(name, data_url)
                 if text:
                     text_parts.append(f"Attachment: {name}\n{text}")
                 else:
-                    result.skipped.append({"name": name, "reason": "text_decode_failed"})
+                    result.skipped.append(
+                        {"name": name, "reason": "text_decode_failed"}
+                    )
 
             else:
-                result.skipped.append({
-                    "name": name,
-                    "reason": "unsupported_mime_type",
-                    "mime": mime,
-                })
+                result.skipped.append(
+                    {
+                        "name": name,
+                        "reason": "unsupported_mime_type",
+                        "mime": mime,
+                    }
+                )
 
         # Combine text parts
         if text_parts:
@@ -383,9 +405,7 @@ class MultimodalProcessor:
                 continue
             if len(text) > PDF_TEXT_EXTRACT_PAGE_CHARS:
                 text = text[: PDF_TEXT_EXTRACT_PAGE_CHARS - 3] + "..."
-            extracted_pages.append(
-                f"[Page {page_idx + 1}/{total_pages}]\n{text}"
-            )
+            extracted_pages.append(f"[Page {page_idx + 1}/{total_pages}]\n{text}")
 
         if not extracted_pages:
             return None
@@ -465,10 +485,9 @@ class MultimodalProcessor:
 
         # Heuristic base64 detection
         if not is_base64:
-            is_base64 = (
-                bool(BASE64_PATTERN.fullmatch(encoded_clean))
-                and len(encoded_clean) % 4 in (0, 2, 3)
-            )
+            is_base64 = bool(BASE64_PATTERN.fullmatch(encoded_clean)) and len(
+                encoded_clean
+            ) % 4 in (0, 2, 3)
 
         try:
             if is_base64:
@@ -547,7 +566,7 @@ class MultimodalProcessor:
             return None
 
         try:
-            image = Image.open(BytesIO(raw))
+            image: Image.Image = Image.open(BytesIO(raw))
             width, height = image.size
             if width and height and (width * height) > self.max_image_pixels:
                 logger.warning(
@@ -622,7 +641,9 @@ class MultimodalProcessor:
             return False
         return mime.lower() in PDF_MIME_TYPES
 
-    def _is_text_mime(self, mime: Optional[str], filename: Optional[str] = None) -> bool:
+    def _is_text_mime(
+        self, mime: Optional[str], filename: Optional[str] = None
+    ) -> bool:
         """Check if MIME type indicates text content."""
         return is_text_mime(mime, filename)
 

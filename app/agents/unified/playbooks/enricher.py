@@ -31,11 +31,10 @@ import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.output_parsers import JsonOutputParser
 from loguru import logger
 
 if TYPE_CHECKING:
-    from supabase import Client as SupabaseClient
+    from app.db.supabase.client import SupabaseClient
 
 # Table name for playbook learned entries
 LEARNED_ENTRIES_TABLE = "playbook_learned_entries"
@@ -294,13 +293,15 @@ class PlaybookEnricher:
 
         try:
             # Run extraction
-            response = await model.ainvoke([
-                SystemMessage(
-                    content="You are a support resolution analyst. "
-                    "Extract structured playbook entries from conversations."
-                ),
-                HumanMessage(content=prompt),
-            ])
+            response = await model.ainvoke(
+                [
+                    SystemMessage(
+                        content="You are a support resolution analyst. "
+                        "Extract structured playbook entries from conversations."
+                    ),
+                    HumanMessage(content=prompt),
+                ]
+            )
 
             # Parse JSON response
             content = response.content
@@ -375,7 +376,8 @@ class PlaybookEnricher:
         Returns:
             Entry ID if successful, None otherwise.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             logger.warning("_store_entry: no client")
             return None
 
@@ -394,17 +396,20 @@ class PlaybookEnricher:
         }
 
         try:
+            table_client = getattr(client, "client", client)
             response = await asyncio.to_thread(
-                lambda: self.client.table(LEARNED_ENTRIES_TABLE)
+                lambda: table_client.table(LEARNED_ENTRIES_TABLE)
                 .upsert(data, on_conflict="conversation_id")  # Update if exists
                 .execute()
             )
 
-            if response.data and len(response.data) > 0:
-                entry_id = response.data[0].get("id")
+            if isinstance(response.data, list) and response.data:
+                row = response.data[0]
+                entry_id = row.get("id") if isinstance(row, dict) else None
+                entry_id_str = str(entry_id) if entry_id is not None else None
                 logger.info(
                     "playbook_entry_created",
-                    entry_id=entry_id,
+                    entry_id=entry_id_str,
                     conversation_id=conversation_id,
                     category=category,
                     status="pending_review",
@@ -420,8 +425,14 @@ class PlaybookEnricher:
                         from app.memory.memory_ui_service import get_memory_ui_service
 
                         service = get_memory_ui_service()
-                        agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
-                        tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+                        agent_id = (
+                            getattr(settings, "memory_ui_agent_id", "sparrow")
+                            or "sparrow"
+                        )
+                        tenant_id = (
+                            getattr(settings, "memory_ui_tenant_id", "mailbot")
+                            or "mailbot"
+                        )
 
                         steps = extracted.get("resolution_steps") or []
                         step_lines: List[str] = []
@@ -449,13 +460,20 @@ class PlaybookEnricher:
                         if learnings:
                             content_lines.append(f"Key learnings: {learnings}")
                         if step_lines:
-                            content_lines.append("Resolution steps:\n" + "\n".join(step_lines))
+                            content_lines.append(
+                                "Resolution steps:\n" + "\n".join(step_lines)
+                            )
 
                         async def _capture_memory_ui() -> None:
                             try:
-                                from app.security.pii_redactor import redact_pii, redact_pii_from_dict
+                                from app.security.pii_redactor import (
+                                    redact_pii,
+                                    redact_pii_from_dict,
+                                )
 
-                                content = "\n".join(line for line in content_lines if line).strip()
+                                content = "\n".join(
+                                    line for line in content_lines if line
+                                ).strip()
                                 content = redact_pii(content)
                                 metadata = redact_pii_from_dict(
                                     {
@@ -492,9 +510,11 @@ class PlaybookEnricher:
 
                         asyncio.create_task(_capture_memory_ui())
                 except Exception as exc:
-                    logger.debug("memory_ui_capture_playbook_failed", error=str(exc)[:180])
+                    logger.debug(
+                        "memory_ui_capture_playbook_failed", error=str(exc)[:180]
+                    )
 
-                return entry_id
+                return entry_id_str
 
         except Exception as exc:
             logger.warning(
@@ -522,28 +542,30 @@ class PlaybookEnricher:
         Returns:
             Entry ID if successful, None otherwise.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return None
 
         try:
             # Load messages from chat_sessions table
             response = (
-                self.client.table("chat_sessions")
+                client.client.table("chat_sessions")
                 .select("messages")
                 .eq("id", session_id)
                 .single()
                 .execute()
             )
 
-            if not response.data:
+            row = response.data
+            if not isinstance(row, dict):
                 logger.warning(
                     "session_not_found",
                     session_id=session_id,
                 )
                 return None
 
-            messages = response.data.get("messages", [])
-            if not messages:
+            messages = row.get("messages")
+            if not isinstance(messages, list) or not messages:
                 logger.warning(
                     "session_has_no_messages",
                     session_id=session_id,
@@ -570,12 +592,13 @@ class PlaybookEnricher:
         Returns:
             Dict with extraction stats per category and status.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return {}
 
         try:
             response = (
-                self.client.table(LEARNED_ENTRIES_TABLE)
+                client.client.table(LEARNED_ENTRIES_TABLE)
                 .select("category, status")
                 .execute()
             )
@@ -585,8 +608,14 @@ class PlaybookEnricher:
             total = {"pending_review": 0, "approved": 0, "rejected": 0, "total": 0}
 
             for row in response.data or []:
-                category = row["category"]
-                status = row.get("status", "pending_review")
+                if not isinstance(row, dict):
+                    continue
+                category = row.get("category")
+                if not isinstance(category, str) or not category:
+                    continue
+                status = row.get("status")
+                if not isinstance(status, str) or not status:
+                    status = "pending_review"
 
                 if category not in stats:
                     stats[category] = {

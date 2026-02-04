@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from loguru import logger
 
 if TYPE_CHECKING:
-    from supabase import Client as SupabaseClient
+    from app.db.supabase.client import SupabaseClient
 
 
 # Table name for playbook learned entries
@@ -51,11 +51,7 @@ STATUS_REJECTED = "rejected"
 
 def _escape_like(value: str) -> str:
     """Escape characters that are special in SQL LIKE patterns."""
-    return (
-        value.replace("\\", "\\\\")
-        .replace("%", r"\%")
-        .replace("_", r"\_")
-    )
+    return value.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +156,9 @@ class Playbook:
         if self.approved_entries:
             parts.append("### Verified Solutions from Past Tickets\n")
             for i, entry in enumerate(self.approved_entries, 1):
-                parts.append(f"**Solution {i}** (Quality: {entry.quality_score or 'N/A'})")
+                parts.append(
+                    f"**Solution {i}** (Quality: {entry.quality_score or 'N/A'})"
+                )
                 parts.append(f"- Problem: {entry.problem_summary}")
                 parts.append(f"- Solution: {entry.final_solution}")
                 if entry.why_it_worked:
@@ -301,14 +299,15 @@ class PlaybookExtractor:
         Returns:
             List of approved PlaybookEntry objects, sorted by quality.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return []
 
         limit = limit or self.max_approved_entries
 
         try:
             response = (
-                self.client.table(LEARNED_ENTRIES_TABLE)
+                client.client.table(LEARNED_ENTRIES_TABLE)
                 .select("*")
                 .eq("category", category)
                 .eq("status", STATUS_APPROVED)
@@ -318,7 +317,12 @@ class PlaybookExtractor:
                 .execute()
             )
 
-            return [self._row_to_entry(row) for row in response.data or []]
+            entries: List[PlaybookEntry] = []
+            for row in response.data or []:
+                if not isinstance(row, dict):
+                    continue
+                entries.append(self._row_to_entry(row))
+            return entries
 
         except Exception as exc:
             logger.warning(
@@ -342,14 +346,15 @@ class PlaybookExtractor:
         Returns:
             List of pending PlaybookEntry objects, sorted by recency.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return []
 
         limit = limit or self.max_pending_entries
 
         try:
             response = (
-                self.client.table(LEARNED_ENTRIES_TABLE)
+                client.client.table(LEARNED_ENTRIES_TABLE)
                 .select("*")
                 .eq("category", category)
                 .eq("status", STATUS_PENDING_REVIEW)
@@ -358,7 +363,12 @@ class PlaybookExtractor:
                 .execute()
             )
 
-            return [self._row_to_entry(row) for row in response.data or []]
+            entries: List[PlaybookEntry] = []
+            for row in response.data or []:
+                if not isinstance(row, dict):
+                    continue
+                entries.append(self._row_to_entry(row))
+            return entries
 
         except Exception as exc:
             logger.warning(
@@ -418,13 +428,14 @@ class PlaybookExtractor:
         Returns:
             List of KB article IDs.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return []
 
         try:
             # Query mailbird_knowledge for articles tagged with this category
             response = (
-                self.client.table("mailbird_knowledge")
+                client.client.table("mailbird_knowledge")
                 .select("id, url")
                 .ilike("content", f"%{_escape_like(category.replace('_', ' '))}%")
                 .limit(10)
@@ -433,29 +444,33 @@ class PlaybookExtractor:
 
             out: List[str] = []
             for row in response.data or []:
+                if not isinstance(row, dict):
+                    continue
                 if row.get("id") is not None:
                     out.append(str(row["id"]))
                 elif row.get("url"):
                     out.append(str(row["url"]))
             return out
 
-        except Exception as exc:
+        except Exception:
             # Fallback: try markdown column if content is unavailable.
             try:
                 response = (
-                    self.client.table("mailbird_knowledge")
+                    client.client.table("mailbird_knowledge")
                     .select("id, url")
                     .ilike("markdown", f"%{_escape_like(category.replace('_', ' '))}%")
                     .limit(10)
                     .execute()
                 )
-                out: List[str] = []
+                fallback_out: List[str] = []
                 for row in response.data or []:
+                    if not isinstance(row, dict):
+                        continue
                     if row.get("id") is not None:
-                        out.append(str(row["id"]))
+                        fallback_out.append(str(row["id"]))
                     elif row.get("url"):
-                        out.append(str(row["url"]))
-                return out
+                        fallback_out.append(str(row["url"]))
+                return fallback_out
             except Exception as inner_exc:
                 logger.debug(
                     "get_related_kb_articles_error",
@@ -529,16 +544,19 @@ class PlaybookExtractor:
         Returns:
             True if approved successfully, False otherwise.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return False
 
         try:
-            self.client.table(LEARNED_ENTRIES_TABLE).update({
-                "status": STATUS_APPROVED,
-                "reviewed_by": reviewed_by,
-                "reviewed_at": datetime.now(timezone.utc).isoformat(),
-                "quality_score": max(0.0, min(1.0, quality_score)),
-            }).eq("id", entry_id).execute()
+            client.client.table(LEARNED_ENTRIES_TABLE).update(
+                {
+                    "status": STATUS_APPROVED,
+                    "reviewed_by": reviewed_by,
+                    "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                    "quality_score": max(0.0, min(1.0, quality_score)),
+                }
+            ).eq("id", entry_id).execute()
 
             logger.info(
                 "entry_approved",
@@ -570,15 +588,18 @@ class PlaybookExtractor:
         Returns:
             True if rejected successfully, False otherwise.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return False
 
         try:
-            self.client.table(LEARNED_ENTRIES_TABLE).update({
-                "status": STATUS_REJECTED,
-                "reviewed_by": reviewed_by,
-                "reviewed_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", entry_id).execute()
+            client.client.table(LEARNED_ENTRIES_TABLE).update(
+                {
+                    "status": STATUS_REJECTED,
+                    "reviewed_by": reviewed_by,
+                    "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ).eq("id", entry_id).execute()
 
             logger.info(
                 "entry_rejected",
@@ -609,12 +630,13 @@ class PlaybookExtractor:
         Returns:
             List of pending PlaybookEntry objects.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return []
 
         try:
             query = (
-                self.client.table(LEARNED_ENTRIES_TABLE)
+                client.client.table(LEARNED_ENTRIES_TABLE)
                 .select("*")
                 .eq("status", STATUS_PENDING_REVIEW)
             )
@@ -622,13 +644,14 @@ class PlaybookExtractor:
             if category:
                 query = query.eq("category", category)
 
-            response = (
-                query.order("created_at", desc=True)
-                .limit(limit)
-                .execute()
-            )
+            response = query.order("created_at", desc=True).limit(limit).execute()
 
-            return [self._row_to_entry(row) for row in response.data or []]
+            entries: List[PlaybookEntry] = []
+            for row in response.data or []:
+                if not isinstance(row, dict):
+                    continue
+                entries.append(self._row_to_entry(row))
+            return entries
 
         except Exception as exc:
             logger.warning(

@@ -21,6 +21,7 @@ from .protocol import (
     EditResult,
     GrepMatch,
 )
+
 # Backend implementations
 from .supabase_store import SupabaseStoreBackend
 from .composite import SparrowCompositeBackend

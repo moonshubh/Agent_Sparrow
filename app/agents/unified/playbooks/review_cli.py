@@ -35,7 +35,6 @@ from app.agents.unified.playbooks.extractor import (
 )
 from app.db.supabase.client import get_supabase_client
 
-
 DEFAULT_CATEGORIES: Tuple[str, ...] = (
     "account_setup",
     "sync_auth",
@@ -314,7 +313,9 @@ def _parse_entry_from_markdown(
         final_solution = _clean_text(sections.get("final_solution", []))
         why_it_worked = _clean_text(sections.get("why_it_worked", []))
         key_learnings = _clean_text(sections.get("key_learnings", []))
-        diagnostic_questions = _extract_bullets(sections.get("diagnostic_questions", []))
+        diagnostic_questions = _extract_bullets(
+            sections.get("diagnostic_questions", [])
+        )
         resolution_steps = _extract_steps(sections.get("resolution_steps", []))
 
         if problem_summary:
@@ -362,7 +363,9 @@ def import_entries(args: argparse.Namespace) -> None:
     skipped = 0
 
     for path in sorted(in_dir.rglob("*.md")):
-        meta, parsed = _parse_entry_from_markdown(path, prefer_body=not args.prefer_frontmatter)
+        meta, parsed = _parse_entry_from_markdown(
+            path, prefer_body=not args.prefer_frontmatter
+        )
         entry_id = meta.get("id")
         if not entry_id:
             logger.warning("Missing entry id in %s", path)
@@ -387,9 +390,9 @@ def import_entries(args: argparse.Namespace) -> None:
                 skipped += 1
                 continue
             payload["reviewed_by"] = reviewed_by
-            payload["reviewed_at"] = meta.get("reviewed_at") or datetime.now(
-                timezone.utc
-            ).isoformat()
+            payload["reviewed_at"] = (
+                meta.get("reviewed_at") or datetime.now(timezone.utc).isoformat()
+            )
             if quality_score is not None:
                 payload["quality_score"] = float(quality_score)
 
@@ -403,7 +406,9 @@ def import_entries(args: argparse.Namespace) -> None:
             continue
 
         try:
-            client.table(LEARNED_ENTRIES_TABLE).update(payload).eq("id", entry_id).execute()
+            client.table(LEARNED_ENTRIES_TABLE).update(payload).eq(
+                "id", entry_id
+            ).execute()
             updated += 1
         except Exception as exc:
             logger.warning("Failed to update %s: %s", entry_id, exc)
@@ -422,7 +427,9 @@ async def compile_playbooks(args: argparse.Namespace) -> None:
 
     for category in categories:
         playbook = await extractor.build_playbook_with_learned(category)
-        content = playbook.to_prompt_context(include_pending=args.include_pending).strip()
+        content = playbook.to_prompt_context(
+            include_pending=args.include_pending
+        ).strip()
         if not content:
             logger.info("No content for category=%s", category)
             continue
@@ -442,7 +449,9 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     export_parser = subparsers.add_parser("export", help="Export entries to Markdown.")
-    export_parser.add_argument("--out", required=True, help="Output folder for Markdown files.")
+    export_parser.add_argument(
+        "--out", required=True, help="Output folder for Markdown files."
+    )
     export_parser.add_argument(
         "--categories",
         action="append",
@@ -490,7 +499,9 @@ def main() -> None:
     )
     import_parser.set_defaults(func=import_entries)
 
-    compile_parser = subparsers.add_parser("compile", help="Compile playbooks to workspace store.")
+    compile_parser = subparsers.add_parser(
+        "compile", help="Compile playbooks to workspace store."
+    )
     compile_parser.add_argument(
         "--categories",
         action="append",

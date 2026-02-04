@@ -168,7 +168,9 @@ class ModelRegistry:
 
     @property
     def coordinator_openrouter_with_subagents(self) -> ModelSpec:
-        return self._spec_for_config(self._config.coordinators["openrouter_with_subagents"])
+        return self._spec_for_config(
+            self._config.coordinators["openrouter_with_subagents"]
+        )
 
     @property
     def summarizer(self) -> ModelSpec:
@@ -231,7 +233,9 @@ class ModelRegistry:
         return self.coordinator_google
 
     def get_display_names(self) -> dict[str, str]:
-        return {model_id: spec.display_name for model_id, spec in self._specs_by_id.items()}
+        return {
+            model_id: spec.display_name for model_id, spec in self._specs_by_id.items()
+        }
 
     def get_provider_display_names(self) -> dict[str, str]:
         return {
@@ -250,7 +254,10 @@ class ModelRegistry:
         elif provider_lower == "openrouter":
             openrouter_id = self.coordinator_openrouter.id
             default_subagent = self._config.subagents.get("_default")
-            if default_subagent is not None and default_subagent.model_id != openrouter_id:
+            if (
+                default_subagent is not None
+                and default_subagent.model_id != openrouter_id
+            ):
                 chain[openrouter_id] = default_subagent.model_id
                 chain.setdefault(default_subagent.model_id, None)
             else:

@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo } from 'react';
-import { EditorContent, useEditor } from '@tiptap/react';
-import type { Editor } from '@tiptap/core';
-import { createMemoryExtensions } from '@/features/memory/tiptap/memoryExtensions';
+import { useEffect, useMemo } from "react";
+import { EditorContent, useEditor } from "@tiptap/react";
+import type { Editor } from "@tiptap/core";
+import { createMemoryExtensions } from "@/features/memory/tiptap/memoryExtensions";
 
 interface MemoryTipTapEditorProps {
   content: string;
@@ -28,18 +28,18 @@ export function MemoryTipTapEditor({
         placeholder,
         enableImages: true,
       }),
-    [placeholder]
+    [placeholder],
   );
 
   const editor = useEditor({
     extensions,
     content,
-    contentType: 'markdown',
+    contentType: "markdown",
     editable: !readOnly,
     immediatelyRender: false,
     editorProps: {
       attributes: {
-        class: `memory-tiptap-editor${readOnly ? ' memory-tiptap-editor--readonly' : ''}`,
+        class: `memory-tiptap-editor${readOnly ? " memory-tiptap-editor--readonly" : ""}`,
       },
     },
     onUpdate: ({ editor }) => {
@@ -59,15 +59,20 @@ export function MemoryTipTapEditor({
   useEffect(() => {
     if (!editor) return;
     if (content === editor.getMarkdown()) return;
-    editor.commands.setContent(content, { contentType: 'markdown' });
+    editor.commands.setContent(content, { contentType: "markdown" });
   }, [content, editor]);
 
   if (!editor) return null;
 
   return (
-    <div className={className ? `memory-tiptap-wrapper ${className}` : 'memory-tiptap-wrapper'}>
+    <div
+      className={
+        className
+          ? `memory-tiptap-wrapper ${className}`
+          : "memory-tiptap-wrapper"
+      }
+    >
       <EditorContent editor={editor} />
     </div>
   );
 }
-

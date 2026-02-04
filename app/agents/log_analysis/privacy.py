@@ -3,11 +3,26 @@
 Canonical import path: app.agents.log_analysis.privacy
 """
 
-try:
-    from app.agents.log_analysis.log_analysis_agent.privacy import (
-        RedactionLevel,  # noqa: F401
+from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.agents.log_analysis.log_analysis_agent.privacy import (  # type: ignore[import-not-found]
+        RedactionLevel as RedactionLevel,
     )
-except Exception:  # pragma: no cover
-    pass
+else:
+    try:
+        from app.agents.log_analysis.log_analysis_agent.privacy import (  # type: ignore[import-not-found]
+            RedactionLevel as RedactionLevel,
+        )
+    except Exception:  # pragma: no cover
+
+        class RedactionLevel(str, Enum):
+            """Fallback redaction levels when the upstream module is unavailable."""
+
+            LOW = "low"
+            MEDIUM = "medium"
+            HIGH = "high"
+
 
 __all__ = ["RedactionLevel"]

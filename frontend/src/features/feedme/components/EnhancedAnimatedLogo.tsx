@@ -1,36 +1,36 @@
-'use client'
+"use client";
 
-import Image from 'next/image'
-import React, { useEffect, useState } from 'react'
-import { cn } from '@/shared/lib/utils'
+import Image from "next/image";
+import React, { useEffect, useState } from "react";
+import { cn } from "@/shared/lib/utils";
 
 interface EnhancedAnimatedLogoProps {
-  className?: string
-  triggerAdvance?: number
-  loop?: boolean
+  className?: string;
+  triggerAdvance?: number;
+  loop?: boolean;
 }
 
 const KEYFRAMES = [
-  '/feedme-keyframes/Keyframe_1.png',
-  '/feedme-keyframes/Keyframe_2.png',
-  '/feedme-keyframes/Keyframe_3.png',
-  '/feedme-keyframes/Keyframe_4.png',
-  '/feedme-keyframes/Keyframe_5.png',
-  '/feedme-keyframes/Keyframe_6.png',
-  '/feedme-keyframes/Keyframe_7.png',
-  '/feedme-keyframes/Keyframe_8.png',
-] as const
+  "/feedme-keyframes/Keyframe_1.png",
+  "/feedme-keyframes/Keyframe_2.png",
+  "/feedme-keyframes/Keyframe_3.png",
+  "/feedme-keyframes/Keyframe_4.png",
+  "/feedme-keyframes/Keyframe_5.png",
+  "/feedme-keyframes/Keyframe_6.png",
+  "/feedme-keyframes/Keyframe_7.png",
+  "/feedme-keyframes/Keyframe_8.png",
+] as const;
 
 export default function EnhancedAnimatedLogo({
-  className = '',
+  className = "",
   triggerAdvance = 0,
   loop = true,
 }: EnhancedAnimatedLogoProps) {
-  const [currentFrame, setCurrentFrame] = useState(0)
-  const [hasLoaded, setHasLoaded] = useState(false)
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   useEffect(() => {
-    let cancelled = false
+    let cancelled = false;
 
     const preload = async () => {
       try {
@@ -38,46 +38,46 @@ export default function EnhancedAnimatedLogo({
           KEYFRAMES.map(
             (src) =>
               new Promise<void>((resolve, reject) => {
-                const img = new window.Image()
-                img.onload = () => resolve()
-                img.onerror = reject
-                img.src = src
+                const img = new window.Image();
+                img.onload = () => resolve();
+                img.onerror = reject;
+                img.src = src;
               }),
           ),
-        )
+        );
       } catch (error) {
-        console.warn('Failed to preload FeedMe frames', error)
+        console.warn("Failed to preload FeedMe frames", error);
       } finally {
         if (!cancelled) {
-          setHasLoaded(true)
+          setHasLoaded(true);
         }
       }
-    }
+    };
 
-    preload().catch(() => setHasLoaded(true))
+    preload().catch(() => setHasLoaded(true));
     return () => {
-      cancelled = true
-    }
-  }, [])
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
-    if (triggerAdvance === 0) return
-    
+    if (triggerAdvance === 0) return;
+
     // Cycle through all frames sequentially when triggered
     // Each trigger advances to the next frame, cycling through all 8 frames
     setCurrentFrame((prev) => {
-      const next = prev + 1
+      const next = prev + 1;
       if (next >= KEYFRAMES.length) {
-        return loop ? 0 : KEYFRAMES.length - 1
+        return loop ? 0 : KEYFRAMES.length - 1;
       }
-      return next
-    })
-  }, [triggerAdvance, loop])
+      return next;
+    });
+  }, [triggerAdvance, loop]);
 
-  const frameSrc = hasLoaded ? KEYFRAMES[currentFrame] : KEYFRAMES[0]
+  const frameSrc = hasLoaded ? KEYFRAMES[currentFrame] : KEYFRAMES[0];
 
   return (
-    <div className={cn('relative flex items-center justify-center', className)}>
+    <div className={cn("relative flex items-center justify-center", className)}>
       <Image
         src={frameSrc}
         alt="FeedMe"
@@ -87,5 +87,5 @@ export default function EnhancedAnimatedLogo({
         priority
       />
     </div>
-  )
+  );
 }

@@ -5,4 +5,3 @@ symbols to avoid breaking older import paths during the migration.
 """
 
 from app.db.embedding.utils import *  # noqa: F401,F403
-

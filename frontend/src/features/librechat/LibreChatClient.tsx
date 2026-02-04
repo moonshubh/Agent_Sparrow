@@ -5,21 +5,35 @@
  * Uses createSparrowAgent for direct SSE streaming with AgentProvider.
  */
 
-'use client';
+"use client";
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { createSparrowAgent, type SparrowAgent, type Message } from '@/services/ag-ui/client';
-import { sessionsAPI, type ChatMessageRecord, type AgentType as SessionAgentType } from '@/services/api/endpoints/sessions';
-import { modelsAPI, Provider } from '@/services/api/endpoints/models';
-import { AgentProvider, type SerializedArtifact } from '@/features/librechat/AgentContext';
-import { ArtifactProvider, getGlobalArtifactStore } from '@/features/librechat/artifacts';
-import { LibreChatView } from './components/LibreChatView';
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import {
+  createSparrowAgent,
+  type SparrowAgent,
+  type Message,
+} from "@/services/ag-ui/client";
+import {
+  sessionsAPI,
+  type ChatMessageRecord,
+  type AgentType as SessionAgentType,
+} from "@/services/api/endpoints/sessions";
+import { modelsAPI, Provider } from "@/services/api/endpoints/models";
+import {
+  AgentProvider,
+  type SerializedArtifact,
+} from "@/features/librechat/AgentContext";
+import {
+  ArtifactProvider,
+  getGlobalArtifactStore,
+} from "@/features/librechat/artifacts";
+import { LibreChatView } from "./components/LibreChatView";
 
 // Convert backend message format to frontend Message format
 function convertToMessage(record: ChatMessageRecord): Message {
   return {
     id: String(record.id),
-    role: record.message_type === 'tool' ? 'tool' : record.message_type,
+    role: record.message_type === "tool" ? "tool" : record.message_type,
     content: record.content,
     metadata: record.metadata || undefined,
     created_at: record.created_at || undefined,
@@ -30,27 +44,28 @@ function inferSessionAgentType(messages: Message[]): SessionAgentType {
   for (const msg of messages) {
     const metadata = msg.metadata as Record<string, unknown> | undefined;
     const notes =
-      metadata && ('logAnalysisNotes' in metadata || 'log_analysis_notes' in metadata)
+      metadata &&
+      ("logAnalysisNotes" in metadata || "log_analysis_notes" in metadata)
         ? metadata
         : null;
     if (notes) {
-      return 'log_analysis';
+      return "log_analysis";
     }
 
     const attachments = metadata?.attachments;
     if (Array.isArray(attachments)) {
       const hasLog = attachments.some((att) => {
-        if (!att || typeof att !== 'object') return false;
+        if (!att || typeof att !== "object") return false;
         const name = (att as { name?: unknown }).name;
-        return typeof name === 'string' && name.toLowerCase().endsWith('.log');
+        return typeof name === "string" && name.toLowerCase().endsWith(".log");
       });
       if (hasLog) {
-        return 'log_analysis';
+        return "log_analysis";
       }
     }
   }
 
-  return 'primary';
+  return "primary";
 }
 
 /**
@@ -60,7 +75,7 @@ function inferSessionAgentType(messages: Message[]): SessionAgentType {
 function restoreArtifactsFromMessages(messages: Message[]): void {
   const store = getGlobalArtifactStore();
   if (!store) {
-    console.debug('[Artifacts] Store not available, skipping restore');
+    console.debug("[Artifacts] Store not available, skipping restore");
     return;
   }
 
@@ -78,16 +93,22 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
 
     if (!Array.isArray(artifacts) || artifacts.length === 0) continue;
 
-    console.debug('[Artifacts] Found', artifacts.length, 'artifacts in message', message.id);
+    console.debug(
+      "[Artifacts] Found",
+      artifacts.length,
+      "artifacts in message",
+      message.id,
+    );
 
     for (const artifact of artifacts) {
       // Validate required fields - image artifacts may use URL content or legacy base64 imageData
       const hasRequiredFields = artifact.id && artifact.type;
       const hasContent =
         artifact.content ||
-        (artifact.type === 'image' && (artifact.imageData || artifact.imageUrl));
+        (artifact.type === "image" &&
+          (artifact.imageData || artifact.imageUrl));
       if (!hasRequiredFields || !hasContent) {
-        console.debug('[Artifacts] Skipping invalid artifact:', {
+        console.debug("[Artifacts] Skipping invalid artifact:", {
           id: artifact.id,
           type: artifact.type,
           hasContent: Boolean(artifact.content),
@@ -97,28 +118,34 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
         continue;
       }
 
-        state.addArtifact({
-          id: artifact.id,
-          type: artifact.type,
-          title: artifact.title || 'Untitled',
-        content: artifact.content || artifact.imageUrl || '',
-          messageId: message.id,
-          language: artifact.language,
-          identifier: artifact.identifier,
-          index: artifact.index,
-          imageData: artifact.imageData,
-          imageUrl: artifact.imageUrl,
-          mimeType: artifact.mimeType,
-          altText: artifact.altText,
-          aspectRatio: artifact.aspectRatio,
-          resolution: artifact.resolution,
-        });
+      state.addArtifact({
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title || "Untitled",
+        content: artifact.content || artifact.imageUrl || "",
+        messageId: message.id,
+        language: artifact.language,
+        identifier: artifact.identifier,
+        index: artifact.index,
+        imageData: artifact.imageData,
+        imageUrl: artifact.imageUrl,
+        mimeType: artifact.mimeType,
+        altText: artifact.altText,
+        aspectRatio: artifact.aspectRatio,
+        resolution: artifact.resolution,
+      });
       restoredCount += 1;
     }
   }
 
   if (restoredCount > 0 || skippedCount > 0) {
-    console.debug('[Artifacts] Restore complete:', restoredCount, 'restored,', skippedCount, 'skipped');
+    console.debug(
+      "[Artifacts] Restore complete:",
+      restoredCount,
+      "restored,",
+      skippedCount,
+      "skipped",
+    );
   }
 
   if (restoredCount > 0) {
@@ -129,16 +156,16 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
       const lastArtifactId = orderedIds[orderedIds.length - 1];
       state.setCurrentArtifact(lastArtifactId);
       state.setArtifactsVisible(true);
-      console.debug('[Artifacts] Showing artifact panel with:', lastArtifactId);
+      console.debug("[Artifacts] Showing artifact panel with:", lastArtifactId);
     }
   }
 }
 
 // Default models by provider
 const DEFAULT_MODELS: Record<Provider, string> = {
-  google: 'gemini-3-flash-preview',
-  xai: 'grok-4-1-fast-reasoning',
-  openrouter: 'x-ai/grok-4.1-fast',
+  google: "gemini-3-flash-preview",
+  xai: "grok-4-1-fast-reasoning",
+  openrouter: "x-ai/grok-4.1-fast",
 };
 
 // Chat configuration constants
@@ -155,7 +182,7 @@ interface Conversation {
 
 export default function LibreChatClient() {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [traceId, setTraceId] = useState<string>('');
+  const [traceId, setTraceId] = useState<string>("");
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -163,24 +190,31 @@ export default function LibreChatClient() {
   const [agent, setAgent] = useState<SparrowAgent | null>(null);
 
   // Provider state
-  const [provider, setProvider] = useState<Provider>('google');
+  const [provider, setProvider] = useState<Provider>("google");
   const [model, setModel] = useState<string>(DEFAULT_MODELS.google);
 
   // Conversation history
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [currentConversationId, setCurrentConversationId] = useState<string | undefined>();
+  const [currentConversationId, setCurrentConversationId] = useState<
+    string | undefined
+  >();
   const initializedRef = useRef(false);
 
-  const getActiveModelSelection = useCallback((): { provider: Provider; model: string } => {
+  const getActiveModelSelection = useCallback((): {
+    provider: Provider;
+    model: string;
+  } => {
     const agentState = agent?.state as Record<string, unknown> | undefined;
     const candidateProvider =
-      typeof agentState?.provider === 'string' ? agentState.provider : provider;
+      typeof agentState?.provider === "string" ? agentState.provider : provider;
     const candidateModel =
-      typeof agentState?.model === 'string' ? agentState.model : model;
+      typeof agentState?.model === "string" ? agentState.model : model;
 
     const normalizedProvider = String(candidateProvider).toLowerCase();
     const resolvedProvider: Provider =
-      normalizedProvider === 'google' || normalizedProvider === 'xai' ? normalizedProvider : 'google';
+      normalizedProvider === "google" || normalizedProvider === "xai"
+        ? normalizedProvider
+        : "google";
 
     return { provider: resolvedProvider, model: String(candidateModel) };
   }, [agent, model, provider]);
@@ -194,31 +228,38 @@ export default function LibreChatClient() {
 
     try {
       // Fetch available providers
-      let activeProvider: Provider = 'google';
+      let activeProvider: Provider = "google";
       let activeModel: string = DEFAULT_MODELS.google;
 
       try {
         const config = await modelsAPI.getConfig();
-        const preferredProviders: Provider[] = ['google', 'xai'];
-        const availableProvider = preferredProviders.find((p) => config.available_providers[p]) as Provider | undefined;
+        const preferredProviders: Provider[] = ["google", "xai"];
+        const availableProvider = preferredProviders.find(
+          (p) => config.available_providers[p],
+        ) as Provider | undefined;
         if (availableProvider) {
           activeProvider = availableProvider;
-          activeModel = config.defaults[availableProvider] || DEFAULT_MODELS[availableProvider];
+          activeModel =
+            config.defaults[availableProvider] ||
+            DEFAULT_MODELS[availableProvider];
         }
 
         setProvider(activeProvider);
         setModel(activeModel);
       } catch (err) {
-        console.debug('Failed to fetch providers, using defaults:', err);
+        console.debug("Failed to fetch providers, using defaults:", err);
       }
 
       // Load existing sessions from backend
       let existingSessions: Conversation[] = [];
       try {
-        const sessions = await sessionsAPI.list(CHAT_CONFIG.maxConversations, 0);
+        const sessions = await sessionsAPI.list(
+          CHAT_CONFIG.maxConversations,
+          0,
+        );
         existingSessions = sessions.map((s) => ({
           id: String(s.id),
-          title: s.title || 'Untitled Chat',
+          title: s.title || "Untitled Chat",
           timestamp: s.created_at ? new Date(s.created_at) : undefined,
         }));
 
@@ -237,18 +278,22 @@ export default function LibreChatClient() {
 
           // Delete excess from backend (parallel deletion for performance)
           const deleteResults = await Promise.allSettled(
-            toDelete.map((conv) => sessionsAPI.remove(conv.id))
+            toDelete.map((conv) => sessionsAPI.remove(conv.id)),
           );
           deleteResults.forEach((result, index) => {
-            if (result.status === 'rejected') {
-              console.error('[Persistence] Failed to delete excess conversation:', toDelete[index].id, result.reason);
+            if (result.status === "rejected") {
+              console.error(
+                "[Persistence] Failed to delete excess conversation:",
+                toDelete[index].id,
+                result.reason,
+              );
             }
           });
 
           existingSessions = toKeep;
         }
       } catch (err) {
-        console.debug('Failed to load existing sessions:', err);
+        console.debug("Failed to load existing sessions:", err);
       }
 
       // If we have existing sessions, use the most recent one
@@ -259,10 +304,14 @@ export default function LibreChatClient() {
         // Load messages for the most recent session
         let messages: Message[] = [];
         try {
-          const messageRecords = await sessionsAPI.listMessages(mostRecent.id, CHAT_CONFIG.maxMessagesToLoad, 0);
+          const messageRecords = await sessionsAPI.listMessages(
+            mostRecent.id,
+            CHAT_CONFIG.maxMessagesToLoad,
+            0,
+          );
           messages = messageRecords.map(convertToMessage);
         } catch (err) {
-          console.debug('Failed to load messages:', err);
+          console.debug("Failed to load messages:", err);
         }
 
         const newTraceId = `trace-${mostRecent.id}`;
@@ -287,7 +336,7 @@ export default function LibreChatClient() {
         setCurrentConversationId(mostRecent.id);
       } else {
         // No existing sessions, create a new one in backend
-        const backendSession = await sessionsAPI.create('primary', 'New Chat');
+        const backendSession = await sessionsAPI.create("primary", "New Chat");
         const newSessionId = String(backendSession.id);
         const newTraceId = `trace-${newSessionId}`;
 
@@ -296,23 +345,24 @@ export default function LibreChatClient() {
           traceId: newTraceId,
           provider: activeProvider,
           model: activeModel,
-          agentType: 'primary',
+          agentType: "primary",
         });
 
         setSessionId(newSessionId);
         setTraceId(newTraceId);
         setAgent(newAgent);
         setCurrentConversationId(newSessionId);
-        setConversations([{
-          id: newSessionId,
-          title: 'New Chat',
-          timestamp: new Date(),
-        }]);
+        setConversations([
+          {
+            id: newSessionId,
+            title: "New Chat",
+            timestamp: new Date(),
+          },
+        ]);
       }
-
     } catch (err) {
-      console.error('Failed to initialize:', err);
-      setError(err instanceof Error ? err : new Error('Failed to initialize'));
+      console.error("Failed to initialize:", err);
+      setError(err instanceof Error ? err : new Error("Failed to initialize"));
     } finally {
       setIsCreating(false);
     }
@@ -326,7 +376,7 @@ export default function LibreChatClient() {
   const handleRetry = useCallback(() => {
     initializedRef.current = false;
     setSessionId(null);
-    setTraceId('');
+    setTraceId("");
     setAgent(null);
     setCurrentConversationId(undefined);
     setConversations([]);
@@ -337,7 +387,8 @@ export default function LibreChatClient() {
   // Handle new chat
   const handleNewChat = useCallback(async () => {
     try {
-      const { provider: selectedProvider, model: selectedModel } = getActiveModelSelection();
+      const { provider: selectedProvider, model: selectedModel } =
+        getActiveModelSelection();
 
       // Enforce conversation limit: delete oldest if at max
       if (conversations.length >= CHAT_CONFIG.maxConversations) {
@@ -354,16 +405,21 @@ export default function LibreChatClient() {
           try {
             await sessionsAPI.remove(oldestConversation.id);
             // Remove from local state only after successful backend deletion
-            setConversations((prev) => prev.filter((c) => c.id !== oldestConversation.id));
+            setConversations((prev) =>
+              prev.filter((c) => c.id !== oldestConversation.id),
+            );
           } catch (err) {
-            console.error('[Persistence] Failed to delete oldest conversation:', err);
+            console.error(
+              "[Persistence] Failed to delete oldest conversation:",
+              err,
+            );
             // Don't remove from local state if backend deletion failed
           }
         }
       }
 
       // Create session in backend and use its ID
-      const backendSession = await sessionsAPI.create('primary', 'New Chat');
+      const backendSession = await sessionsAPI.create("primary", "New Chat");
       const newSessionId = String(backendSession.id);
       const newTraceId = `trace-${newSessionId}`;
 
@@ -373,7 +429,7 @@ export default function LibreChatClient() {
         traceId: newTraceId,
         provider: selectedProvider,
         model: selectedModel,
-        agentType: 'primary',
+        agentType: "primary",
       });
 
       // Reset artifacts for new chat
@@ -392,132 +448,157 @@ export default function LibreChatClient() {
       setConversations((prev) => [
         {
           id: newSessionId,
-          title: 'New Chat',
+          title: "New Chat",
           timestamp: new Date(),
         },
         ...prev,
       ]);
     } catch (err) {
-      console.error('Failed to create new chat:', err);
+      console.error("Failed to create new chat:", err);
     }
   }, [conversations, getActiveModelSelection]);
 
   // Handle conversation selection
-  const handleSelectConversation = useCallback(async (conversationId: string) => {
-    if (conversationId === currentConversationId) return;
+  const handleSelectConversation = useCallback(
+    async (conversationId: string) => {
+      if (conversationId === currentConversationId) return;
 
-    try {
-      const { provider: selectedProvider, model: selectedModel } = getActiveModelSelection();
-
-      // Load messages for the selected conversation
-      let messages: Message[] = [];
       try {
-        const messageRecords = await sessionsAPI.listMessages(conversationId, CHAT_CONFIG.maxMessagesToLoad, 0);
-        messages = messageRecords.map(convertToMessage);
+        const { provider: selectedProvider, model: selectedModel } =
+          getActiveModelSelection();
+
+        // Load messages for the selected conversation
+        let messages: Message[] = [];
+        try {
+          const messageRecords = await sessionsAPI.listMessages(
+            conversationId,
+            CHAT_CONFIG.maxMessagesToLoad,
+            0,
+          );
+          messages = messageRecords.map(convertToMessage);
+        } catch (err) {
+          console.debug("Failed to load messages for conversation:", err);
+        }
+
+        // Create agent for selected conversation
+        const selectedTraceId = `trace-${conversationId}`;
+        const inferredAgentType = inferSessionAgentType(messages);
+        const newAgent = createSparrowAgent({
+          sessionId: conversationId,
+          traceId: selectedTraceId,
+          provider: selectedProvider,
+          model: selectedModel,
+          agentType: inferredAgentType,
+        });
+
+        // Set loaded messages on the agent
+        newAgent.messages = messages;
+
+        // Restore artifacts from message metadata
+        restoreArtifactsFromMessages(messages);
+
+        setSessionId(conversationId);
+        setTraceId(selectedTraceId);
+        setAgent(newAgent);
+        setCurrentConversationId(conversationId);
       } catch (err) {
-        console.debug('Failed to load messages for conversation:', err);
+        console.error("Failed to switch conversation:", err);
       }
-
-      // Create agent for selected conversation
-      const selectedTraceId = `trace-${conversationId}`;
-      const inferredAgentType = inferSessionAgentType(messages);
-      const newAgent = createSparrowAgent({
-        sessionId: conversationId,
-        traceId: selectedTraceId,
-        provider: selectedProvider,
-        model: selectedModel,
-        agentType: inferredAgentType,
-      });
-
-      // Set loaded messages on the agent
-      newAgent.messages = messages;
-
-      // Restore artifacts from message metadata
-      restoreArtifactsFromMessages(messages);
-
-      setSessionId(conversationId);
-      setTraceId(selectedTraceId);
-      setAgent(newAgent);
-      setCurrentConversationId(conversationId);
-    } catch (err) {
-      console.error('Failed to switch conversation:', err);
-    }
-  }, [currentConversationId, getActiveModelSelection]);
+    },
+    [currentConversationId, getActiveModelSelection],
+  );
 
   // Handle conversation rename
-  const handleRenameConversation = useCallback(async (conversationId: string, newTitle: string) => {
-    // Update local state immediately
-    setConversations((prev) =>
-      prev.map((conv) =>
-        conv.id === conversationId ? { ...conv, title: newTitle } : conv
-      )
-    );
+  const handleRenameConversation = useCallback(
+    async (conversationId: string, newTitle: string) => {
+      // Update local state immediately
+      setConversations((prev) =>
+        prev.map((conv) =>
+          conv.id === conversationId ? { ...conv, title: newTitle } : conv,
+        ),
+      );
 
-    // Persist to backend
-    try {
-      await sessionsAPI.rename(conversationId, newTitle);
-    } catch (err) {
-      console.error('Failed to rename conversation in backend:', err);
-      // Optionally revert on error, but for now we keep the local change
-    }
-  }, []);
+      // Persist to backend
+      try {
+        await sessionsAPI.rename(conversationId, newTitle);
+      } catch (err) {
+        console.error("Failed to rename conversation in backend:", err);
+        // Optionally revert on error, but for now we keep the local change
+      }
+    },
+    [],
+  );
 
   // Handle conversation delete
-  const handleDeleteConversation = useCallback(async (conversationId: string) => {
-    // Capture remaining conversations via functional update to avoid stale closure
-    let remainingConversations: Conversation[] = [];
+  const handleDeleteConversation = useCallback(
+    async (conversationId: string) => {
+      // Capture remaining conversations via functional update to avoid stale closure
+      let remainingConversations: Conversation[] = [];
 
-    // Remove from local state and capture the remaining list
-    setConversations((prev) => {
-      remainingConversations = prev.filter((conv) => conv.id !== conversationId);
-      return remainingConversations;
-    });
+      // Remove from local state and capture the remaining list
+      setConversations((prev) => {
+        remainingConversations = prev.filter(
+          (conv) => conv.id !== conversationId,
+        );
+        return remainingConversations;
+      });
 
-    // Delete from backend
-    try {
-      await sessionsAPI.remove(conversationId);
-    } catch (err) {
-      console.error('Failed to delete conversation from backend:', err);
-    }
-
-    // If deleting current conversation, switch to another or create new
-    if (conversationId === currentConversationId) {
-      if (remainingConversations.length > 0) {
-        // Switch to the first remaining conversation
-        handleSelectConversation(remainingConversations[0].id);
-      } else {
-        // Create a new chat if no conversations left
-        handleNewChat();
+      // Delete from backend
+      try {
+        await sessionsAPI.remove(conversationId);
+      } catch (err) {
+        console.error("Failed to delete conversation from backend:", err);
       }
-    }
-  }, [currentConversationId, handleSelectConversation, handleNewChat]);
+
+      // If deleting current conversation, switch to another or create new
+      if (conversationId === currentConversationId) {
+        if (remainingConversations.length > 0) {
+          // Switch to the first remaining conversation
+          handleSelectConversation(remainingConversations[0].id);
+        } else {
+          // Create a new chat if no conversations left
+          handleNewChat();
+        }
+      }
+    },
+    [currentConversationId, handleSelectConversation, handleNewChat],
+  );
 
   // Handle auto-naming of current conversation based on first message
-  const handleAutoName = useCallback(async (title: string) => {
-    if (!currentConversationId) return;
+  const handleAutoName = useCallback(
+    async (title: string) => {
+      if (!currentConversationId) return;
 
-    // Update local state
-    setConversations((prev) =>
-      prev.map((conv) =>
-        conv.id === currentConversationId ? { ...conv, title } : conv
-      )
-    );
+      // Update local state
+      setConversations((prev) =>
+        prev.map((conv) =>
+          conv.id === currentConversationId ? { ...conv, title } : conv,
+        ),
+      );
 
-    // Persist to backend
-    try {
-      await sessionsAPI.rename(currentConversationId, title);
-    } catch (err) {
-      console.debug('Failed to persist auto-name to backend:', err);
-    }
-  }, [currentConversationId]);
+      // Persist to backend
+      try {
+        await sessionsAPI.rename(currentConversationId, title);
+      } catch (err) {
+        console.debug("Failed to persist auto-name to backend:", err);
+      }
+    },
+    [currentConversationId],
+  );
 
   // Loading state
   if (isCreating || !agent) {
     return (
-      <div className="lc-layout" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div className="lc-tool-spinner" style={{ width: '32px', height: '32px', margin: '0 auto 16px' }} />
-          <p style={{ color: 'var(--lc-text-secondary)', fontSize: '14px' }}>
+      <div
+        className="lc-layout"
+        style={{ alignItems: "center", justifyContent: "center" }}
+      >
+        <div style={{ textAlign: "center" }}>
+          <div
+            className="lc-tool-spinner"
+            style={{ width: "32px", height: "32px", margin: "0 auto 16px" }}
+          />
+          <p style={{ color: "var(--lc-text-secondary)", fontSize: "14px" }}>
             Initializing Agent Sparrow...
           </p>
         </div>
@@ -528,20 +609,29 @@ export default function LibreChatClient() {
   // Error state
   if (error) {
     return (
-      <div className="lc-layout" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center', maxWidth: '400px' }}>
-          <p style={{ color: 'var(--lc-error)', fontSize: '14px', marginBottom: '16px' }}>
+      <div
+        className="lc-layout"
+        style={{ alignItems: "center", justifyContent: "center" }}
+      >
+        <div style={{ textAlign: "center", maxWidth: "400px" }}>
+          <p
+            style={{
+              color: "var(--lc-error)",
+              fontSize: "14px",
+              marginBottom: "16px",
+            }}
+          >
             Failed to initialize: {error.message}
           </p>
           <button
             onClick={handleRetry}
             style={{
-              padding: '8px 16px',
-              borderRadius: '8px',
-              border: 'none',
-              backgroundColor: 'var(--lc-accent)',
-              color: 'white',
-              cursor: 'pointer',
+              padding: "8px 16px",
+              borderRadius: "8px",
+              border: "none",
+              backgroundColor: "var(--lc-accent)",
+              color: "white",
+              cursor: "pointer",
             }}
           >
             Retry

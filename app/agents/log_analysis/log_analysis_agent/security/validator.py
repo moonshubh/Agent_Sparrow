@@ -19,7 +19,7 @@ import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Any
@@ -32,11 +32,12 @@ logger = logging.getLogger(__name__)
 
 class ThreatLevel(Enum):
     """Security threat levels with comparison support."""
+
     CRITICAL = "critical"  # Immediate threat, block and alert
-    HIGH = "high"         # Serious threat, block
-    MEDIUM = "medium"     # Potential threat, sanitize
-    LOW = "low"          # Minor concern, log
-    NONE = "none"        # No threat detected
+    HIGH = "high"  # Serious threat, block
+    MEDIUM = "medium"  # Potential threat, sanitize
+    LOW = "low"  # Minor concern, log
+    NONE = "none"  # No threat detected
 
     @property
     def severity(self) -> int:
@@ -46,7 +47,7 @@ class ThreatLevel(Enum):
             ThreatLevel.LOW: 1,
             ThreatLevel.MEDIUM: 2,
             ThreatLevel.HIGH: 3,
-            ThreatLevel.CRITICAL: 4
+            ThreatLevel.CRITICAL: 4,
         }
         return severity_map.get(self, 0)
 
@@ -77,6 +78,7 @@ class ThreatLevel(Enum):
 
 class ValidationStatus(Enum):
     """Validation result status."""
+
     PASSED = "passed"
     FAILED = "failed"
     SUSPICIOUS = "suspicious"
@@ -86,11 +88,16 @@ class ValidationStatus(Enum):
 @dataclass
 class ValidationConfig:
     """Configuration for security validator with paranoid defaults."""
+
     max_file_size: int = 10 * 1024 * 1024  # 10MB
     max_line_length: int = 10000  # Max characters per line
     max_lines: int = 100000  # Max lines per file
-    allowed_extensions: Set[str] = field(default_factory=lambda: {'.log', '.txt', '.text', '.logs'})
-    allowed_mime_types: Set[str] = field(default_factory=lambda: {'text/plain', 'text/log', 'application/octet-stream'})
+    allowed_extensions: Set[str] = field(
+        default_factory=lambda: {".log", ".txt", ".text", ".logs"}
+    )
+    allowed_mime_types: Set[str] = field(
+        default_factory=lambda: {"text/plain", "text/log", "application/octet-stream"}
+    )
     enable_content_validation: bool = True
     enable_injection_detection: bool = True
     enable_rate_limiting: bool = True
@@ -105,6 +112,7 @@ class ValidationConfig:
 @dataclass
 class ValidationResult:
     """Result of security validation."""
+
     status: ValidationStatus
     threat_level: ThreatLevel
     issues: List[str] = field(default_factory=list)
@@ -190,11 +198,14 @@ class SecurityValidator:
             config: Optional configuration
         """
         self.config = config or ValidationConfig()
-        self._rate_limiter = RateLimiter(
-            self.config.rate_limit_requests,
-            self.config.rate_limit_window
-        ) if self.config.enable_rate_limiting else None
-        self._audit_log = SecurityAuditLog() if self.config.enable_audit_logging else None
+        self._rate_limiter = (
+            RateLimiter(self.config.rate_limit_requests, self.config.rate_limit_window)
+            if self.config.enable_rate_limiting
+            else None
+        )
+        self._audit_log = (
+            SecurityAuditLog() if self.config.enable_audit_logging else None
+        )
         self._compiled_patterns = self._compile_patterns()
 
         logger.info("SecurityValidator initialized with paranoid settings")
@@ -204,16 +215,26 @@ class SecurityValidator:
         patterns = {}
 
         if self.config.enable_injection_detection:
-            patterns['sql'] = [re.compile(p, re.IGNORECASE) for p in self.SQL_INJECTION_PATTERNS]
-            patterns['xss'] = [re.compile(p, re.IGNORECASE | re.DOTALL) for p in self.XSS_PATTERNS]
-            patterns['command'] = [re.compile(p, re.IGNORECASE) for p in self.COMMAND_INJECTION_PATTERNS]
-            patterns['ldap'] = [re.compile(p) for p in self.LDAP_INJECTION_PATTERNS]
-            patterns['xxe'] = [re.compile(p, re.IGNORECASE) for p in self.XXE_PATTERNS]
-            patterns['path'] = [re.compile(p, re.IGNORECASE) for p in self.PATH_TRAVERSAL_PATTERNS]
+            patterns["sql"] = [
+                re.compile(p, re.IGNORECASE) for p in self.SQL_INJECTION_PATTERNS
+            ]
+            patterns["xss"] = [
+                re.compile(p, re.IGNORECASE | re.DOTALL) for p in self.XSS_PATTERNS
+            ]
+            patterns["command"] = [
+                re.compile(p, re.IGNORECASE) for p in self.COMMAND_INJECTION_PATTERNS
+            ]
+            patterns["ldap"] = [re.compile(p) for p in self.LDAP_INJECTION_PATTERNS]
+            patterns["xxe"] = [re.compile(p, re.IGNORECASE) for p in self.XXE_PATTERNS]
+            patterns["path"] = [
+                re.compile(p, re.IGNORECASE) for p in self.PATH_TRAVERSAL_PATTERNS
+            ]
 
         return patterns
 
-    def validate_file(self, file_path: Path, content: Optional[bytes] = None) -> ValidationResult:
+    def validate_file(
+        self, file_path: Path, content: Optional[bytes] = None
+    ) -> ValidationResult:
         """
         Comprehensive file validation with paranoid checks.
 
@@ -229,11 +250,13 @@ class SecurityValidator:
 
         try:
             # Rate limiting check
-            if self._rate_limiter and not self._rate_limiter.check_request(str(file_path)):
+            if self._rate_limiter and not self._rate_limiter.check_request(
+                str(file_path)
+            ):
                 return ValidationResult(
                     status=ValidationStatus.RATE_LIMITED,
                     threat_level=ThreatLevel.MEDIUM,
-                    issues=["Rate limit exceeded"]
+                    issues=["Rate limit exceeded"],
                 )
 
             # File extension validation
@@ -242,7 +265,9 @@ class SecurityValidator:
                 threat_level = ThreatLevel.HIGH
 
             # File size validation
-            file_size = file_path.stat().st_size if file_path.exists() else len(content or b'')
+            file_size = (
+                file_path.stat().st_size if file_path.exists() else len(content or b"")
+            )
             if file_size > self.config.max_file_size:
                 issues.append(f"File too large: {file_size} bytes")
                 threat_level = ThreatLevel.HIGH
@@ -264,7 +289,9 @@ class SecurityValidator:
             if self.config.enable_content_validation and content:
                 content_issues, content_threat = self._validate_content(content)
                 issues.extend(content_issues)
-                threat_level = max(threat_level, content_threat, key=lambda t: t.severity)
+                threat_level = max(
+                    threat_level, content_threat, key=lambda t: t.severity
+                )
 
             # Determine final status
             if threat_level in [ThreatLevel.CRITICAL, ThreatLevel.HIGH]:
@@ -283,10 +310,10 @@ class SecurityValidator:
                 threat_level=threat_level,
                 issues=issues,
                 metadata={
-                    'file_size': file_size,
-                    'file_path': str(file_path),
-                    'extension': file_path.suffix,
-                }
+                    "file_size": file_size,
+                    "file_path": str(file_path),
+                    "extension": file_path.suffix,
+                },
             )
 
         except Exception as e:
@@ -294,14 +321,16 @@ class SecurityValidator:
             return ValidationResult(
                 status=ValidationStatus.FAILED,
                 threat_level=ThreatLevel.HIGH,
-                issues=[f"Validation error: {str(e)}"]
+                issues=[f"Validation error: {str(e)}"],
             )
 
     def _validate_extension(self, file_path: Path) -> bool:
         """Validate file extension."""
         return file_path.suffix.lower() in self.config.allowed_extensions
 
-    def _validate_mime_type(self, file_path: Path, content: Optional[bytes]) -> Tuple[List[str], ThreatLevel]:
+    def _validate_mime_type(
+        self, file_path: Path, content: Optional[bytes]
+    ) -> Tuple[List[str], ThreatLevel]:
         """Validate MIME type of file."""
         issues = []
         threat_level = ThreatLevel.NONE
@@ -312,7 +341,8 @@ class SecurityValidator:
 
             # If we have content, verify with magic bytes
             if content:
-                import magic
+                import magic  # type: ignore[import-not-found]
+
                 detected_mime = magic.from_buffer(content[:8192], mime=True)
 
                 # Check for mismatch
@@ -327,7 +357,7 @@ class SecurityValidator:
                 # Check if it's a text file that's mislabeled
                 if content:
                     try:
-                        content.decode('utf-8')
+                        content.decode("utf-8")
                         # It's valid UTF-8, might be acceptable
                         threat_level = ThreatLevel.LOW
                     except UnicodeDecodeError:
@@ -349,13 +379,13 @@ class SecurityValidator:
         try:
             # Detect encoding
             detected = chardet.detect(content[:10000])
-            encoding = detected.get('encoding', 'utf-8')
+            encoding = detected.get("encoding") or "utf-8"
 
             # Try to decode as text
             try:
-                text_content = content.decode(encoding, errors='ignore')
+                text_content = content.decode(encoding, errors="ignore")
             except Exception:
-                text_content = content.decode('utf-8', errors='ignore')
+                text_content = content.decode("utf-8", errors="ignore")
 
             # Check for binary content
             if self.config.block_binary_content:
@@ -364,7 +394,7 @@ class SecurityValidator:
                     threat_level = ThreatLevel.HIGH
 
             # Line length validation
-            lines = text_content.split('\n')
+            lines = text_content.split("\n")
             if len(lines) > self.config.max_lines:
                 issues.append(f"Too many lines: {len(lines)}")
                 threat_level = ThreatLevel.MEDIUM
@@ -372,18 +402,28 @@ class SecurityValidator:
             for line_num, line in enumerate(lines[:1000], 1):  # Check first 1000 lines
                 if len(line) > self.config.max_line_length:
                     issues.append(f"Line {line_num} too long: {len(line)} chars")
-                    threat_level = max(threat_level, ThreatLevel.LOW, key=lambda t: t.severity)
+                    threat_level = max(
+                        threat_level, ThreatLevel.LOW, key=lambda t: t.severity
+                    )
 
             # Injection detection
             if self.config.enable_injection_detection:
-                injection_issues, injection_threat = self._detect_injections(text_content)
+                injection_issues, injection_threat = self._detect_injections(
+                    text_content
+                )
                 issues.extend(injection_issues)
-                threat_level = max(threat_level, injection_threat, key=lambda t: t.severity)
+                threat_level = max(
+                    threat_level, injection_threat, key=lambda t: t.severity
+                )
 
             # Check for suspicious patterns
-            suspicious_issues, suspicious_threat = self._detect_suspicious_patterns(text_content)
+            suspicious_issues, suspicious_threat = self._detect_suspicious_patterns(
+                text_content
+            )
             issues.extend(suspicious_issues)
-            threat_level = max(threat_level, suspicious_threat, key=lambda t: t.severity)
+            threat_level = max(
+                threat_level, suspicious_threat, key=lambda t: t.severity
+            )
 
         except Exception as e:
             logger.error(f"Content validation error: {e}")
@@ -395,7 +435,7 @@ class SecurityValidator:
     def _contains_binary(self, content: bytes) -> bool:
         """Check if content contains binary data."""
         # Check for null bytes
-        if b'\x00' in content[:1000]:
+        if b"\x00" in content[:1000]:
             return True
 
         # Check for high ratio of non-printable characters
@@ -419,14 +459,16 @@ class SecurityValidator:
                 matches = pattern.findall(sample)
                 if matches:
                     # Determine threat level based on pattern type
-                    if pattern_type in ['sql', 'command', 'xxe']:
+                    if pattern_type in ["sql", "command", "xxe"]:
                         threat = ThreatLevel.CRITICAL
-                    elif pattern_type in ['xss', 'ldap']:
+                    elif pattern_type in ["xss", "ldap"]:
                         threat = ThreatLevel.HIGH
                     else:
                         threat = ThreatLevel.MEDIUM
 
-                    issues.append(f"Potential {pattern_type.upper()} injection detected")
+                    issues.append(
+                        f"Potential {pattern_type.upper()} injection detected"
+                    )
                     threat_level = max(threat_level, threat, key=lambda t: t.severity)
                     break  # One detection per type is enough
 
@@ -463,16 +505,18 @@ class SecurityValidator:
         """Check for excessive character repetition."""
         # Check for long sequences of same character
         import re
-        pattern = re.compile(r'(.)\1{100,}')
+
+        pattern = re.compile(r"(.)\1{100,}")
         return bool(pattern.search(text[:10000]))
 
     def _has_encoded_payloads(self, text: str) -> bool:
         """Check for base64 or hex encoded payloads."""
         import re
+
         # Base64 pattern (long sequences)
-        base64_pattern = re.compile(r'[A-Za-z0-9+/]{100,}={0,2}')
+        base64_pattern = re.compile(r"[A-Za-z0-9+/]{100,}={0,2}")
         # Hex pattern (long sequences)
-        hex_pattern = re.compile(r'(?:[0-9a-fA-F]{2}){50,}')
+        hex_pattern = re.compile(r"(?:[0-9a-fA-F]{2}){50,}")
 
         sample = text[:10000]
         return bool(base64_pattern.search(sample) or hex_pattern.search(sample))
@@ -480,13 +524,14 @@ class SecurityValidator:
     def _has_suspicious_urls(self, text: str) -> bool:
         """Check for suspicious URLs."""
         import re
+
         # Look for URLs with suspicious patterns
         suspicious_url_patterns = [
-            r'https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}',  # IP addresses
-            r'https?://[^/]*\.(tk|ml|ga|cf)',  # Suspicious TLDs
-            r'https?://[^/]*[0-9]{5,}',  # URLs with many numbers
-            r'file://',  # File URLs
-            r'gopher://',  # Gopher protocol
+            r"https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}",  # IP addresses
+            r"https?://[^/]*\.(tk|ml|ga|cf)",  # Suspicious TLDs
+            r"https?://[^/]*[0-9]{5,}",  # URLs with many numbers
+            r"file://",  # File URLs
+            r"gopher://",  # Gopher protocol
         ]
 
         sample = text[:10000]
@@ -498,10 +543,10 @@ class SecurityValidator:
     def _has_buffer_overflow_patterns(self, text: str) -> bool:
         """Check for buffer overflow patterns."""
         # Check for NOP sleds
-        if '\x90' * 50 in text:
+        if "\x90" * 50 in text:
             return True
         # Check for shellcode patterns
-        if '\\x' in text and text.count('\\x') > 100:
+        if "\\x" in text and text.count("\\x") > 100:
             return True
         return False
 
@@ -535,15 +580,13 @@ class SecurityValidator:
                 inj_issues, inj_threat = self._detect_injections(value)
                 if inj_issues:
                     issues.extend([f"{key}: {issue}" for issue in inj_issues])
-                    threat_level = max(threat_level, inj_threat, key=lambda t: t.severity)
+                    threat_level = max(
+                        threat_level, inj_threat, key=lambda t: t.severity
+                    )
 
         status = ValidationStatus.PASSED if not issues else ValidationStatus.FAILED
 
-        return ValidationResult(
-            status=status,
-            threat_level=threat_level,
-            issues=issues
-        )
+        return ValidationResult(status=status, threat_level=threat_level, issues=issues)
 
     def _check_nesting_depth(self, obj: Any, depth: int = 0) -> int:
         """Check maximum nesting depth of object."""
@@ -551,15 +594,20 @@ class SecurityValidator:
             return depth
 
         if isinstance(obj, dict):
-            return max([self._check_nesting_depth(v, depth + 1) for v in obj.values()] + [depth])
+            return max(
+                [self._check_nesting_depth(v, depth + 1) for v in obj.values()]
+                + [depth]
+            )
         elif isinstance(obj, (list, tuple)):
             return max([self._check_nesting_depth(v, depth + 1) for v in obj] + [depth])
         else:
             return depth
 
-    def _flatten_dict(self, d: Dict, parent_key: str = '', sep: str = '.') -> Dict:
+    def _flatten_dict(
+        self, d: Dict[str, Any], parent_key: str = "", sep: str = "."
+    ) -> Dict[str, Any]:
         """Flatten nested dictionary for validation."""
-        items = []
+        items: list[tuple[str, Any]] = []
         for k, v in d.items():
             new_key = f"{parent_key}{sep}{k}" if parent_key else k
             if isinstance(v, dict):
@@ -576,7 +624,7 @@ class RateLimiter:
         """Initialize rate limiter."""
         self.max_requests = max_requests
         self.window_seconds = window_seconds
-        self.requests = defaultdict(deque)
+        self.requests: defaultdict[str, deque[float]] = defaultdict(deque)
         self.lock = Lock()
 
     def check_request(self, identifier: str) -> bool:
@@ -586,7 +634,10 @@ class RateLimiter:
             window_start = now - self.window_seconds
 
             # Remove old requests outside window
-            while self.requests[identifier] and self.requests[identifier][0] < window_start:
+            while (
+                self.requests[identifier]
+                and self.requests[identifier][0] < window_start
+            ):
                 self.requests[identifier].popleft()
 
             # Check rate limit
@@ -603,7 +654,7 @@ class SecurityAuditLog:
 
     def __init__(self, max_entries: int = 10000):
         """Initialize audit log."""
-        self.entries = deque(maxlen=max_entries)
+        self.entries: deque[dict[str, Any]] = deque(maxlen=max_entries)
         self.lock = Lock()
 
     def log_validation(
@@ -611,17 +662,17 @@ class SecurityAuditLog:
         file_path: Path,
         status: ValidationStatus,
         threat_level: ThreatLevel,
-        issues: List[str]
+        issues: List[str],
     ):
         """Log validation event."""
         with self.lock:
             entry = {
-                'timestamp': datetime.now().isoformat(),
-                'file_path': str(file_path),
-                'status': status.value,
-                'threat_level': threat_level.value,
-                'issues': issues,
-                'hash': hashlib.sha256(str(file_path).encode()).hexdigest()[:16]
+                "timestamp": datetime.now().isoformat(),
+                "file_path": str(file_path),
+                "status": status.value,
+                "threat_level": threat_level.value,
+                "issues": issues,
+                "hash": hashlib.sha256(str(file_path).encode()).hexdigest()[:16],
             }
             self.entries.append(entry)
 

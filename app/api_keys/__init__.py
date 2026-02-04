@@ -14,7 +14,7 @@ from .schemas import (
     APIKeyDeleteResponse,
     APIKeyValidateResponse,
     APIKeyStatus,
-    DecryptedAPIKey
+    DecryptedAPIKey,
 )
 
 __all__ = [
@@ -28,5 +28,5 @@ __all__ = [
     "APIKeyDeleteResponse",
     "APIKeyValidateResponse",
     "APIKeyStatus",
-    "DecryptedAPIKey"
+    "DecryptedAPIKey",
 ]

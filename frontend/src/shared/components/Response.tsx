@@ -1,33 +1,36 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { Streamdown, type StreamdownProps } from "streamdown"
-import type { Components } from "react-markdown"
-import { cn } from "@/shared/lib/utils"
+import * as React from "react";
+import { Streamdown, type StreamdownProps } from "streamdown";
+import type { Components } from "react-markdown";
+import { cn } from "@/shared/lib/utils";
 
 export interface ResponseProps extends Omit<StreamdownProps, "children"> {
-  children?: React.ReactNode
-  className?: string
-  reduceMotion?: boolean
-  dripDelayMs?: number
+  children?: React.ReactNode;
+  className?: string;
+  reduceMotion?: boolean;
+  dripDelayMs?: number;
 }
 
 const baseClasses =
-  "prose prose-sm dark:prose-invert max-w-none prose-pre:bg-muted/70 prose-pre:border prose-pre:border-border/60 prose-pre:rounded-lg prose-pre:px-4 prose-pre:py-3 prose-code:bg-muted/60 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[0.95em] prose-p:leading-relaxed prose-li:my-1 prose-table:overflow-hidden prose-table:border-border/60 prose-th:bg-muted/60"
+  "prose prose-sm dark:prose-invert max-w-none prose-pre:bg-muted/70 prose-pre:border prose-pre:border-border/60 prose-pre:rounded-lg prose-pre:px-4 prose-pre:py-3 prose-code:bg-muted/60 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[0.95em] prose-p:leading-relaxed prose-li:my-1 prose-table:overflow-hidden prose-table:border-border/60 prose-th:bg-muted/60";
 
 const defaultComponents: Components = {
   code({ className, children, ...props }) {
-    const raw = String(children ?? "")
-    const hasLanguage = /language-\w+/.test(className ?? "")
+    const raw = String(children ?? "");
+    const hasLanguage = /language-\w+/.test(className ?? "");
     if (!hasLanguage) {
       return (
         <code
-          className={cn("rounded bg-muted px-1.5 py-0.5 text-[0.95em]", className)}
+          className={cn(
+            "rounded bg-muted px-1.5 py-0.5 text-[0.95em]",
+            className,
+          )}
           {...props}
         >
           {raw}
         </code>
-      )
+      );
     }
     return (
       <pre className="overflow-x-auto rounded-lg border border-border/60 bg-muted/70 p-3">
@@ -35,7 +38,7 @@ const defaultComponents: Components = {
           {raw}
         </code>
       </pre>
-    )
+    );
   },
   a({ className, ...props }) {
     return (
@@ -48,9 +51,9 @@ const defaultComponents: Components = {
         rel="noreferrer noopener"
         {...props}
       />
-    )
+    );
   },
-}
+};
 
 export const Response = React.memo(function Response({
   children,
@@ -62,43 +65,61 @@ export const Response = React.memo(function Response({
   rehypePlugins,
   ...rest
 }: ResponseProps) {
-  const prefersReduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  const isAnimating = React.useMemo(() => !(reduceMotion ?? prefersReduced), [reduceMotion, prefersReduced])
+  const prefersReduced =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const isAnimating = React.useMemo(
+    () => !(reduceMotion ?? prefersReduced),
+    [reduceMotion, prefersReduced],
+  );
   const dripDelay = React.useMemo(() => {
-    if (typeof dripDelayMs === 'number' && Number.isFinite(dripDelayMs) && dripDelayMs >= 0) {
-      return dripDelayMs
+    if (
+      typeof dripDelayMs === "number" &&
+      Number.isFinite(dripDelayMs) &&
+      dripDelayMs >= 0
+    ) {
+      return dripDelayMs;
     }
-    return 12
-  }, [dripDelayMs])
+    return 12;
+  }, [dripDelayMs]);
 
   const mergedComponents = React.useMemo<Components>(() => {
-    if (!components) return defaultComponents
+    if (!components) return defaultComponents;
     return {
       ...defaultComponents,
       ...components,
-    }
-  }, [components])
+    };
+  }, [components]);
 
   const streamdownProps: any = {
     ...rest,
     isAnimating,
     dripDelayMs: dripDelay,
     components: mergedComponents,
-    className: cn(baseClasses, 'prose-headings:mt-3 prose-headings:mb-2 prose-p:my-2 prose-pre:my-3 prose-blockquote:my-3', className),
-  }
+    className: cn(
+      baseClasses,
+      "prose-headings:mt-3 prose-headings:mb-2 prose-p:my-2 prose-pre:my-3 prose-blockquote:my-3",
+      className,
+    ),
+  };
 
   if (remarkPlugins) {
     // Only override when explicitly provided; otherwise, use Streamdown defaults
-    ;(streamdownProps as any).remarkPlugins = remarkPlugins
+    (streamdownProps as any).remarkPlugins = remarkPlugins;
   }
   if (rehypePlugins) {
-    ;(streamdownProps as any).rehypePlugins = rehypePlugins
+    (streamdownProps as any).rehypePlugins = rehypePlugins;
   }
 
-  const renderedChildren = typeof children === 'string' ? children : (children == null ? '' : String(children))
-  return <Streamdown {...streamdownProps}>{renderedChildren}</Streamdown>
-})
+  const renderedChildren =
+    typeof children === "string"
+      ? children
+      : children == null
+        ? ""
+        : String(children);
+  return <Streamdown {...streamdownProps}>{renderedChildren}</Streamdown>;
+});
 
-Response.displayName = "Response"
+Response.displayName = "Response";
 
-export default Response
+export default Response;

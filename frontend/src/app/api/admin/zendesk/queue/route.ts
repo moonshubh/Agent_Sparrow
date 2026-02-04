@@ -1,9 +1,9 @@
-import { NextRequest } from 'next/server';
-import { 
-  validateAdminAccess, 
-  getAdminConfig, 
-  callUpstream 
-} from '../_shared/route-helpers';
+import { NextRequest } from "next/server";
+import {
+  validateAdminAccess,
+  getAdminConfig,
+  callUpstream,
+} from "../_shared/route-helpers";
 
 export async function GET(req: NextRequest) {
   const authError = await validateAdminAccess();
@@ -17,16 +17,16 @@ export async function GET(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url);
-  const status = searchParams.get('status') || '';
-  const limit = searchParams.get('limit') || '50';
-  const offset = searchParams.get('offset') || '0';
+  const status = searchParams.get("status") || "";
+  const limit = searchParams.get("limit") || "50";
+  const offset = searchParams.get("offset") || "0";
 
   return callUpstream(
-    '/api/v1/integrations/zendesk/admin/queue',
+    "/api/v1/integrations/zendesk/admin/queue",
     configResult,
     {
       searchParams: { status, limit, offset },
-    }
+    },
   );
 }
 
@@ -43,12 +43,12 @@ export async function POST(req: NextRequest) {
 
   const body = await req.text();
   return callUpstream(
-    '/api/v1/integrations/zendesk/admin/queue/retry-batch',
+    "/api/v1/integrations/zendesk/admin/queue/retry-batch",
     configResult,
     {
-      method: 'POST',
+      method: "POST",
       body,
-      headers: { 'Content-Type': 'application/json' },
-    }
+      headers: { "Content-Type": "application/json" },
+    },
   );
 }

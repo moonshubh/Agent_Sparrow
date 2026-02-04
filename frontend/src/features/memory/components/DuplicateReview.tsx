@@ -1,14 +1,29 @@
-'use client';
+"use client";
 
-import React, { useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { GitMerge, X, CheckCircle, XCircle, Clock, ArrowRight } from 'lucide-react';
-import { useDuplicateCandidates, useMergeMemories, useDismissDuplicate } from '../hooks';
-import { ConfidenceBadge } from './ConfidenceBadge';
-import type { DuplicateCandidate } from '../types';
+import React, { useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  GitMerge,
+  X,
+  CheckCircle,
+  XCircle,
+  Clock,
+  ArrowRight,
+} from "lucide-react";
+import {
+  useDuplicateCandidates,
+  useMergeMemories,
+  useDismissDuplicate,
+} from "../hooks";
+import { ConfidenceBadge } from "./ConfidenceBadge";
+import type { DuplicateCandidate } from "../types";
 
 export default function DuplicateReview() {
-  const { data: candidates, isLoading, refetch } = useDuplicateCandidates('pending');
+  const {
+    data: candidates,
+    isLoading,
+    refetch,
+  } = useDuplicateCandidates("pending");
   const mergeMemories = useMergeMemories();
   const dismissDuplicate = useDismissDuplicate();
 
@@ -21,10 +36,10 @@ export default function DuplicateReview() {
         });
         refetch();
       } catch (err: unknown) {
-        console.error('Failed to merge:', err);
+        console.error("Failed to merge:", err);
       }
     },
-    [mergeMemories, refetch]
+    [mergeMemories, refetch],
   );
 
   const handleDismiss = useCallback(
@@ -33,23 +48,26 @@ export default function DuplicateReview() {
         await dismissDuplicate.mutateAsync({ candidateId });
         refetch();
       } catch (err: unknown) {
-        console.error('Failed to dismiss:', err);
+        console.error("Failed to dismiss:", err);
       }
     },
-    [dismissDuplicate, refetch]
+    [dismissDuplicate, refetch],
   );
 
   // Defer functionality - mark for later review (uses dismiss with 'deferred' notes)
   const handleDefer = useCallback(
     async (candidateId: string) => {
       try {
-        await dismissDuplicate.mutateAsync({ candidateId, notes: 'Deferred for later review' });
+        await dismissDuplicate.mutateAsync({
+          candidateId,
+          notes: "Deferred for later review",
+        });
         refetch();
       } catch (err: unknown) {
-        console.error('Failed to defer:', err);
+        console.error("Failed to defer:", err);
       }
     },
-    [dismissDuplicate, refetch]
+    [dismissDuplicate, refetch],
   );
 
   if (isLoading) {
@@ -76,7 +94,9 @@ export default function DuplicateReview() {
       <div className="duplicate-review-header">
         <GitMerge size={20} />
         <h2>Duplicate Review Queue</h2>
-        <span className="duplicate-review-count">{candidates.length} pending</span>
+        <span className="duplicate-review-count">
+          {candidates.length} pending
+        </span>
       </div>
 
       <div className="duplicate-review-list">
@@ -123,19 +143,27 @@ export default function DuplicateReview() {
                 {/* Memory 1 */}
                 <div className="duplicate-memory-card">
                   <div className="duplicate-memory-header">
-                    <ConfidenceBadge score={candidate.memory1?.confidence_score || 0} />
+                    <ConfidenceBadge
+                      score={candidate.memory1?.confidence_score || 0}
+                    />
                     <span className="duplicate-memory-retrievals">
                       {candidate.memory1?.retrieval_count || 0} retrievals
                     </span>
                   </div>
                   <p className="duplicate-memory-content">
-                    {candidate.memory1?.content || 'Memory not found'}
+                    {candidate.memory1?.content || "Memory not found"}
                   </p>
                   <button
                     className="duplicate-keep-btn"
-                    onClick={() => handleMerge(candidate, candidate.memory_id_1)}
+                    onClick={() =>
+                      handleMerge(candidate, candidate.memory_id_1)
+                    }
                     disabled={mergeMemories.isPending || !candidate.memory1}
-                    title={!candidate.memory1 ? 'Memory not available' : 'Keep this memory'}
+                    title={
+                      !candidate.memory1
+                        ? "Memory not available"
+                        : "Keep this memory"
+                    }
                   >
                     <ArrowRight size={14} />
                     <span>Keep this one</span>
@@ -149,19 +177,27 @@ export default function DuplicateReview() {
                 {/* Memory 2 */}
                 <div className="duplicate-memory-card">
                   <div className="duplicate-memory-header">
-                    <ConfidenceBadge score={candidate.memory2?.confidence_score || 0} />
+                    <ConfidenceBadge
+                      score={candidate.memory2?.confidence_score || 0}
+                    />
                     <span className="duplicate-memory-retrievals">
                       {candidate.memory2?.retrieval_count || 0} retrievals
                     </span>
                   </div>
                   <p className="duplicate-memory-content">
-                    {candidate.memory2?.content || 'Memory not found'}
+                    {candidate.memory2?.content || "Memory not found"}
                   </p>
                   <button
                     className="duplicate-keep-btn"
-                    onClick={() => handleMerge(candidate, candidate.memory_id_2)}
+                    onClick={() =>
+                      handleMerge(candidate, candidate.memory_id_2)
+                    }
                     disabled={mergeMemories.isPending || !candidate.memory2}
-                    title={!candidate.memory2 ? 'Memory not available' : 'Keep this memory'}
+                    title={
+                      !candidate.memory2
+                        ? "Memory not available"
+                        : "Keep this memory"
+                    }
                   >
                     <ArrowRight size={14} />
                     <span>Keep this one</span>
@@ -172,7 +208,8 @@ export default function DuplicateReview() {
               <div className="duplicate-detected-info">
                 <Clock size={12} />
                 <span>
-                  Detected {new Date(candidate.detected_at).toLocaleDateString()} via{' '}
+                  Detected{" "}
+                  {new Date(candidate.detected_at).toLocaleDateString()} via{" "}
                   {candidate.detection_method}
                 </span>
               </div>

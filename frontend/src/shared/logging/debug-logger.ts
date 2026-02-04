@@ -11,9 +11,9 @@ type LoggableValue =
   | undefined
   | Date
   | LoggableValue[]
-  | { [key: string]: LoggableValue }
+  | { [key: string]: LoggableValue };
 
-const isDebugEnabled = process.env.NEXT_PUBLIC_DEBUG_CHAT === 'true'
+const isDebugEnabled = process.env.NEXT_PUBLIC_DEBUG_CHAT === "true";
 
 /**
  * Debug logger that only logs when debug mode is enabled
@@ -21,15 +21,19 @@ const isDebugEnabled = process.env.NEXT_PUBLIC_DEBUG_CHAT === 'true'
  * @param message - Log message
  * @param data - Optional data to log (will be sanitized)
  */
-export function debugLog(module: string, message: string, data?: LoggableValue): void {
-  if (!isDebugEnabled) return
+export function debugLog(
+  module: string,
+  message: string,
+  data?: LoggableValue,
+): void {
+  if (!isDebugEnabled) return;
 
-  const sanitizedData = data ? sanitizeData(data) : undefined
+  const sanitizedData = data ? sanitizeData(data) : undefined;
 
-  if (typeof sanitizedData === 'undefined') {
-    console.log(`[${module}] ${message}`)
+  if (typeof sanitizedData === "undefined") {
+    console.log(`[${module}] ${message}`);
   } else {
-    console.log(`[${module}] ${message}`, sanitizedData)
+    console.log(`[${module}] ${message}`, sanitizedData);
   }
 }
 
@@ -39,43 +43,45 @@ export function debugLog(module: string, message: string, data?: LoggableValue):
  * @returns Sanitized data
  */
 function sanitizeData(data: LoggableValue): LoggableValue {
-  if (data === null || data === undefined) return data
+  if (data === null || data === undefined) return data;
 
   if (Array.isArray(data)) {
-    return data.map((item) => sanitizeData(item))
+    return data.map((item) => sanitizeData(item));
   }
 
   if (data instanceof Date) {
-    return data
+    return data;
   }
 
-  if (typeof data === 'object') {
-    const entries = Object.entries(data as Record<string, LoggableValue>).map(([key, value]) => {
-      if (isSensitiveField(key)) {
-        return [key, '[REDACTED]'] as const
-      }
-
-      if (isContentField(key)) {
-        if (typeof value === 'string') {
-          return [key, `[Content: ${value.length} chars]`] as const
+  if (typeof data === "object") {
+    const entries = Object.entries(data as Record<string, LoggableValue>).map(
+      ([key, value]) => {
+        if (isSensitiveField(key)) {
+          return [key, "[REDACTED]"] as const;
         }
-        return [key, '[Content]'] as const
-      }
 
-      if (isIdField(key)) {
-        if (typeof value === 'string' && value.length > 8) {
-          return [key, `${value.slice(0, 4)}...${value.slice(-4)}`] as const
+        if (isContentField(key)) {
+          if (typeof value === "string") {
+            return [key, `[Content: ${value.length} chars]`] as const;
+          }
+          return [key, "[Content]"] as const;
         }
-        return [key, value]
-      }
 
-      return [key, sanitizeData(value)] as const
-    })
+        if (isIdField(key)) {
+          if (typeof value === "string" && value.length > 8) {
+            return [key, `${value.slice(0, 4)}...${value.slice(-4)}`] as const;
+          }
+          return [key, value];
+        }
 
-    return Object.fromEntries(entries)
+        return [key, sanitizeData(value)] as const;
+      },
+    );
+
+    return Object.fromEntries(entries);
   }
 
-  return data
+  return data;
 }
 
 /**
@@ -83,18 +89,18 @@ function sanitizeData(data: LoggableValue): LoggableValue {
  */
 function isSensitiveField(fieldName: string): boolean {
   const sensitivePatterns = [
-    'password',
-    'token',
-    'secret',
-    'api_key',
-    'apikey',
-    'auth',
-    'credential',
-    'private'
-  ]
+    "password",
+    "token",
+    "secret",
+    "api_key",
+    "apikey",
+    "auth",
+    "credential",
+    "private",
+  ];
 
-  const lowerFieldName = fieldName.toLowerCase()
-  return sensitivePatterns.some((pattern) => lowerFieldName.includes(pattern))
+  const lowerFieldName = fieldName.toLowerCase();
+  return sensitivePatterns.some((pattern) => lowerFieldName.includes(pattern));
 }
 
 /**
@@ -102,18 +108,18 @@ function isSensitiveField(fieldName: string): boolean {
  */
 function isContentField(fieldName: string): boolean {
   const contentPatterns = [
-    'content',
-    'message',
-    'text',
-    'body',
-    'response',
-    'query',
-    'answer',
-    'backendmessage'
-  ]
+    "content",
+    "message",
+    "text",
+    "body",
+    "response",
+    "query",
+    "answer",
+    "backendmessage",
+  ];
 
-  const lowerFieldName = fieldName.toLowerCase()
-  return contentPatterns.some((pattern) => lowerFieldName.includes(pattern))
+  const lowerFieldName = fieldName.toLowerCase();
+  return contentPatterns.some((pattern) => lowerFieldName.includes(pattern));
 }
 
 /**
@@ -121,16 +127,16 @@ function isContentField(fieldName: string): boolean {
  */
 function isIdField(fieldName: string): boolean {
   const idPatterns = [
-    'id',
-    'uuid',
-    'sessionid',
-    'messageid',
-    'userid',
-    'conversationid'
-  ]
+    "id",
+    "uuid",
+    "sessionid",
+    "messageid",
+    "userid",
+    "conversationid",
+  ];
 
-  const lowerFieldName = fieldName.toLowerCase()
-  return idPatterns.some((pattern) => lowerFieldName.includes(pattern))
+  const lowerFieldName = fieldName.toLowerCase();
+  return idPatterns.some((pattern) => lowerFieldName.includes(pattern));
 }
 
 /**
@@ -140,12 +146,12 @@ function isIdField(fieldName: string): boolean {
  * @returns true if value is a valid numeric string
  */
 export function isStrictNumericId(value: string): boolean {
-  if (!value || typeof value !== 'string') return false
+  if (!value || typeof value !== "string") return false;
 
-  const strictNumericRegex = /^\d+$/
+  const strictNumericRegex = /^\d+$/;
 
-  if (value.length > 20) return false
-  if (value.length > 1 && value.startsWith('0')) return false
+  if (value.length > 20) return false;
+  if (value.length > 1 && value.startsWith("0")) return false;
 
-  return strictNumericRegex.test(value)
+  return strictNumericRegex.test(value);
 }

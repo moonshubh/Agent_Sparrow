@@ -63,5 +63,7 @@ async def enforce_budget(
             return False
         return True
     except Exception as exc:  # pragma: no cover - fallback behaviour
-        logger.debug("budget_enforce_failed", scope=scope, user_id=user_id, error=str(exc))
+        logger.debug(
+            "budget_enforce_failed", scope=scope, user_id=user_id, error=str(exc)
+        )
         return True

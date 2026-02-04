@@ -1,14 +1,20 @@
-'use client';
+"use client";
 
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import type { Message } from '@/services/ag-ui/client';
-import { useAgent } from '@/features/librechat/AgentContext';
-import { MessageList } from './MessageList';
-import { ChatInput } from './ChatInput';
-import { Sidebar } from './Sidebar';
-import { Header } from './Header';
-import { Landing } from './Landing';
-import { ArtifactPanel } from '@/features/librechat/artifacts';
+import React, {
+  useState,
+  useCallback,
+  useMemo,
+  useEffect,
+  useRef,
+} from "react";
+import type { Message } from "@/services/ag-ui/client";
+import { useAgent } from "@/features/librechat/AgentContext";
+import { MessageList } from "./MessageList";
+import { ChatInput } from "./ChatInput";
+import { Sidebar } from "./Sidebar";
+import { Header } from "./Header";
+import { Landing } from "./Landing";
+import { ArtifactPanel } from "@/features/librechat/artifacts";
 
 interface LibreChatViewProps {
   sessionId?: string;
@@ -34,7 +40,7 @@ export function LibreChatView({
   const { messages, isStreaming, error } = useAgent();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [initialInput, setInitialInput] = useState('');
+  const [initialInput, setInitialInput] = useState("");
   const hasAutoNamedRef = useRef(false);
 
   // Auto-name chat based on first user message
@@ -43,22 +49,23 @@ export function LibreChatView({
     if (!onAutoName) return;
 
     // Find first user message
-    const firstUserMessage = messages.find((msg) => msg.role === 'user');
+    const firstUserMessage = messages.find((msg) => msg.role === "user");
     if (!firstUserMessage) return;
 
-    const content = typeof firstUserMessage.content === 'string'
-      ? firstUserMessage.content
-      : '';
+    const content =
+      typeof firstUserMessage.content === "string"
+        ? firstUserMessage.content
+        : "";
     if (!content.trim()) return;
 
     // Generate title from first ~50 chars, truncating at word boundary
     let title = content.slice(0, 50).trim();
     if (content.length > 50) {
-      const lastSpace = title.lastIndexOf(' ');
+      const lastSpace = title.lastIndexOf(" ");
       if (lastSpace > 20) {
         title = title.slice(0, lastSpace);
       }
-      title += '...';
+      title += "...";
     }
 
     hasAutoNamedRef.current = true;
@@ -84,7 +91,7 @@ export function LibreChatView({
     (id: string) => {
       onSelectConversation?.(id);
     },
-    [onSelectConversation]
+    [onSelectConversation],
   );
 
   const handleStarterClick = useCallback((prompt: string) => {
@@ -93,27 +100,33 @@ export function LibreChatView({
 
   const handleInputUsed = useCallback(() => {
     // Clear initial input after it's been used
-    setInitialInput('');
+    setInitialInput("");
   }, []);
 
   // Filter to only show user and assistant messages (hide tool messages)
   const displayMessages = useMemo(() => {
     const filtered = messages.filter((msg) => {
-      if (msg.role === 'user') return true;
-      if (msg.role !== 'assistant') return false;
-      const text = typeof msg.content === 'string' ? msg.content.trim() : '';
+      if (msg.role === "user") return true;
+      if (msg.role !== "assistant") return false;
+      const text = typeof msg.content === "string" ? msg.content.trim() : "";
       const metadata = msg.metadata as Record<string, unknown> | undefined;
-      const artifacts = Array.isArray(metadata?.artifacts) ? metadata?.artifacts : undefined;
+      const artifacts = Array.isArray(metadata?.artifacts)
+        ? metadata?.artifacts
+        : undefined;
       const hasArtifacts = Boolean(artifacts && artifacts.length > 0);
       return Boolean(text) || hasArtifacts;
     });
 
-    if (isStreaming && filtered.length > 0 && filtered[filtered.length - 1].role === 'user') {
+    if (
+      isStreaming &&
+      filtered.length > 0 &&
+      filtered[filtered.length - 1].role === "user"
+    ) {
       // Streaming placeholder message while waiting for assistant response
       const placeholderMessage: Message = {
-        id: 'streaming-placeholder',
-        role: 'assistant',
-        content: '',
+        id: "streaming-placeholder",
+        role: "assistant",
+        content: "",
       };
       filtered.push(placeholderMessage);
     }
@@ -141,16 +154,17 @@ export function LibreChatView({
       {/* Main Chat Area */}
       <main className="lc-main" role="main" aria-label="Chat area">
         {/* Header */}
-        <Header
-          onToggleSidebar={toggleSidebar}
-          sidebarOpen={sidebarOpen}
-        />
+        <Header onToggleSidebar={toggleSidebar} sidebarOpen={sidebarOpen} />
 
         {/* Content */}
         {isLandingPage ? (
           <Landing onStarterClick={handleStarterClick} />
         ) : (
-          <MessageList messages={displayMessages} isStreaming={isStreaming} sessionId={sessionId} />
+          <MessageList
+            messages={displayMessages}
+            isStreaming={isStreaming}
+            sessionId={sessionId}
+          />
         )}
 
         {/* Error Display */}

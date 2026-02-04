@@ -4,7 +4,7 @@
  * Uses Framer Motion for React components
  */
 
-import { Variants, Transition } from 'framer-motion';
+import { Variants, Transition } from "framer-motion";
 
 // ============================================
 // Animation Timing Functions
@@ -23,13 +23,13 @@ export const crystalCardAnimation: Variants = {
   hidden: {
     opacity: 0,
     scale: 0.8,
-    filter: 'blur(10px)',
+    filter: "blur(10px)",
     y: 20,
   },
   visible: {
     opacity: 1,
     scale: 1,
-    filter: 'blur(0px)',
+    filter: "blur(0px)",
     y: 0,
     transition: {
       duration: 0.6,
@@ -38,7 +38,7 @@ export const crystalCardAnimation: Variants = {
   },
   hover: {
     scale: 1.02,
-    boxShadow: '0 0 30px rgba(255, 215, 0, 0.2)',
+    boxShadow: "0 0 30px rgba(255, 215, 0, 0.2)",
     transition: {
       duration: 0.2,
       ease: easings.smooth,
@@ -70,14 +70,14 @@ export const staggerContainer: Variants = {
 // ============================================
 export const neuralPulseAnimation: Variants = {
   idle: {
-    boxShadow: '0 0 10px rgba(255, 215, 0, 0.2)',
+    boxShadow: "0 0 10px rgba(255, 215, 0, 0.2)",
   },
   pulse: {
     boxShadow: [
-      '0 0 10px rgba(255, 215, 0, 0.2)',
-      '0 0 30px rgba(255, 215, 0, 0.4)',
-      '0 0 50px rgba(255, 215, 0, 0.3)',
-      '0 0 10px rgba(255, 215, 0, 0.2)',
+      "0 0 10px rgba(255, 215, 0, 0.2)",
+      "0 0 30px rgba(255, 215, 0, 0.4)",
+      "0 0 50px rgba(255, 215, 0, 0.3)",
+      "0 0 10px rgba(255, 215, 0, 0.2)",
     ],
     transition: {
       duration: 2,
@@ -157,7 +157,7 @@ export const progressBarAnimation: Variants = {
   }),
   complete: {
     scaleX: 1,
-    background: 'linear-gradient(90deg, #00D4FF 0%, #FFD700 100%)',
+    background: "linear-gradient(90deg, #00D4FF 0%, #FFD700 100%)",
     transition: {
       duration: 0.5,
       ease: easings.crystalForm,
@@ -258,9 +258,9 @@ export const interruptAnimation: Variants = {
   urgent: {
     scale: [1, 1.05, 1],
     boxShadow: [
-      '0 0 20px rgba(255, 71, 87, 0.3)',
-      '0 0 40px rgba(255, 71, 87, 0.5)',
-      '0 0 20px rgba(255, 71, 87, 0.3)',
+      "0 0 20px rgba(255, 71, 87, 0.3)",
+      "0 0 40px rgba(255, 71, 87, 0.5)",
+      "0 0 20px rgba(255, 71, 87, 0.3)",
     ],
     transition: {
       duration: 1,
@@ -297,14 +297,14 @@ export const particleAnimation: Variants = {
 // ============================================
 export const glassRevealAnimation: Variants = {
   hidden: {
-    backdropFilter: 'blur(0px)',
-    background: 'rgba(10, 14, 39, 0)',
-    border: '1px solid rgba(0, 212, 255, 0)',
+    backdropFilter: "blur(0px)",
+    background: "rgba(10, 14, 39, 0)",
+    border: "1px solid rgba(0, 212, 255, 0)",
   },
   visible: {
-    backdropFilter: 'blur(12px)',
-    background: 'rgba(10, 14, 39, 0.6)',
-    border: '1px solid rgba(0, 212, 255, 0.2)',
+    backdropFilter: "blur(12px)",
+    background: "rgba(10, 14, 39, 0.6)",
+    border: "1px solid rgba(0, 212, 255, 0.2)",
     transition: {
       duration: 0.5,
       ease: easings.smooth,
@@ -326,7 +326,7 @@ export const actionMenuAnimation: Variants = {
     opacity: 1,
     rotateZ: 0,
     transition: {
-      type: 'spring',
+      type: "spring",
       damping: 20,
       stiffness: 300,
     },
@@ -349,7 +349,7 @@ export const actionButtonAnimation: Variants = {
   }),
   hover: {
     scale: 1.1,
-    boxShadow: '0 0 15px rgba(255, 215, 0, 0.4)',
+    boxShadow: "0 0 15px rgba(255, 215, 0, 0.4)",
     transition: {
       duration: 0.2,
     },
@@ -365,10 +365,10 @@ export const actionButtonAnimation: Variants = {
  */
 export const shimmerAnimation: Variants = {
   shimmer: {
-    backgroundPosition: ['200% 0', '-200% 0'],
+    backgroundPosition: ["200% 0", "-200% 0"],
     transition: {
       duration: 2,
-      ease: 'linear',
+      ease: "linear",
       repeat: Infinity,
     },
   },
@@ -393,12 +393,12 @@ export const floatAnimation: Variants = {
  */
 export const crystallizeAnimation: Variants = {
   liquid: {
-    filter: 'blur(8px) hue-rotate(0deg)',
+    filter: "blur(8px) hue-rotate(0deg)",
     scale: 1.1,
     opacity: 0.7,
   },
   solid: {
-    filter: 'blur(0px) hue-rotate(360deg)',
+    filter: "blur(0px) hue-rotate(360deg)",
     scale: 1,
     opacity: 1,
     transition: {
@@ -456,7 +456,7 @@ export const toolExecutionAnimation = {
  */
 export const quotaMeterAnimation: Variants = {
   healthy: {
-    background: 'linear-gradient(90deg, #00D4FF 0%, #00D4FF 100%)',
+    background: "linear-gradient(90deg, #00D4FF 0%, #00D4FF 100%)",
   },
   warning: (usage: number) => ({
     background: `linear-gradient(90deg, #00D4FF 0%, #FFBF00 ${usage}%)`,
@@ -466,8 +466,8 @@ export const quotaMeterAnimation: Variants = {
     },
   }),
   critical: {
-    background: 'linear-gradient(90deg, #FFBF00 0%, #FF4757 100%)',
-    animation: 'pulse 1s ease-in-out infinite',
+    background: "linear-gradient(90deg, #FFBF00 0%, #FF4757 100%)",
+    animation: "pulse 1s ease-in-out infinite",
   },
 };
 
@@ -498,7 +498,7 @@ export const animationPresets = {
     animate: {
       scale: 1,
       transition: {
-        type: 'spring',
+        type: "spring",
         damping: 20,
         stiffness: 300,
       },

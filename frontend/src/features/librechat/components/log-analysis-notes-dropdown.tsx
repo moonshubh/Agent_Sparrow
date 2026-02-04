@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import React, { memo } from 'react';
+import React, { memo } from "react";
 
 interface LogAnalysisNote {
   readonly file_name?: string;
@@ -15,16 +15,19 @@ interface LogAnalysisNote {
 type LogAnalysisNotes = Readonly<Record<string, LogAnalysisNote>>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 const isOptionalString = (value: unknown): value is string | undefined =>
-  value === undefined || typeof value === 'string';
+  value === undefined || typeof value === "string";
 
 const isOptionalNumber = (value: unknown): value is number | undefined =>
-  value === undefined || (typeof value === 'number' && Number.isFinite(value));
+  value === undefined || (typeof value === "number" && Number.isFinite(value));
 
-const isOptionalStringArray = (value: unknown): value is readonly string[] | undefined =>
-  value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
+const isOptionalStringArray = (
+  value: unknown,
+): value is readonly string[] | undefined =>
+  value === undefined ||
+  (Array.isArray(value) && value.every((item) => typeof item === "string"));
 
 const isLogAnalysisNote = (value: unknown): value is LogAnalysisNote => {
   if (!isRecord(value)) return false;
@@ -65,21 +68,31 @@ export const LogAnalysisNotesDropdown = memo(function LogAnalysisNotesDropdown({
   const rows = Object.entries(notes)
     .map(([id, note]) => ({ id, note }))
     .sort((a, b) => {
-      const aTs = typeof a.note.created_at === 'string' ? Date.parse(a.note.created_at) : 0;
-      const bTs = typeof b.note.created_at === 'string' ? Date.parse(b.note.created_at) : 0;
+      const aTs =
+        typeof a.note.created_at === "string"
+          ? Date.parse(a.note.created_at)
+          : 0;
+      const bTs =
+        typeof b.note.created_at === "string"
+          ? Date.parse(b.note.created_at)
+          : 0;
       return aTs - bTs;
     });
 
-  const title = rows.length === 1 ? 'Technical details (1 log)' : `Technical details (${rows.length} logs)`;
+  const title =
+    rows.length === 1
+      ? "Technical details (1 log)"
+      : `Technical details (${rows.length} logs)`;
 
   return (
     <details className="lc-log-notes" aria-label="Technical details">
       <summary className="lc-log-notes-summary">{title}</summary>
       <div className="lc-log-notes-body">
         {rows.map(({ id, note }, idx) => {
-          const fileName = typeof note.file_name === 'string' && note.file_name.trim()
-            ? note.file_name.trim()
-            : `Log ${idx + 1}`;
+          const fileName =
+            typeof note.file_name === "string" && note.file_name.trim()
+              ? note.file_name.trim()
+              : `Log ${idx + 1}`;
           const confidence = formatConfidence(note.confidence);
 
           return (
@@ -88,15 +101,19 @@ export const LogAnalysisNotesDropdown = memo(function LogAnalysisNotesDropdown({
                 <div className="lc-log-note-title">{fileName}</div>
                 <div className="lc-log-note-meta">
                   {confidence ? <span>Confidence: {confidence}</span> : null}
-                  {typeof note.created_at === 'string' && note.created_at.trim()
-                    ? <span>{note.created_at}</span>
-                    : null}
+                  {typeof note.created_at === "string" &&
+                  note.created_at.trim() ? (
+                    <span>{note.created_at}</span>
+                  ) : null}
                 </div>
               </header>
 
-              {typeof note.internal_notes === 'string' && note.internal_notes.trim() ? (
+              {typeof note.internal_notes === "string" &&
+              note.internal_notes.trim() ? (
                 <div className="lc-log-note-section">
-                  <div className="lc-log-note-section-title">Internal diagnostic notes</div>
+                  <div className="lc-log-note-section-title">
+                    Internal diagnostic notes
+                  </div>
                   <pre className="lc-log-note-pre">{note.internal_notes}</pre>
                 </div>
               ) : null}
@@ -112,9 +129,12 @@ export const LogAnalysisNotesDropdown = memo(function LogAnalysisNotesDropdown({
                 </div>
               ) : null}
 
-              {Array.isArray(note.recommended_actions) && note.recommended_actions.length ? (
+              {Array.isArray(note.recommended_actions) &&
+              note.recommended_actions.length ? (
                 <div className="lc-log-note-section">
-                  <div className="lc-log-note-section-title">Recommended actions</div>
+                  <div className="lc-log-note-section-title">
+                    Recommended actions
+                  </div>
                   <ul className="lc-log-note-list">
                     {note.recommended_actions.map((item, i) => (
                       <li key={`${id}-actions-${i}`}>{item}</li>
@@ -123,9 +143,12 @@ export const LogAnalysisNotesDropdown = memo(function LogAnalysisNotesDropdown({
                 </div>
               ) : null}
 
-              {Array.isArray(note.open_questions) && note.open_questions.length ? (
+              {Array.isArray(note.open_questions) &&
+              note.open_questions.length ? (
                 <div className="lc-log-note-section">
-                  <div className="lc-log-note-section-title">Open questions</div>
+                  <div className="lc-log-note-section-title">
+                    Open questions
+                  </div>
                   <ul className="lc-log-note-list">
                     {note.open_questions.map((item, i) => (
                       <li key={`${id}-questions-${i}`}>{item}</li>

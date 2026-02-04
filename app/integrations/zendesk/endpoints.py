@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 import re
 
 from fastapi import APIRouter, HTTPException, Request, status
+from postgrest.base_request_builder import CountMethod
 from pydantic import BaseModel
 
 from app.core.config import get_models_config, resolve_coordinator_config
@@ -20,11 +21,16 @@ router = APIRouter(prefix="/integrations/zendesk", tags=["Zendesk"])
 
 logger = logging.getLogger(__name__)
 
+COUNT_EXACT: CountMethod = CountMethod.exact
+
 # Default model for Zendesk - centralized to ensure consistency
 
 # Basic PII redactors for emails and phone numbers
-_EMAIL_RE = re.compile(r'([A-Za-z0-9._%+-]{1,})@([A-Za-z0-9.-]{1,})')
-_PHONE_RE = re.compile(r'(?<!\d)(\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?){2}\d{4}(?!\d)')
+_EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]{1,})@([A-Za-z0-9.-]{1,})")
+_PHONE_RE = re.compile(
+    r"(?<!\d)(\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?){2}\d{4}(?!\d)"
+)
+
 
 def _redact_pii(text: str | None) -> str | None:
     if not text or not isinstance(text, str):
@@ -55,7 +61,8 @@ def _find_ticket_id_recursive(d: Any, parents: Tuple[str, ...] = ()) -> Optional
             if lk == "id":
                 # Accept when within a likely ticket context
                 if any(p in ("ticket", "ticket_event") for p in parents) or (
-                    "detail" in parents and ("brand_id" in d or "form_id" in d or "custom_status" in d)
+                    "detail" in parents
+                    and ("brand_id" in d or "form_id" in d or "custom_status" in d)
                 ):
                     return str(v).strip()
         # Recurse
@@ -88,7 +95,9 @@ def _find_brand_id_recursive(d: Any) -> Optional[str]:
     return None
 
 
-def _extract_ticket_and_brand(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+def _extract_ticket_and_brand(
+    payload: Dict[str, Any],
+) -> tuple[Optional[str], Optional[str]]:
     # Try common shapes first; do NOT fall back to top-level id (that can be event id)
     candidates = [
         _get_nested(payload, "ticket", "id"),
@@ -97,16 +106,22 @@ def _extract_ticket_and_brand(payload: Dict[str, Any]) -> tuple[Optional[str], O
         _get_nested(payload, "detail", "ticket_id"),
         _get_nested(payload, "detail", "ticket", "id"),
     ]
-    ticket_raw: Optional[str] = next((str(c).strip() for c in candidates if c is not None), None)
+    ticket_raw: Optional[str] = next(
+        (str(c).strip() for c in candidates if c is not None), None
+    )
     if not ticket_raw:
-        ticket_raw = _find_ticket_id_recursive(payload)  # broader fallback for Zendesk variants
+        ticket_raw = _find_ticket_id_recursive(
+            payload
+        )  # broader fallback for Zendesk variants
     brand_candidates = [
         _get_nested(payload, "ticket", "brand_id"),
         _get_nested(payload, "ticket_event", "ticket", "brand_id"),
         payload.get("brand_id"),
         _get_nested(payload, "detail", "brand_id"),
     ]
-    brand_raw: Optional[str] = next((str(c).strip() for c in brand_candidates if c is not None), None)
+    brand_raw: Optional[str] = next(
+        (str(c).strip() for c in brand_candidates if c is not None), None
+    )
     if not brand_raw:
         brand_raw = _find_brand_id_recursive(payload)
     return ticket_raw, brand_raw
@@ -128,11 +143,13 @@ async def _upsert_month_usage(delta_calls: int = 0) -> Dict[str, Any]:
     if not row:
         await supa._exec(
             lambda: supa.client.table("zendesk_usage")
-            .insert({
-                "month_key": mk,
-                "calls_used": 0,
-                "budget": desired_budget,
-            })
+            .insert(
+                {
+                    "month_key": mk,
+                    "calls_used": 0,
+                    "budget": desired_budget,
+                }
+            )
             .execute()
         )
         row = {"month_key": mk, "calls_used": 0, "budget": desired_budget}
@@ -162,10 +179,12 @@ async def _upsert_month_usage(delta_calls: int = 0) -> Dict[str, Any]:
         new_val = max(0, int(row.get("calls_used", 0)) + int(delta_calls))
         await supa._exec(
             lambda: supa.client.table("zendesk_usage")
-            .update({
-                "calls_used": new_val,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            })
+            .update(
+                {
+                    "calls_used": new_val,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             .eq("month_key", mk)
             .execute()
         )
@@ -220,7 +239,12 @@ async def _get_feature_state_snapshot() -> Dict[str, Any]:
                 dry_run = bool(val.get("dry_run", dry_run))
     except Exception:
         pass
-    return {"enabled": enabled, "dry_run": dry_run, "provider": provider, "model": model}
+    return {
+        "enabled": enabled,
+        "dry_run": dry_run,
+        "provider": provider,
+        "model": model,
+    }
 
 
 @router.get("/health")
@@ -228,7 +252,9 @@ async def health(request: Request) -> Dict[str, Any]:
     expected = getattr(settings, "internal_api_token", None)
     provided = request.headers.get("X-Internal-Token")
     if not expected or not provided or not hmac.compare_digest(provided, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized"
+        )
     """Return enabled status and usage snapshot, plus queue stats."""
     try:
         usage = await _upsert_month_usage(0)
@@ -239,8 +265,18 @@ async def health(request: Request) -> Dict[str, Any]:
     # Queue counts and daily Gemini usage
     supa = get_supabase_client()
     try:
-        pending = await supa._exec(lambda: supa.client.table("zendesk_pending_tickets").select("id", count="exact", head=True).eq("status", "pending").execute())
-        retry = await supa._exec(lambda: supa.client.table("zendesk_pending_tickets").select("id", count="exact", head=True).eq("status", "retry").execute())
+        pending = await supa._exec(
+            lambda: supa.client.table("zendesk_pending_tickets")
+            .select("id", count=COUNT_EXACT, head=True)
+            .eq("status", "pending")
+            .execute()
+        )
+        retry = await supa._exec(
+            lambda: supa.client.table("zendesk_pending_tickets")
+            .select("id", count=COUNT_EXACT, head=True)
+            .eq("status", "retry")
+            .execute()
+        )
         q_counts = {
             "pending": getattr(pending, "count", None),
             "retry": getattr(retry, "count", None),
@@ -250,8 +286,15 @@ async def health(request: Request) -> Dict[str, Any]:
 
     try:
         from datetime import date
+
         today = date.today().isoformat()
-        du = await supa._exec(lambda: supa.client.table("zendesk_daily_usage").select("gemini_calls_used,gemini_daily_limit").eq("usage_date", today).maybe_single().execute())
+        du = await supa._exec(
+            lambda: supa.client.table("zendesk_daily_usage")
+            .select("gemini_calls_used,gemini_daily_limit")
+            .eq("usage_date", today)
+            .maybe_single()
+            .execute()
+        )
         daily_usage = getattr(du, "data", None) or {}
     except Exception:
         daily_usage = {}
@@ -304,7 +347,9 @@ async def get_available_models(request: Request) -> Dict[str, Any]:
     expected = getattr(settings, "internal_api_token", None)
     provided = request.headers.get("X-Internal-Token")
     if not expected or not provided or not hmac.compare_digest(provided, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized"
+        )
 
     # Check which providers have API keys configured
     available_providers = []
@@ -330,15 +375,22 @@ async def get_available_models(request: Request) -> Dict[str, Any]:
 
 
 @router.post("/feature")
-async def set_feature(request: Request, payload: FeatureToggleRequest) -> Dict[str, Any]:
+async def set_feature(
+    request: Request, payload: FeatureToggleRequest
+) -> Dict[str, Any]:
     """Set feature flag in Supabase. Requires INTERNAL_API_TOKEN header."""
     expected = getattr(settings, "internal_api_token", None)
     if not expected:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal token not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal token not configured",
+        )
 
     provided = request.headers.get("X-Internal-Token")
     if not provided or not hmac.compare_digest(provided, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid internal token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid internal token"
+        )
 
     # Read existing value to preserve fields not being updated
     try:
@@ -405,13 +457,22 @@ async def webhook(request: Request) -> Dict[str, Any]:
                     ts_epoch = None
             logger.warning(
                 "Zendesk verify debug: body_len=%s ts_raw='%s' ts_epoch=%s",
-                len(body_bytes), str(ts)[:32] if ts is not None else None, ts_epoch,
+                len(body_bytes),
+                str(ts)[:32] if ts is not None else None,
+                ts_epoch,
             )
         except Exception:
             # Do not fail webhook on debugging
             pass
-    if not verify_webhook_signature(signature_b64=sig, timestamp=ts, raw_body=body_bytes, signing_secret=settings.zendesk_signing_secret):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid_signature")
+    if not verify_webhook_signature(
+        signature_b64=sig,
+        timestamp=ts,
+        raw_body=body_bytes,
+        signing_secret=settings.zendesk_signing_secret,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="invalid_signature"
+        )
 
     # Replay protection: idempotency guard keyed by (timestamp, signature-tail)
     try:
@@ -441,7 +502,9 @@ async def webhook(request: Request) -> Dict[str, Any]:
     except Exception as e:
         msg = str(e)
         if "duplicate key" in msg or "already exists" in msg:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="replay_detected")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="replay_detected"
+            )
         logger.error("replay state insert failed: %s", e)
         raise HTTPException(status_code=500, detail="replay_state_insert_failed")
 
@@ -455,9 +518,19 @@ async def webhook(request: Request) -> Dict[str, Any]:
     if not ticket_raw:
         if getattr(settings, "zendesk_debug_verify", False):
             try:
-                top_keys = sorted(list(payload.keys())) if isinstance(payload, dict) else []
-                detail_keys = sorted(list((payload.get("detail") or {}).keys())) if isinstance(payload, dict) else []
-                logger.warning("Zendesk payload debug: ticket id missing; top_keys=%s detail_keys=%s", top_keys[:20], detail_keys[:20])
+                top_keys = (
+                    sorted(list(payload.keys())) if isinstance(payload, dict) else []
+                )
+                detail_keys = (
+                    sorted(list((payload.get("detail") or {}).keys()))
+                    if isinstance(payload, dict)
+                    else []
+                )
+                logger.warning(
+                    "Zendesk payload debug: ticket id missing; top_keys=%s detail_keys=%s",
+                    top_keys[:20],
+                    detail_keys[:20],
+                )
             except Exception:
                 pass
         raise HTTPException(status_code=400, detail="ticket id missing")
@@ -465,20 +538,33 @@ async def webhook(request: Request) -> Dict[str, Any]:
         ticket_id_int = int(str(ticket_raw).strip())
     except Exception:
         if getattr(settings, "zendesk_debug_verify", False):
-            logger.warning("Zendesk payload debug: non-numeric ticket id raw='%s'", str(ticket_raw)[:32])
+            logger.warning(
+                "Zendesk payload debug: non-numeric ticket id raw='%s'",
+                str(ticket_raw)[:32],
+            )
         raise HTTPException(status_code=400, detail="ticket id must be numeric")
 
     brand_id = brand_raw
     # Choose a best-effort ticket object for optional fields
     t = (
-        (payload.get("ticket") or {}) if isinstance(payload, dict) else {}
-    ) or (
-        (_get_nested(payload, "ticket_event", "ticket") or {}) if isinstance(payload, dict) else {}
-    ) or (
-        (_get_nested(payload, "detail", "ticket") or {}) if isinstance(payload, dict) else {}
+        ((payload.get("ticket") or {}) if isinstance(payload, dict) else {})
+        or (
+            (_get_nested(payload, "ticket_event", "ticket") or {})
+            if isinstance(payload, dict)
+            else {}
+        )
+        or (
+            (_get_nested(payload, "detail", "ticket") or {})
+            if isinstance(payload, dict)
+            else {}
+        )
     )
-    subject = (t.get("subject") if isinstance(t, dict) else None) or (payload.get("subject") if isinstance(payload, dict) else None)
-    description = (t.get("description") if isinstance(t, dict) else None) or (payload.get("description") if isinstance(payload, dict) else None)
+    subject = (t.get("subject") if isinstance(t, dict) else None) or (
+        payload.get("subject") if isinstance(payload, dict) else None
+    )
+    description = (t.get("description") if isinstance(t, dict) else None) or (
+        payload.get("description") if isinstance(payload, dict) else None
+    )
     # Optional requester hashing (only when signing secret is configured)
     requester_email = None
     try:
@@ -492,7 +578,9 @@ async def webhook(request: Request) -> Dict[str, Any]:
         if requester_email and settings.zendesk_signing_secret:
             # HMAC(email) with signing secret; avoid storing raw email
             key = str(settings.zendesk_signing_secret).encode("utf-8")
-            requester_hashed = hmac.new(key, str(requester_email).encode("utf-8"), digestmod="sha256").hexdigest()
+            requester_hashed = hmac.new(
+                key, str(requester_email).encode("utf-8"), digestmod="sha256"
+            ).hexdigest()
     except Exception:
         requester_hashed = None
 
@@ -506,7 +594,10 @@ async def webhook(request: Request) -> Dict[str, Any]:
     ticket_for_exclusion: Dict[str, Any] = t if isinstance(t, dict) else {}
     if isinstance(payload, dict):
         if "status" not in ticket_for_exclusion and payload.get("status") is not None:
-            ticket_for_exclusion = {**ticket_for_exclusion, "status": payload.get("status")}
+            ticket_for_exclusion = {
+                **ticket_for_exclusion,
+                "status": payload.get("status"),
+            }
         if "tags" not in ticket_for_exclusion and payload.get("tags") is not None:
             ticket_for_exclusion = {**ticket_for_exclusion, "tags": payload.get("tags")}
 
@@ -521,25 +612,37 @@ async def webhook(request: Request) -> Dict[str, Any]:
         return {"ok": True, "filtered": True, "reason": exclusion.reason}
 
     # Minimal retention: truncate long text fields and do NOT persist raw payload
-    if subject:
-        subject = _redact_pii(subject)[:200]
-    if description:
-        description = _redact_pii(description)[:2000]
+    if subject is not None:
+        redacted_subject = _redact_pii(subject)
+        subject = (
+            redacted_subject[:200]
+            if isinstance(redacted_subject, str)
+            else redacted_subject
+        )
+    if description is not None:
+        redacted_description = _redact_pii(description)
+        description = (
+            redacted_description[:2000]
+            if isinstance(redacted_description, str)
+            else redacted_description
+        )
 
     # Insert into supabase queue; ignore duplicates by unique constraint
     try:
         supa = get_supabase_client()
         await supa._exec(
             lambda: supa.client.table("zendesk_pending_tickets")
-            .insert({
-                "ticket_id": ticket_id_int,
-                "brand_id": str(brand_id) if brand_id is not None else None,
-                "subject": subject,
-                "description": description,
-                "payload": {},
-                "status": "pending",
-                "requester_hashed": requester_hashed,
-            })
+            .insert(
+                {
+                    "ticket_id": ticket_id_int,
+                    "brand_id": str(brand_id) if brand_id is not None else None,
+                    "subject": subject,
+                    "description": description,
+                    "payload": {},
+                    "status": "pending",
+                    "requester_hashed": requester_hashed,
+                }
+            )
             .execute()
         )
         queued = True

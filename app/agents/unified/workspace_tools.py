@@ -27,9 +27,9 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Annotated, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from langchain_core.tools import tool, InjectedToolArg
+from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from app.core.logging_config import get_logger
@@ -47,15 +47,15 @@ logger = get_logger(__name__)
 # Safe Default Constants
 # =============================================================================
 
-DEFAULT_READ_LIMIT_CHARS = 2048     # ~500 tokens, safe default
-MAX_READ_LIMIT_CHARS = 50000        # ~12k tokens, requires explicit opt-in
-DEFAULT_WRITE_MAX_BYTES = 100_000   # 100KB max per file
-MAX_WRITE_BYTES = 500_000           # 500KB absolute maximum
-DEFAULT_LIST_DEPTH = 2              # Default directory listing depth
-MAX_LIST_DEPTH = 5                  # Maximum directory listing depth
-DEFAULT_SEARCH_LIMIT = 10           # Default search results
-MAX_SEARCH_LIMIT = 50               # Maximum search results
-ATTACHMENT_TTL_HOURS = 24           # TTL for cached attachments
+DEFAULT_READ_LIMIT_CHARS = 2048  # ~500 tokens, safe default
+MAX_READ_LIMIT_CHARS = 50000  # ~12k tokens, requires explicit opt-in
+DEFAULT_WRITE_MAX_BYTES = 100_000  # 100KB max per file
+MAX_WRITE_BYTES = 500_000  # 500KB absolute maximum
+DEFAULT_LIST_DEPTH = 2  # Default directory listing depth
+MAX_LIST_DEPTH = 5  # Maximum directory listing depth
+DEFAULT_SEARCH_LIMIT = 10  # Default search results
+MAX_SEARCH_LIMIT = 50  # Maximum search results
+ATTACHMENT_TTL_HOURS = 24  # TTL for cached attachments
 ATTACHMENT_MAX_SIZE_BYTES = 50_000  # 50KB per attachment summary
 
 
@@ -65,8 +65,12 @@ ATTACHMENT_MAX_SIZE_BYTES = 50_000  # 50KB per attachment summary
 
 # Rate limits per scope/identifier (per 60 second window)
 RATE_LIMITS = {
-    "global": {"reads": 10, "writes": 0, "window_seconds": 60},    # Read-only
-    "user": {"reads": 10, "writes": 0, "window_seconds": 60},      # Internal metadata (read-only)
+    "global": {"reads": 10, "writes": 0, "window_seconds": 60},  # Read-only
+    "user": {
+        "reads": 10,
+        "writes": 0,
+        "window_seconds": 60,
+    },  # Internal metadata (read-only)
     "customer": {"reads": 20, "writes": 5, "window_seconds": 60},
     "session": {"reads": 100, "writes": 50, "window_seconds": 60},
 }
@@ -165,107 +169,94 @@ def _get_rate_limit_identifier(
 # Tool Schemas
 # =============================================================================
 
+
 class ReadWorkspaceFileInput(BaseModel):
     """Input schema for read_workspace_file."""
+
     path: str = Field(
         description="Virtual path to read (e.g., '/scratch/notes.md', '/customer/{id}/history/ticket_123.md')"
     )
     offset: int = Field(
-        default=0,
-        ge=0,
-        description="Character offset to start reading from"
+        default=0, ge=0, description="Character offset to start reading from"
     )
     limit: int = Field(
         default=DEFAULT_READ_LIMIT_CHARS,
         ge=1,
         le=MAX_READ_LIMIT_CHARS,
-        description=f"Maximum characters to read (default: {DEFAULT_READ_LIMIT_CHARS}, max: {MAX_READ_LIMIT_CHARS})"
+        description=f"Maximum characters to read (default: {DEFAULT_READ_LIMIT_CHARS}, max: {MAX_READ_LIMIT_CHARS})",
     )
 
 
 class WriteWorkspaceFileInput(BaseModel):
     """Input schema for write_workspace_file."""
-    path: str = Field(
-        description="Virtual path to write (e.g., '/scratch/notes.md')"
-    )
-    content: str = Field(
-        description="Content to write"
-    )
+
+    path: str = Field(description="Virtual path to write (e.g., '/scratch/notes.md')")
+    content: str = Field(description="Content to write")
     max_size_bytes: int = Field(
         default=DEFAULT_WRITE_MAX_BYTES,
         ge=1,
         le=MAX_WRITE_BYTES,
-        description=f"Maximum file size in bytes (default: {DEFAULT_WRITE_MAX_BYTES})"
+        description=f"Maximum file size in bytes (default: {DEFAULT_WRITE_MAX_BYTES})",
     )
 
 
 class ListWorkspaceFilesInput(BaseModel):
     """Input schema for list_workspace_files."""
+
     path: str = Field(
         default="/",
-        description="Virtual directory path to list (e.g., '/scratch', '/customer/{id}')"
+        description="Virtual directory path to list (e.g., '/scratch', '/customer/{id}')",
     )
     depth: int = Field(
         default=DEFAULT_LIST_DEPTH,
         ge=1,
         le=MAX_LIST_DEPTH,
-        description=f"Maximum depth to traverse (default: {DEFAULT_LIST_DEPTH}, max: {MAX_LIST_DEPTH})"
+        description=f"Maximum depth to traverse (default: {DEFAULT_LIST_DEPTH}, max: {MAX_LIST_DEPTH})",
     )
 
 
 class SearchWorkspaceInput(BaseModel):
     """Input schema for search_workspace."""
-    query: str = Field(
-        description="Search query to find in file contents"
-    )
-    path: str = Field(
-        default="/",
-        description="Virtual path prefix to search within"
-    )
+
+    query: str = Field(description="Search query to find in file contents")
+    path: str = Field(default="/", description="Virtual path prefix to search within")
     limit: int = Field(
         default=DEFAULT_SEARCH_LIMIT,
         ge=1,
         le=MAX_SEARCH_LIMIT,
-        description=f"Maximum results to return (default: {DEFAULT_SEARCH_LIMIT}, max: {MAX_SEARCH_LIMIT})"
+        description=f"Maximum results to return (default: {DEFAULT_SEARCH_LIMIT}, max: {MAX_SEARCH_LIMIT})",
     )
 
 
 class AppendWorkspaceFileInput(BaseModel):
     """Input schema for append_workspace_file."""
+
     path: str = Field(
         description="Virtual path to append to (e.g., '/customer/{id}/history/ticket_123.md')"
     )
-    content: str = Field(
-        description="Content to append (will be timestamped)"
-    )
+    content: str = Field(description="Content to append (will be timestamped)")
     max_size_bytes: int = Field(
         default=DEFAULT_WRITE_MAX_BYTES,
         ge=1,
         le=MAX_WRITE_BYTES,
-        description=f"Maximum file size in bytes (default: {DEFAULT_WRITE_MAX_BYTES})"
+        description=f"Maximum file size in bytes (default: {DEFAULT_WRITE_MAX_BYTES})",
     )
 
 
 class GrepWorkspaceFilesInput(BaseModel):
     """Input schema for grep_workspace_files."""
-    pattern: str = Field(
-        description="Regex pattern to search for"
-    )
-    path: str = Field(
-        default="/",
-        description="Virtual path prefix to search within"
-    )
+
+    pattern: str = Field(description="Regex pattern to search for")
+    path: str = Field(default="/", description="Virtual path prefix to search within")
     limit: int = Field(
-        default=20,
-        ge=1,
-        le=50,
-        description="Maximum matching files to return"
+        default=20, ge=1, le=50, description="Maximum matching files to return"
     )
 
 
 # =============================================================================
 # Tool Implementations
 # =============================================================================
+
 
 def create_read_workspace_file(store: "SparrowWorkspaceStore"):
     """Create read_workspace_file tool bound to a workspace store."""
@@ -373,7 +364,7 @@ def create_write_workspace_file(store: "SparrowWorkspaceStore"):
                 return f"Rate limit exceeded for {scope.value} scope. Try again in 60 seconds."
 
             # Check content size
-            content_bytes = len(content.encode('utf-8'))
+            content_bytes = len(content.encode("utf-8"))
             if content_bytes > max_size_bytes:
                 return f"Content too large: {content_bytes} bytes exceeds limit of {max_size_bytes} bytes."
 
@@ -435,7 +426,9 @@ def create_list_workspace_files(store: "SparrowWorkspaceStore"):
             # List files
             files = await store.list_files(path, depth)
             # /user/* is internal storage; never expose via tools (even via root listing).
-            files = [f for f in files if not str(f.get("path") or "").startswith("/user/")]
+            files = [
+                f for f in files if not str(f.get("path") or "").startswith("/user/")
+            ]
 
             if not files:
                 return f"No files found in {path}"
@@ -443,7 +436,9 @@ def create_list_workspace_files(store: "SparrowWorkspaceStore"):
             # Format output
             lines = [f"Files in {path}:"]
             for f in files:
-                lines.append(f"  - {f['path']} (updated: {f.get('updated_at', 'unknown')})")
+                lines.append(
+                    f"  - {f['path']} (updated: {f.get('updated_at', 'unknown')})"
+                )
 
             return "\n".join(lines)
 
@@ -503,7 +498,11 @@ def create_search_workspace(store: "SparrowWorkspaceStore"):
             # Search with content query
             items = await store.asearch(namespace_prefix, query=query, limit=limit)
             # /user/* is internal storage; never expose via tools (even via root search).
-            items = [item for item in items if not (getattr(item, "namespace", ())[:1] == ("user",))]
+            items = [
+                item
+                for item in items
+                if not (getattr(item, "namespace", ())[:1] == ("user",))
+            ]
 
             if not items:
                 return f"No results found for '{query}' in {path}"
@@ -643,9 +642,11 @@ def create_grep_workspace_files(store: "SparrowWorkspaceStore"):
 
             # List all files in path
             files = await store.list_files(path, depth=MAX_LIST_DEPTH)
-            files = [f for f in files if not str(f.get("path") or "").startswith("/user/")]
+            files = [
+                f for f in files if not str(f.get("path") or "").startswith("/user/")
+            ]
 
-            matches = []
+            matches: List[Dict[str, Any]] = []
             for f in files:
                 if len(matches) >= limit:
                     break
@@ -659,13 +660,17 @@ def create_grep_workspace_files(store: "SparrowWorkspaceStore"):
                 file_matches = []
                 for i, line in enumerate(content.split("\n"), 1):
                     if regex.search(line):
-                        file_matches.append((i, line.strip()[:100]))  # Line num, truncated line
+                        file_matches.append(
+                            (i, line.strip()[:100])
+                        )  # Line num, truncated line
 
                 if file_matches:
-                    matches.append({
-                        "path": f["path"],
-                        "matches": file_matches[:5],  # Max 5 matches per file
-                    })
+                    matches.append(
+                        {
+                            "path": f["path"],
+                            "matches": file_matches[:5],  # Max 5 matches per file
+                        }
+                    )
 
             if not matches:
                 return f"No matches for pattern '{pattern}' in {path}"
@@ -682,7 +687,9 @@ def create_grep_workspace_files(store: "SparrowWorkspaceStore"):
         except ValueError as e:
             return f"Invalid path: {e}"
         except Exception as e:
-            logger.error("grep_workspace_files_error", pattern=pattern, path=path, error=str(e))
+            logger.error(
+                "grep_workspace_files_error", pattern=pattern, path=path, error=str(e)
+            )
             return f"Error searching: {e}"
 
     return grep_workspace_files
@@ -692,6 +699,7 @@ def create_grep_workspace_files(store: "SparrowWorkspaceStore"):
 # Helper Functions
 # =============================================================================
 
+
 def _extract_snippet(content: str, query: str, context_chars: int = 100) -> str:
     """Extract a snippet around the first match of query in content."""
     query_lower = query.lower()
@@ -700,7 +708,7 @@ def _extract_snippet(content: str, query: str, context_chars: int = 100) -> str:
     pos = content_lower.find(query_lower)
     if pos == -1:
         # Return start of content if no match found
-        return content[:context_chars * 2]
+        return content[: context_chars * 2]
 
     start = max(0, pos - context_chars)
     end = min(len(content), pos + len(query) + context_chars)
@@ -712,6 +720,7 @@ def _extract_snippet(content: str, query: str, context_chars: int = 100) -> str:
 # =============================================================================
 # Tool Registry
 # =============================================================================
+
 
 def get_workspace_tools(store: "SparrowWorkspaceStore") -> List:
     """Get all workspace tools bound to a workspace store.
@@ -743,6 +752,7 @@ def get_workspace_tools(store: "SparrowWorkspaceStore") -> List:
 # Attachment Caching
 # =============================================================================
 
+
 async def cache_attachment_summary(
     store: "SparrowWorkspaceStore",
     attachment_id: str,
@@ -761,19 +771,25 @@ async def cache_attachment_summary(
     path = f"/knowledge/attachments/{attachment_id}.md"
 
     # Enforce size limit
-    if len(summary.encode('utf-8')) > ATTACHMENT_MAX_SIZE_BYTES:
+    if len(summary.encode("utf-8")) > ATTACHMENT_MAX_SIZE_BYTES:
         summary = summary[:ATTACHMENT_MAX_SIZE_BYTES] + "\n\n[...truncated]"
 
-    await store.write_file(path, summary, metadata={
-        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=ATTACHMENT_TTL_HOURS)).isoformat(),
-        "attachment_id": attachment_id,
-    })
+    await store.write_file(
+        path,
+        summary,
+        metadata={
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(hours=ATTACHMENT_TTL_HOURS)
+            ).isoformat(),
+            "attachment_id": attachment_id,
+        },
+    )
 
     logger.info(
         "attachment_cached",
         attachment_id=attachment_id,
         path=path,
-        size_bytes=len(summary.encode('utf-8')),
+        size_bytes=len(summary.encode("utf-8")),
     )
 
     return f"Cached attachment summary to {path}"
@@ -811,7 +827,9 @@ async def get_cached_attachment(
             expires_at_str = metadata.get("expires_at")
 
             if expires_at_str:
-                expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                expires_at = datetime.fromisoformat(
+                    expires_at_str.replace("Z", "+00:00")
+                )
                 if datetime.now(timezone.utc) > expires_at:
                     logger.debug(
                         "attachment_cache_expired",
@@ -863,7 +881,9 @@ async def cleanup_expired_attachments(
             if item and item.value.get("metadata"):
                 expires_at_str = item.value["metadata"].get("expires_at")
                 if expires_at_str:
-                    expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                    expires_at = datetime.fromisoformat(
+                        expires_at_str.replace("Z", "+00:00")
+                    )
                     if now > expires_at:
                         # Delete expired attachment
                         await store.adelete(namespace, key)

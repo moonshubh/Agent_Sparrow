@@ -42,7 +42,10 @@ def configure_langsmith() -> bool:
         from langsmith import Client
 
         Client()  # Prime the SDK so misconfigurations fail fast
-        logger.info("LangSmith client initialized for project '%s'", os.environ.get("LANGSMITH_PROJECT"))
+        logger.info(
+            "LangSmith client initialized for project '%s'",
+            os.environ.get("LANGSMITH_PROJECT"),
+        )
         _LANGSMITH_READY = True
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("LangSmith client not available: %s", exc)

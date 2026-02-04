@@ -15,7 +15,6 @@ from loguru import logger
 from app.core.config import coordinator_bucket_name, get_registry
 from .model_health import ModelHealth, quota_tracker
 
-
 CoordinatorTask = str
 
 
@@ -63,7 +62,9 @@ class ModelRouter:
     automatically tries the next model in the chain.
     """
 
-    default_models: Dict[CoordinatorTask, str] = field(default_factory=_default_model_map)
+    default_models: Dict[CoordinatorTask, str] = field(
+        default_factory=_default_model_map
+    )
     fallback_chain: Dict[str, Optional[str]] = field(default_factory=_default_fallbacks)
     allowed_models: Optional[Set[str]] = None
 
@@ -102,13 +103,18 @@ class ModelRouter:
             # User override unavailable - log and continue to fallback logic
             logger.warning(
                 "User override model '%s' is unavailable; using fallback selection",
-                user_override
+                user_override,
             )
 
         normalized_task = (task_type or "coordinator").strip().lower()
-        model = self.default_models.get(normalized_task) or self.default_models.get("coordinator")
+        model = self.default_models.get(normalized_task) or self.default_models.get(
+            "coordinator"
+        )
         if not model:
-            logger.warning("Model router missing default for task '%s'; falling back to coordinator", normalized_task)
+            logger.warning(
+                "Model router missing default for task '%s'; falling back to coordinator",
+                normalized_task,
+            )
             registry = get_registry()
             model = registry.coordinator_google.id
 
@@ -166,13 +172,16 @@ class ModelRouter:
             # Only return override if it's available
             if health.available:
                 return ModelSelectionResult(
-                    normalized_task, user_override, health_trace,
-                    fallback_occurred=False, fallback_chain=fallback_chain
+                    normalized_task,
+                    user_override,
+                    health_trace,
+                    fallback_occurred=False,
+                    fallback_chain=fallback_chain,
                 )
             # Override unavailable - log and continue to fallback logic
             logger.warning(
                 "User override model '%s' is unavailable (health check failed); using fallback selection",
-                user_override
+                user_override,
             )
             fallback_occurred = True
             fallback_reason = health.reason or "health_check_failed"
@@ -195,14 +204,18 @@ class ModelRouter:
 
             if health.available:
                 # Track if we ended up using a fallback
-                if candidate != first_candidate or (user_override and candidate != user_override):
+                if candidate != first_candidate or (
+                    user_override and candidate != user_override
+                ):
                     fallback_occurred = True
 
                 return ModelSelectionResult(
-                    normalized_task, candidate, health_trace,
+                    normalized_task,
+                    candidate,
+                    health_trace,
                     fallback_occurred=fallback_occurred,
                     fallback_chain=fallback_chain,
-                    fallback_reason=fallback_reason
+                    fallback_reason=fallback_reason,
                 )
 
             # Model not available, need to fallback
@@ -221,7 +234,9 @@ class ModelRouter:
 
             logger.info(
                 "Model fallback: %s -> %s (reason: %s)",
-                candidate, fallback, fallback_reason
+                candidate,
+                fallback,
+                fallback_reason,
             )
             visited.add(candidate)
             candidate = fallback
@@ -229,15 +244,21 @@ class ModelRouter:
 
         # Either no candidate or last one is exhausted – return the last attempt for transparency.
         registry = get_registry()
-        final_model = candidate or self.default_models.get("coordinator") or registry.coordinator_google.id
+        final_model = (
+            candidate
+            or self.default_models.get("coordinator")
+            or registry.coordinator_google.id
+        )
         if final_model not in fallback_chain:
             fallback_chain.append(final_model)
 
         return ModelSelectionResult(
-            normalized_task, final_model, health_trace,
+            normalized_task,
+            final_model,
+            health_trace,
             fallback_occurred=fallback_occurred,
             fallback_chain=fallback_chain,
-            fallback_reason=fallback_reason or "final_fallback"
+            fallback_reason=fallback_reason or "final_fallback",
         )
 
     @staticmethod
@@ -255,7 +276,9 @@ class ModelRouter:
         if normalized_task in {"embeddings", "embedding"}:
             return "internal.embedding"
 
-        return coordinator_bucket_name(provider, with_subagents=with_subagents, zendesk=zendesk)
+        return coordinator_bucket_name(
+            provider, with_subagents=with_subagents, zendesk=zendesk
+        )
 
 
 # Shared router instance for coordinator + subagents
@@ -271,7 +294,7 @@ class ModelSelectionResult:
     fallback_chain: List[str] = field(default_factory=list)
     fallback_reason: Optional[str] = None
 
-    def trace_dict(self) -> List[Dict[str, Optional[str]]]:
+    def trace_dict(self) -> List[Dict[str, Any]]:
         return [health.as_dict() for health in self.health_trace]
 
     def to_langsmith_metadata(self) -> Dict[str, Any]:

@@ -20,7 +20,9 @@ logger = get_logger(__name__)
 def _build_checkpointer() -> Optional[object]:
     """Select an appropriate checkpointer based on settings."""
     if not settings.checkpointer_enabled:
-        logger.info("Checkpointer disabled via settings; compiling graph without persistence")
+        logger.info(
+            "Checkpointer disabled via settings; compiling graph without persistence"
+        )
         return None
 
     db_url = settings.checkpointer_db_url
@@ -112,7 +114,9 @@ def _build_tool_node():
 
         def _workspace_tools_for_state(self, state: GraphState) -> dict:
             """Build workspace tools bound to the current session/customer."""
-            session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
+            session_id = getattr(state, "session_id", None) or getattr(
+                state, "trace_id", None
+            )
             if not session_id:
                 return {}
 
@@ -120,7 +124,9 @@ def _build_tool_node():
             forwarded = getattr(state, "forwarded_props", {}) or {}
             customer_id = None
             if isinstance(forwarded, dict):
-                customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
+                customer_id = forwarded.get("customer_id") or forwarded.get(
+                    "customerId"
+                )
 
             try:
                 store = SparrowWorkspaceStore(
@@ -145,9 +151,11 @@ def _build_tool_node():
             if not isinstance(last, AIMessage):
                 return {}
 
-            tool_calls = getattr(last, "tool_calls", None) or (
-                (getattr(last, "additional_kwargs", {}) or {}).get("tool_calls")
-            ) or []
+            tool_calls = (
+                getattr(last, "tool_calls", None)
+                or ((getattr(last, "additional_kwargs", {}) or {}).get("tool_calls"))
+                or []
+            )
             if not tool_calls:
                 return {}
 
@@ -155,15 +163,26 @@ def _build_tool_node():
             tool_map.update(self._workspace_tools_for_state(state))
 
             executed = set(
-                (((state.scratchpad or {}).get("_system") or {}).get("_executed_tool_calls") or [])
+                (
+                    ((state.scratchpad or {}).get("_system") or {}).get(
+                        "_executed_tool_calls"
+                    )
+                    or []
+                )
             )
-            pending = [tc for tc in tool_calls if tc.get("id") and tc.get("id") not in executed]
+            pending = [
+                tc for tc in tool_calls if tc.get("id") and tc.get("id") not in executed
+            ]
             if not pending:
                 return {}
 
             # Track tool execution state for observability via middleware
             fallback_session = f"unknown-{uuid.uuid4().hex[:8]}"
-            session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None) or fallback_session
+            session_id = (
+                getattr(state, "session_id", None)
+                or getattr(state, "trace_id", None)
+                or fallback_session
+            )
             state_middleware = get_state_tracking_middleware()
             tracker = state_middleware.get_tracker(session_id)
             tool_names = [tc.get("name") for tc in pending]

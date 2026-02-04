@@ -14,12 +14,11 @@ import threading
 from typing import Any, AsyncGenerator
 
 from ag_ui.core.events import CustomEvent, EventType
-from ag_ui_langgraph.agent import LangGraphAgent
-from ag_ui_langgraph.types import LangGraphEventTypes, State
+from ag_ui_langgraph.agent import LangGraphAgent  # type: ignore[import-untyped]
+from ag_ui_langgraph.types import LangGraphEventTypes, State  # type: ignore[import-untyped]
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 from app.patches.agui_json_safe import make_json_safe_with_cycle_detection
-
 
 _PATCH_FLAG = "_agui_custom_event_patch_applied"
 _PATCH_LOCK = threading.Lock()
@@ -107,38 +106,47 @@ def _normalize_tool_end_output(event: Any) -> Any:
         # Command output - ensure any ToolMessages have a valid name.
         try:
             update = getattr(output, "update", None)
-            messages = update.get("messages") if isinstance(update, dict) else None
-            if isinstance(messages, list):
-                changed = False
-                normalized_messages = []
-                for msg in messages:
-                    if isinstance(msg, ToolMessage):
-                        normalized_msg = _ensure_tool_message_name(msg, fallback_tool_name)
-                        changed = changed or (normalized_msg is not msg)
-                        normalized_messages.append(normalized_msg)
-                    else:
-                        normalized_messages.append(msg)
-                if not changed:
-                    return event
+            if isinstance(update, dict):
+                messages = update.get("messages")
+                if isinstance(messages, list):
+                    changed = False
+                    normalized_messages = []
+                    for msg in messages:
+                        if isinstance(msg, ToolMessage):
+                            normalized_msg = _ensure_tool_message_name(
+                                msg, fallback_tool_name
+                            )
+                            changed = changed or (normalized_msg is not msg)
+                            normalized_messages.append(normalized_msg)
+                        else:
+                            normalized_messages.append(msg)
+                    if not changed:
+                        return event
 
-                new_update = dict(update)
-                new_update["messages"] = normalized_messages
-                normalized = dict(data)
-                normalized["output"] = Command(
-                    graph=getattr(output, "graph", None),
-                    update=new_update,
-                    resume=getattr(output, "resume", None),
-                    goto=getattr(output, "goto", ()),
-                )
-                updated = dict(event)
-                updated["data"] = normalized
-                return updated
+                    new_update = dict(update)
+                    new_update["messages"] = normalized_messages
+                    normalized = dict(data)
+                    normalized["output"] = Command(
+                        graph=getattr(output, "graph", None),
+                        update=new_update,
+                        resume=getattr(output, "resume", None),
+                        goto=getattr(output, "goto", ()),
+                    )
+                    updated = dict(event)
+                    updated["data"] = normalized
+                    return updated
         except Exception:
             # Fall back to leaving the event as-is; downstream will handle failures.
             return event
 
-    if isinstance(output, list) and output and all(isinstance(item, ToolMessage) for item in output):
-        output = [_ensure_tool_message_name(item, fallback_tool_name) for item in output]
+    if (
+        isinstance(output, list)
+        and output
+        and all(isinstance(item, ToolMessage) for item in output)
+    ):
+        output = [
+            _ensure_tool_message_name(item, fallback_tool_name) for item in output
+        ]
         normalized = dict(data)
         normalized["output"] = Command(update={"messages": output})
         updated = dict(event)
@@ -180,7 +188,15 @@ def _patch_get_stream_kwargs() -> None:
         context: Any = None,
         fork: Any = None,
     ):
-        kwargs = original(self, input, subgraphs=subgraphs, version=version, config=config, context=context, fork=fork)
+        kwargs = original(
+            self,
+            input,
+            subgraphs=subgraphs,
+            version=version,
+            config=config,
+            context=context,
+            fork=fork,
+        )
         # Ensure writer-emitted custom events propagate (appear as on_chain_stream with chunk.event == on_custom_event)
         kwargs.setdefault("stream_mode", "custom")
         return kwargs
@@ -202,11 +218,16 @@ def _patch_handle_single_event() -> None:
         # Detect writer-emitted custom events coming through custom stream_mode.
         if safe_event.get("event") == LangGraphEventTypes.OnChainStream:
             chunk = safe_event.get("data", {}).get("chunk")
-            if isinstance(chunk, dict) and chunk.get("event") == LangGraphEventTypes.OnCustomEvent.value:
+            if (
+                isinstance(chunk, dict)
+                and chunk.get("event") == LangGraphEventTypes.OnCustomEvent.value
+            ):
+                name = chunk.get("name")
+                event_name = name if isinstance(name, str) and name else "custom_event"
                 yield self._dispatch_event(
                     CustomEvent(
                         type=EventType.CUSTOM,
-                        name=chunk.get("name"),
+                        name=event_name,
                         value=chunk.get("data"),
                         raw_event=safe_event,
                     )

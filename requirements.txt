@@ -11,39 +11,39 @@ email-validator==2.3.0
 python-dotenv==1.2.1
 
 # Langchain Stack
-langchain==1.2.0
-langchain-core==1.2.5  # langchain-xai 1.1.0 requires langchain-core>=1.1.0
+langchain==1.2.8
+langchain-core==1.2.8  # langchain-xai 1.1.0 requires langchain-core>=1.1.0
 # langchain-community>=0.3.14,<0.4.0  # Removed - conflicts with langchain-core 1.x, not used by unified agent
-langchain-google-genai==4.1.2  # Latest; re-verify Gemini 3 breaking changes
-langchain-xai==1.1.0  # XAI/Grok integration - pinned for fast resolution
-langchain-openai==1.1.6  # Required by langchain-xai 1.x
-langgraph==1.0.5
-langgraph-prebuilt==1.0.5
-langgraph-sdk==0.3.1  # Required for AG-UI protocol
-langsmith==0.5.2
+langchain-google-genai==4.2.0  # Latest; re-verify Gemini 3 breaking changes
+langchain-xai==1.2.2  # XAI/Grok integration - pinned for fast resolution
+langchain-openai==1.1.7  # Required by langchain-xai 1.x
+langgraph==1.0.7
+langgraph-prebuilt==1.0.7
+langgraph-sdk==0.3.3  # Required for AG-UI protocol
+langsmith==0.6.8
 langchain-mcp-adapters==0.2.1  # MCP protocol for Firecrawl tools
 # copilotkit removed - migrated to native AG-UI client
-ag-ui-langgraph==0.0.22  # AG-UI protocol adapter for LangGraph (latest)
+ag-ui-langgraph==0.0.24  # AG-UI protocol adapter for LangGraph (latest)
 ag-ui-protocol==0.1.10  # AG-UI protocol definitions
 
 # Google AI SDK (explicitly required for FeedMe modules only)
-google-genai==1.56.0
-google-ai-generativelanguage==0.9.0  # Required by langchain-google-genai>=0.7
+google-genai==1.61.0
+google-ai-generativelanguage==0.10.0  # Required by langchain-google-genai>=0.7
 
 # OpenAI SDK
-openai==2.14.0  # Latest OpenAI SDK (v2 responses have breaking changes)
+openai==2.16.0  # Latest OpenAI SDK (v2 responses have breaking changes)
 
 # Deep Agents (>=0.2.8 for Skills support)
-deepagents==0.3.1
+deepagents==0.3.10
 
 # Torch (CPU version - comment out if using GPU)
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.9.1+cpu
-torchvision==0.24.1+cpu
+torch==2.9.1
+torchvision==0.24.1
 
 # Database & Auth
-supabase==2.27.0
-supabase-auth==2.27.0  # required for direct supabase_auth imports (supabase-py 2.24)
+supabase==2.27.3
+supabase-auth==2.27.3  # required for direct supabase_auth imports (supabase-py 2.24)
 qdrant-client==1.16.2
 PyJWT==2.10.1
 python-jose[cryptography]==3.5.0
@@ -60,8 +60,8 @@ asyncpg==0.31.0
 # vecs==0.4.2  # Conflicts with pgvector 0.4.1, requires pgvector==0.1.*
 
 # External Tools
-tavily-python==0.7.17
-firecrawl-py==4.12.0
+tavily-python==0.7.21
+firecrawl-py==4.14.0
 minimax-coding-plan-mcp==0.0.3
 
 # HTML Parsing (for Zendesk ticket support)

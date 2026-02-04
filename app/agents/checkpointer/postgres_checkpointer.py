@@ -9,4 +9,3 @@ from app.agents.harness.persistence.postgres_checkpointer import (
 )
 
 __all__ = ["CheckpointResult", "SupabaseCheckpointer", "create_connection_pool"]
-

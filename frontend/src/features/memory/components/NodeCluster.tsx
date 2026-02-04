@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { Html } from '@react-three/drei';
-import { useMemo, type RefObject } from 'react';
-import * as THREE from 'three';
-import type { LODLevel } from '../hooks/useLOD';
-import type { TreeCluster3D } from '../hooks/useTree3DLayout';
+import { Html } from "@react-three/drei";
+import { useMemo, type RefObject } from "react";
+import * as THREE from "three";
+import type { LODLevel } from "../hooks/useLOD";
+import type { TreeCluster3D } from "../hooks/useTree3DLayout";
 
-const CLUSTER_COLOR = new THREE.Color('#22d3ee');
+const CLUSTER_COLOR = new THREE.Color("#22d3ee");
 
 export function NodeCluster({
   cluster,
@@ -30,12 +30,18 @@ export function NodeCluster({
   onControlsHoverChange?: (hovered: boolean) => void;
 }) {
   const opacity = ghosted ? 0.12 : dimmed ? 0.18 : hovered ? 0.95 : 0.85;
-  const emissiveIntensity = ghosted ? 0.02 : dimmed ? 0.05 : hovered ? 0.55 : 0.28;
+  const emissiveIntensity = ghosted
+    ? 0.02
+    : dimmed
+      ? 0.05
+      : hovered
+        ? 0.55
+        : 0.28;
 
   const material = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: new THREE.Color('#0b1220'),
+        color: new THREE.Color("#0b1220"),
         roughness: 0.4,
         metalness: 0.15,
         transparent: true,
@@ -43,7 +49,7 @@ export function NodeCluster({
         emissive: CLUSTER_COLOR,
         emissiveIntensity,
       }),
-    [emissiveIntensity, opacity]
+    [emissiveIntensity, opacity],
   );
 
   const glowMaterial = useMemo(
@@ -55,10 +61,10 @@ export function NodeCluster({
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       }),
-    [ghosted, hovered]
+    [ghosted, hovered],
   );
 
-  const radius = lod === 'low' ? 0.26 : lod === 'medium' ? 0.32 : 0.36;
+  const radius = lod === "low" ? 0.26 : lod === "medium" ? 0.32 : 0.36;
 
   return (
     <group
@@ -80,7 +86,9 @@ export function NodeCluster({
 
       {showLabel && (
         <Html position={[0, 1.05, 0]} center portal={htmlPortal}>
-          <div className="particle-tree-cluster-label">+{cluster.memberCount}</div>
+          <div className="particle-tree-cluster-label">
+            +{cluster.memberCount}
+          </div>
         </Html>
       )}
 
@@ -104,9 +112,9 @@ export function NodeCluster({
               type="button"
               className="particle-tree-node-control particle-tree-node-control--expand"
               onClick={() => onToggleExpanded(cluster.id)}
-              title={cluster.isExpanded ? 'Collapse cluster' : 'Expand cluster'}
+              title={cluster.isExpanded ? "Collapse cluster" : "Expand cluster"}
             >
-              {cluster.isExpanded ? '−' : '+'}
+              {cluster.isExpanded ? "−" : "+"}
             </button>
           </div>
         </Html>

@@ -1,15 +1,20 @@
-'use client'
+"use client";
 
-import { useAuth } from '@/features/auth/hooks/useAuth'
+import { useAuth } from "@/features/auth/hooks/useAuth";
 
 export const DevModeIndicator: React.FC = () => {
-  const { user } = useAuth()
-  const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
-  const devMode = process.env.NEXT_PUBLIC_DEV_MODE === 'true'
+  const { user } = useAuth();
+  const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === "true";
+  const devMode = process.env.NEXT_PUBLIC_DEV_MODE === "true";
 
   // Only show in development bypass mode
-  if (!bypassAuth || !devMode || !user || user.app_metadata?.provider !== 'bypass') {
-    return null
+  if (
+    !bypassAuth ||
+    !devMode ||
+    !user ||
+    user.app_metadata?.provider !== "bypass"
+  ) {
+    return null;
   }
 
   return (
@@ -26,5 +31,5 @@ export const DevModeIndicator: React.FC = () => {
         </div>
       </div>
     </div>
-  )
-}
+  );
+};

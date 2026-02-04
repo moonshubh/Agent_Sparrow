@@ -1,16 +1,16 @@
-'use client';
+"use client";
 
-import React, { useState } from 'react';
-import { cn } from '@/shared/lib/utils';
-import { X, FileText, File, Image as ImageIcon } from 'lucide-react';
-import type { AttachmentInput } from '@/services/ag-ui/types';
+import React, { useState } from "react";
+import { cn } from "@/shared/lib/utils";
+import { X, FileText, File, Image as ImageIcon } from "lucide-react";
+import type { AttachmentInput } from "@/services/ag-ui/types";
 
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from "framer-motion";
 
 interface AttachmentPreviewProps {
   attachment: AttachmentInput;
   onRemove?: () => void;
-  variant?: 'input' | 'message' | 'stacked';
+  variant?: "input" | "message" | "stacked";
   className?: string;
   index?: number;
   total?: number;
@@ -19,20 +19,22 @@ interface AttachmentPreviewProps {
 /**
  * Determines the type of attachment based on MIME type
  */
-function getAttachmentType(mimeType: string): 'image' | 'pdf' | 'text' | 'file' {
+function getAttachmentType(
+  mimeType: string,
+): "image" | "pdf" | "text" | "file" {
   const mime = mimeType.toLowerCase();
-  if (mime.startsWith('image/')) return 'image';
-  if (mime === 'application/pdf') return 'pdf';
-  if (mime.startsWith('text/') || mime === 'application/json') return 'text';
-  return 'file';
+  if (mime.startsWith("image/")) return "image";
+  if (mime === "application/pdf") return "pdf";
+  if (mime.startsWith("text/") || mime === "application/json") return "text";
+  return "file";
 }
 
 /**
  * Gets file extension from filename
  */
 function getFileExtension(filename: string): string {
-  const parts = filename.split('.');
-  return parts.length > 1 ? parts[parts.length - 1].toUpperCase() : '';
+  const parts = filename.split(".");
+  return parts.length > 1 ? parts[parts.length - 1].toUpperCase() : "";
 }
 
 /**
@@ -49,7 +51,7 @@ function getFileExtension(filename: string): string {
 export function AttachmentPreview({
   attachment,
   onRemove,
-  variant = 'input',
+  variant = "input",
   className,
   index = 0,
   total = 1,
@@ -59,34 +61,39 @@ export function AttachmentPreview({
 
   const type = getAttachmentType(attachment.mime_type);
   const extension = getFileExtension(attachment.name);
-  const isImage = type === 'image' && !imageError;
+  const isImage = type === "image" && !imageError;
 
   // Compact variant for input bar
-  const isInputVariant = variant === 'input';
-  const isStacked = variant === 'stacked';
-  const sizeInKb = attachment.size != null ? Math.round((Number(attachment.size) || 0) / 1024) : null;
+  const isInputVariant = variant === "input";
+  const isStacked = variant === "stacked";
+  const sizeInKb =
+    attachment.size != null
+      ? Math.round((Number(attachment.size) || 0) / 1024)
+      : null;
 
   // Stacked positioning styles
-  const stackedStyle = isStacked ? {
-    zIndex: total - index,
-    originX: 1, // Transform origin bottom right
-    originY: 1,
-    rotate: index * 6, // Fan out UPWARDS (positive rotation moves left side up)
-    x: -(index * 4), // Shift left to expose more
-    y: -(index * 4), // Shift up to expose more
-    scale: 1 - (index * 0.02), // Very slight scale down
-  } : {};
+  const stackedStyle = isStacked
+    ? {
+        zIndex: total - index,
+        originX: 1, // Transform origin bottom right
+        originY: 1,
+        rotate: index * 6, // Fan out UPWARDS (positive rotation moves left side up)
+        x: -(index * 4), // Shift left to expose more
+        y: -(index * 4), // Shift up to expose more
+        scale: 1 - index * 0.02, // Very slight scale down
+      }
+    : {};
 
   const Content = (
     <div
       className={cn(
-        'relative group rounded-lg overflow-hidden transition-all duration-200',
+        "relative group rounded-lg overflow-hidden transition-all duration-200",
         isInputVariant
-          ? 'w-16 h-16 bg-secondary/80 border border-border hover:border-terracotta-400/50'
+          ? "w-16 h-16 bg-secondary/80 border border-border hover:border-terracotta-400/50"
           : isStacked
-            ? 'w-52 h-16 bg-card border border-border/50 shadow-lg flex items-center px-3' // Wide card for stack with stronger shadow
-            : 'w-20 h-20 bg-secondary/60 border border-border/50',
-        className
+            ? "w-52 h-16 bg-card border border-border/50 shadow-lg flex items-center px-3" // Wide card for stack with stronger shadow
+            : "w-20 h-20 bg-secondary/60 border border-border/50",
+        className,
       )}
       style={isStacked ? undefined : undefined} // Style handled by motion div for stacked
       onMouseEnter={() => setIsHovered(true)}
@@ -94,7 +101,12 @@ export function AttachmentPreview({
     >
       {/* Image Thumbnail */}
       {isImage && (
-        <div className={cn("relative overflow-hidden rounded-md", isStacked ? "w-10 h-10 mr-3 flex-shrink-0" : "w-full h-full")}>
+        <div
+          className={cn(
+            "relative overflow-hidden rounded-md",
+            isStacked ? "w-10 h-10 mr-3 flex-shrink-0" : "w-full h-full",
+          )}
+        >
           <img
             src={attachment.data_url}
             alt={attachment.name}
@@ -106,31 +118,47 @@ export function AttachmentPreview({
 
       {/* Non-Image File Display */}
       {!isImage && (
-        <div className={cn(
-          "flex items-center justify-center rounded-md",
-          isStacked ? "w-10 h-10 mr-3 flex-shrink-0 bg-secondary/50" : "w-full h-full flex-col p-1.5 gap-0.5"
-        )}>
+        <div
+          className={cn(
+            "flex items-center justify-center rounded-md",
+            isStacked
+              ? "w-10 h-10 mr-3 flex-shrink-0 bg-secondary/50"
+              : "w-full h-full flex-col p-1.5 gap-0.5",
+          )}
+        >
           {/* File Icon */}
-          <div className={cn(
-            'flex items-center justify-center rounded-md',
-            isInputVariant ? 'w-8 h-8' : isStacked ? 'w-6 h-6' : 'w-10 h-10',
-            type === 'pdf' && 'bg-red-500/20 text-red-400',
-            type === 'text' && 'bg-blue-500/20 text-blue-400',
-            type === 'file' && 'bg-muted text-muted-foreground'
-          )}>
-            {type === 'pdf' && <FileText className={isInputVariant ? 'w-4 h-4' : 'w-4 h-4'} />}
-            {type === 'text' && <File className={isInputVariant ? 'w-4 h-4' : 'w-4 h-4'} />}
-            {type === 'file' && <File className={isInputVariant ? 'w-4 h-4' : 'w-4 h-4'} />}
-            {imageError && <ImageIcon className={isInputVariant ? 'w-4 h-4' : 'w-4 h-4'} />}
+          <div
+            className={cn(
+              "flex items-center justify-center rounded-md",
+              isInputVariant ? "w-8 h-8" : isStacked ? "w-6 h-6" : "w-10 h-10",
+              type === "pdf" && "bg-red-500/20 text-red-400",
+              type === "text" && "bg-blue-500/20 text-blue-400",
+              type === "file" && "bg-muted text-muted-foreground",
+            )}
+          >
+            {type === "pdf" && (
+              <FileText className={isInputVariant ? "w-4 h-4" : "w-4 h-4"} />
+            )}
+            {type === "text" && (
+              <File className={isInputVariant ? "w-4 h-4" : "w-4 h-4"} />
+            )}
+            {type === "file" && (
+              <File className={isInputVariant ? "w-4 h-4" : "w-4 h-4"} />
+            )}
+            {imageError && (
+              <ImageIcon className={isInputVariant ? "w-4 h-4" : "w-4 h-4"} />
+            )}
           </div>
 
           {/* Extension Badge (Only for non-stacked or if space permits) */}
           {!isStacked && extension && (
-            <span className={cn(
-              'font-mono font-semibold uppercase',
-              isInputVariant ? 'text-[8px]' : 'text-[10px]',
-              'text-muted-foreground'
-            )}>
+            <span
+              className={cn(
+                "font-mono font-semibold uppercase",
+                isInputVariant ? "text-[8px]" : "text-[10px]",
+                "text-muted-foreground",
+              )}
+            >
               {extension}
             </span>
           )}
@@ -140,9 +168,11 @@ export function AttachmentPreview({
       {/* Stacked File Info */}
       {isStacked && (
         <div className="flex-1 min-w-0 flex flex-col justify-center">
-          <p className="text-xs font-medium text-foreground truncate">{attachment.name}</p>
+          <p className="text-xs font-medium text-foreground truncate">
+            {attachment.name}
+          </p>
           <p className="text-[10px] text-muted-foreground uppercase">
-            {extension} • {sizeInKb !== null ? `${sizeInKb}KB` : '-'}
+            {extension} • {sizeInKb !== null ? `${sizeInKb}KB` : "-"}
           </p>
         </div>
       )}
@@ -151,10 +181,10 @@ export function AttachmentPreview({
       {!isStacked && (
         <div
           className={cn(
-            'absolute bottom-0 left-0 right-0 bg-background/90 backdrop-blur-sm',
-            'px-1 py-0.5 transition-all duration-200',
-            isHovered ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1',
-            isInputVariant ? 'text-[9px]' : 'text-[10px]'
+            "absolute bottom-0 left-0 right-0 bg-background/90 backdrop-blur-sm",
+            "px-1 py-0.5 transition-all duration-200",
+            isHovered ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1",
+            isInputVariant ? "text-[9px]" : "text-[10px]",
           )}
         >
           <p className="truncate text-foreground/90 text-center">
@@ -172,15 +202,15 @@ export function AttachmentPreview({
             onRemove();
           }}
           className={cn(
-            'absolute top-0.5 right-0.5 rounded-full',
-            'bg-background/80 hover:bg-destructive text-foreground hover:text-destructive-foreground',
-            'transition-all duration-200 shadow-sm',
-            isInputVariant ? 'p-0.5' : 'p-1',
-            isHovered ? 'opacity-100 scale-100' : 'opacity-0 scale-75'
+            "absolute top-0.5 right-0.5 rounded-full",
+            "bg-background/80 hover:bg-destructive text-foreground hover:text-destructive-foreground",
+            "transition-all duration-200 shadow-sm",
+            isInputVariant ? "p-0.5" : "p-1",
+            isHovered ? "opacity-100 scale-100" : "opacity-0 scale-75",
           )}
           aria-label={`Remove ${attachment.name}`}
         >
-          <X className={isInputVariant ? 'w-3 h-3' : 'w-3.5 h-3.5'} />
+          <X className={isInputVariant ? "w-3 h-3" : "w-3.5 h-3.5"} />
         </button>
       )}
     </div>
@@ -219,7 +249,7 @@ export function AttachmentPreview({
 interface AttachmentPreviewListProps {
   attachments: AttachmentInput[];
   onRemove?: (index: number) => void;
-  variant?: 'input' | 'message' | 'stacked';
+  variant?: "input" | "message" | "stacked";
   className?: string;
 }
 
@@ -229,18 +259,18 @@ interface AttachmentPreviewListProps {
 export function AttachmentPreviewList({
   attachments,
   onRemove,
-  variant = 'input',
+  variant = "input",
   className,
 }: AttachmentPreviewListProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   if (!attachments || attachments.length === 0) return null;
 
-  if (variant === 'stacked') {
+  if (variant === "stacked") {
     // If expanded, show as a grid/list
     if (isExpanded) {
       return (
-        <div className={cn('flex flex-col items-end mb-2', className)}>
+        <div className={cn("flex flex-col items-end mb-2", className)}>
           <button
             type="button"
             onClick={() => setIsExpanded(false)}
@@ -268,12 +298,14 @@ export function AttachmentPreviewList({
 
     // Calculate dynamic spacing based on number of items to avoid overlap with "See All"
     // We estimate the height at the button's position (approx 70px from right)
-    // Formula: (n-1) * 11 + 4px buffer. 
+    // Formula: (n-1) * 11 + 4px buffer.
     // This accounts for vertical offset (4px/item) and rotation height at 70px width.
     const buttonMargin = Math.max(0, (visibleAttachments.length - 1) * 11 + 4);
 
     return (
-      <div className={cn('relative w-64 mb-2 flex flex-col items-end', className)}>
+      <div
+        className={cn("relative w-64 mb-2 flex flex-col items-end", className)}
+      >
         {/* See All Link */}
         {hasMore && (
           <button
@@ -304,7 +336,7 @@ export function AttachmentPreviewList({
   }
 
   return (
-    <div className={cn('flex flex-wrap gap-2', className)}>
+    <div className={cn("flex flex-wrap gap-2", className)}>
       <AnimatePresence mode="popLayout">
         {attachments.map((attachment, index) => (
           <AttachmentPreview

@@ -2,32 +2,50 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from langchain.agents.middleware import AgentMiddleware, AgentState
-from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
+from langchain.agents.middleware.types import (
+    ModelRequest,
+    ModelResponse,
+    ToolCallRequest,
+)
 from langchain_core.messages import BaseMessage, ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Command, Overwrite
 from loguru import logger
 
 
+def _noop_redact_pii(text: str) -> str:
+    return text
+
+
+def _noop_redact_pii_from_dict(data: Any) -> Any:
+    return data
+
+
+_redact_pii: Callable[[str], str]
+_redact_pii_from_dict: Callable[[Any], Any]
+
 try:  # pragma: no cover - dependency wired in Phase 2
-    from app.security.pii_redactor import redact_pii, redact_pii_from_dict
+    from app.security.pii_redactor import (
+        redact_pii as _redact_pii,
+        redact_pii_from_dict as _redact_pii_from_dict,
+    )
 except ImportError as e:  # pragma: no cover - fallback until module exists
     import logging
+
     logging.error(
         "Failed to import PII redactor from app.security.pii_redactor: %s. "
         "Using no-op fallback which WILL NOT redact sensitive data. "
         "This is unsafe for production.",
-        e
+        e,
     )
+    _redact_pii = _noop_redact_pii
+    _redact_pii_from_dict = _noop_redact_pii_from_dict
 
-    def redact_pii(text: str) -> str:
-        return text
-
-    def redact_pii_from_dict(payload: Any) -> Any:
-        return payload
+redact_pii: Callable[..., str] = _redact_pii
+redact_pii_from_dict: Callable[..., Any] = _redact_pii_from_dict
 
 
 class SecurityRedactionMiddleware(AgentMiddleware[AgentState[Any], Any]):
@@ -37,16 +55,24 @@ class SecurityRedactionMiddleware(AgentMiddleware[AgentState[Any], Any]):
     def name(self) -> str:  # pragma: no cover - simple override
         return "security-redaction"
 
-    def before_agent(self, state: AgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:  # noqa: ARG002
+    def before_agent(
+        self, state: AgentState, runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:  # noqa: ARG002
         return None
 
-    async def abefore_agent(self, state: AgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:  # noqa: ARG002
+    async def abefore_agent(
+        self, state: AgentState, runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:  # noqa: ARG002
         return None
 
-    def after_agent(self, state: AgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:  # noqa: ARG002
+    def after_agent(
+        self, state: AgentState, runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:  # noqa: ARG002
         return self._redact_state_messages(state)
 
-    async def aafter_agent(self, state: AgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:  # noqa: ARG002
+    async def aafter_agent(
+        self, state: AgentState, runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:  # noqa: ARG002
         return self._redact_state_messages(state)
 
     def wrap_model_call(
@@ -112,16 +138,20 @@ class SecurityRedactionMiddleware(AgentMiddleware[AgentState[Any], Any]):
             mutated = mutated or cleaned is not msg
             cleaned_messages.append(cleaned)
         if mutated:
-            logger.info("security_redaction_applied_model_response", count=len(cleaned_messages))
+            logger.info(
+                "security_redaction_applied_model_response", count=len(cleaned_messages)
+            )
             return ModelResponse(  # type: ignore[call-arg]
                 result=cleaned_messages,
                 structured_response=response.structured_response,
             )
         return response
 
-    def _redact_tool_result(self, result: ToolMessage | Command) -> ToolMessage | Command:
+    def _redact_tool_result(
+        self, result: ToolMessage | Command
+    ) -> ToolMessage | Command:
         if isinstance(result, ToolMessage):
-            return self._redact_message(result)
+            return cast(ToolMessage, self._redact_message(result))
         return result
 
     def _redact_message(self, message: BaseMessage) -> BaseMessage:

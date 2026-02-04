@@ -21,7 +21,7 @@ export const normalizeLegacyMemoryContent = (content: string): string => {
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
     if (!trimmed) {
-      normalized.push('');
+      normalized.push("");
       continue;
     }
 
@@ -34,8 +34,11 @@ export const normalizeLegacyMemoryContent = (content: string): string => {
     if (match && shouldConvertLabel(match[1])) {
       const label = match[1].trim();
       const rest = match[2]?.trim();
-      if (normalized.length > 0 && normalized[normalized.length - 1].trim() !== '') {
-        normalized.push('');
+      if (
+        normalized.length > 0 &&
+        normalized[normalized.length - 1].trim() !== ""
+      ) {
+        normalized.push("");
       }
       normalized.push(`### ${label}`);
       if (rest) {
@@ -52,5 +55,8 @@ export const normalizeLegacyMemoryContent = (content: string): string => {
     return content;
   }
 
-  return normalized.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return normalized
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 };

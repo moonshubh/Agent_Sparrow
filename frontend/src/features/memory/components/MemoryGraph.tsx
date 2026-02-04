@@ -1,7 +1,13 @@
-'use client';
+"use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence, useDragControls } from 'framer-motion';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { motion, AnimatePresence, useDragControls } from "framer-motion";
 import {
   ArrowLeft,
   Check,
@@ -21,31 +27,37 @@ import {
   X,
   ZoomIn,
   ZoomOut,
-} from 'lucide-react';
-import { MemoryTipTapEditor } from './MemoryTipTapEditor';
-import { normalizeLegacyMemoryContent } from '../lib/legacyMemoryFormatting';
+} from "lucide-react";
+import { MemoryTipTapEditor } from "./MemoryTipTapEditor";
+import { normalizeLegacyMemoryContent } from "../lib/legacyMemoryFormatting";
 import {
   useAcknowledgeEntity,
   useEntityRelatedMemories,
   useMemory,
   useMemoryGraph,
   useTreeState,
-} from '../hooks';
-import type { TreeCameraState } from '../hooks/useTreeState';
-import { ALL_ENTITY_TYPES, ENTITY_COLORS, ENTITY_LABELS } from '../types';
-import type { EntityType, GraphNode, Memory, RelationshipType, TreeEdge } from '../types';
-import { buildRadialTree } from '../lib/treeTransform';
-import { isMemoryEdited } from '../lib/memoryFlags';
-import { ConfidenceBadge } from './ConfidenceBadge';
-import { MemoryForm } from './MemoryForm';
-import MemoryTree3D from './MemoryTree3D';
-import { SourceBadge } from './SourceBadge';
-import { OrphanSidebar } from './OrphanSidebar';
-import { ChildrenPopover } from './ChildrenPopover';
-import { type TreeTransformResult } from '../types';
-import { RelationshipEditor } from './RelationshipEditor';
+} from "../hooks";
+import type { TreeCameraState } from "../hooks/useTreeState";
+import { ALL_ENTITY_TYPES, ENTITY_COLORS, ENTITY_LABELS } from "../types";
+import type {
+  EntityType,
+  GraphNode,
+  Memory,
+  RelationshipType,
+  TreeEdge,
+} from "../types";
+import { buildRadialTree } from "../lib/treeTransform";
+import { isMemoryEdited } from "../lib/memoryFlags";
+import { ConfidenceBadge } from "./ConfidenceBadge";
+import { MemoryForm } from "./MemoryForm";
+import MemoryTree3D from "./MemoryTree3D";
+import { SourceBadge } from "./SourceBadge";
+import { OrphanSidebar } from "./OrphanSidebar";
+import { ChildrenPopover } from "./ChildrenPopover";
+import { type TreeTransformResult } from "../types";
+import { RelationshipEditor } from "./RelationshipEditor";
 
-const MemoryTableFallback = React.lazy(() => import('./MemoryTable'));
+const MemoryTableFallback = React.lazy(() => import("./MemoryTable"));
 
 interface MemoryGraphProps {
   entityFilter?: readonly EntityType[];
@@ -55,8 +67,14 @@ interface MemoryGraphProps {
   onEntityFilterChange?: (type: EntityType) => void;
   onSelectAllEntities?: () => void;
   onDeselectAllEntities?: () => void;
-  onInspectMemoryFromRelationship?: (memoryId: string, relationshipId: string) => void;
-  pendingRelationshipOpen?: { relationshipId: string; tab?: 'edit' | 'ai' | 'evidence' } | null;
+  onInspectMemoryFromRelationship?: (
+    memoryId: string,
+    relationshipId: string,
+  ) => void;
+  pendingRelationshipOpen?: {
+    relationshipId: string;
+    tab?: "edit" | "ai" | "evidence";
+  } | null;
   onPendingRelationshipOpenHandled?: () => void;
 }
 
@@ -73,14 +91,18 @@ export default function MemoryGraph({
   onPendingRelationshipOpenHandled,
 }: MemoryGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const htmlPortalRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
+  const htmlPortalRef = useRef<HTMLDivElement>(
+    null as unknown as HTMLDivElement,
+  );
   const particleControlsRef = useRef<{
     zoomIn: () => void;
     zoomOut: () => void;
     reset: () => void;
   } | null>(null);
   const nodeDetailDragControls = useDragControls();
-  const [inspectedMemoryId, setInspectedMemoryId] = useState<string | null>(null);
+  const [inspectedMemoryId, setInspectedMemoryId] = useState<string | null>(
+    null,
+  );
 
   const MAX_CHILDREN_VISIBLE = 15;
   const MAX_DEPTH = 6;
@@ -95,17 +117,19 @@ export default function MemoryGraph({
   const setCamera = treeState.setCamera;
   const persistTreeState = treeState.persist;
 
-  const [nodePanelView, setNodePanelView] = useState<'details' | 'related'>(
-    'details'
+  const [nodePanelView, setNodePanelView] = useState<"details" | "related">(
+    "details",
   );
   const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
   const [filterPanelExpanded, setFilterPanelExpanded] = useState(false);
   const [orphansOpen, setOrphansOpen] = useState(false);
   const [modeLegendExpanded, setModeLegendExpanded] = useState(false);
-  const [childrenPopoverNodeId, setChildrenPopoverNodeId] = useState<string | null>(null);
+  const [childrenPopoverNodeId, setChildrenPopoverNodeId] = useState<
+    string | null
+  >(null);
   const [lastExpansionEvent, setLastExpansionEvent] = useState<{
     nodeId: string;
-    action: 'expand' | 'collapse';
+    action: "expand" | "collapse";
     at: number;
   } | null>(null);
 
@@ -116,13 +140,14 @@ export default function MemoryGraph({
     weight: number;
   };
 
-  const [relationshipEditorEdge, setRelationshipEditorEdge] = useState<TreeEdge | null>(null);
-  const [relationshipEditorSeed, setRelationshipEditorSeed] = useState<
-    { relationshipId: string; tab?: 'edit' | 'ai' | 'evidence' } | null
-  >(null);
-  const [relationshipPreviewOverrides, setRelationshipPreviewOverrides] = useState<
-    Record<string, RelationshipPreviewOverride>
-  >({});
+  const [relationshipEditorEdge, setRelationshipEditorEdge] =
+    useState<TreeEdge | null>(null);
+  const [relationshipEditorSeed, setRelationshipEditorSeed] = useState<{
+    relationshipId: string;
+    tab?: "edit" | "ai" | "evidence";
+  } | null>(null);
+  const [relationshipPreviewOverrides, setRelationshipPreviewOverrides] =
+    useState<Record<string, RelationshipPreviewOverride>>({});
 
   const filterEntityTypes = useMemo(() => {
     if (availableEntityTypes && availableEntityTypes.length > 0) {
@@ -139,7 +164,8 @@ export default function MemoryGraph({
   }, [entityFilter, filterEntityTypes]);
 
   const isAllSelected =
-    filterEntityTypes.length > 0 && selectedEntityCount === filterEntityTypes.length;
+    filterEntityTypes.length > 0 &&
+    selectedEntityCount === filterEntityTypes.length;
 
   // Fetch graph data with polling
   const { data, isLoading, error, refetch } = useMemoryGraph({
@@ -147,10 +173,10 @@ export default function MemoryGraph({
   });
 
   const webglAvailable = useMemo(() => {
-    if (typeof window === 'undefined') return true;
+    if (typeof window === "undefined") return true;
     try {
-      const canvas = document.createElement('canvas');
-      return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl'));
+      const canvas = document.createElement("canvas");
+      return Boolean(canvas.getContext("webgl2") || canvas.getContext("webgl"));
     } catch {
       return false;
     }
@@ -217,13 +243,22 @@ export default function MemoryGraph({
   }, [searchMatchIds, selectedNodeId]);
 
   const childrenPopoverTitle = useMemo(() => {
-    if (!treeResult || !childrenPopoverNodeId) return 'Connections';
-    const nodeLabel = treeResult.byId.get(childrenPopoverNodeId)?.node.displayLabel;
-    return nodeLabel ? `Connections · ${nodeLabel}` : 'Connections';
+    if (!treeResult || !childrenPopoverNodeId) return "Connections";
+    const nodeLabel = treeResult.byId.get(childrenPopoverNodeId)?.node
+      .displayLabel;
+    return nodeLabel ? `Connections · ${nodeLabel}` : "Connections";
   }, [childrenPopoverNodeId, treeResult]);
 
   const handleRelationshipPreviewChange = useCallback(
-    (relationshipId: string, request: { source_entity_id: string; target_entity_id: string; relationship_type: RelationshipType; weight: number }) => {
+    (
+      relationshipId: string,
+      request: {
+        source_entity_id: string;
+        target_entity_id: string;
+        relationship_type: RelationshipType;
+        weight: number;
+      },
+    ) => {
       setRelationshipPreviewOverrides((prev) => ({
         ...prev,
         [relationshipId]: {
@@ -234,7 +269,7 @@ export default function MemoryGraph({
         },
       }));
     },
-    []
+    [],
   );
 
   const handleRelationshipPreviewClear = useCallback(() => {
@@ -250,27 +285,31 @@ export default function MemoryGraph({
 
     const acknowledgedMs = Date.parse(resolvedSelectedNode.acknowledgedAt);
     const modifiedMs = Date.parse(resolvedSelectedNode.lastModifiedAt);
-    if (!Number.isFinite(acknowledgedMs) || !Number.isFinite(modifiedMs)) return true;
+    if (!Number.isFinite(acknowledgedMs) || !Number.isFinite(modifiedMs))
+      return true;
 
     return acknowledgedMs >= modifiedMs;
   }, [resolvedSelectedNode]);
 
-  const relatedMemoriesQuery = useEntityRelatedMemories(resolvedSelectedNode?.id ?? '', {
-    enabled: Boolean(resolvedSelectedNode) && nodePanelView === 'related',
-    limit: 25,
-  });
+  const relatedMemoriesQuery = useEntityRelatedMemories(
+    resolvedSelectedNode?.id ?? "",
+    {
+      enabled: Boolean(resolvedSelectedNode) && nodePanelView === "related",
+      limit: 25,
+    },
+  );
 
-  const inspectedMemoryQuery = useMemory(inspectedMemoryId ?? '', {
+  const inspectedMemoryQuery = useMemory(inspectedMemoryId ?? "", {
     enabled: Boolean(inspectedMemoryId),
   });
 
   const formatDateTime = useCallback((dateStr: string) => {
-    return new Date(dateStr).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+    return new Date(dateStr).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   }, []);
 
@@ -279,11 +318,11 @@ export default function MemoryGraph({
     if (!el) return;
 
     if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => { });
+      document.exitFullscreen().catch(() => {});
       return;
     }
 
-    el.requestFullscreen?.().catch(() => { });
+    el.requestFullscreen?.().catch(() => {});
   }, []);
 
   const handleCameraStateChange = useCallback(
@@ -291,19 +330,19 @@ export default function MemoryGraph({
       setCamera(next);
       persistTreeState();
     },
-    [persistTreeState, setCamera]
+    [persistTreeState, setCamera],
   );
 
   const handleNodeClick = useCallback(
     (node: GraphNode) => {
       setSelectedNodeId(node.id);
-      setNodePanelView('details');
+      setNodePanelView("details");
       setRelationshipEditorSeed(null);
       setRelationshipEditorEdge(null);
       setRelationshipPreviewOverrides({});
       onNodeClick?.(node);
     },
-    [onNodeClick, setSelectedNodeId]
+    [onNodeClick, setSelectedNodeId],
   );
 
   const selectNodeById = useCallback(
@@ -312,7 +351,7 @@ export default function MemoryGraph({
       if (!node) return;
       handleNodeClick(node);
     },
-    [handleNodeClick, visualData.nodes]
+    [handleNodeClick, visualData.nodes],
   );
 
   useEffect(() => {
@@ -334,19 +373,22 @@ export default function MemoryGraph({
     if (!pendingRelationshipOpen?.relationshipId || !treeResult) return null;
     return (
       treeResult.treeEdges.find((edge) =>
-        edge.relationships.some((rel) => rel.id === pendingRelationshipOpen.relationshipId)
+        edge.relationships.some(
+          (rel) => rel.id === pendingRelationshipOpen.relationshipId,
+        ),
       ) ?? null
     );
   }, [pendingRelationshipOpen?.relationshipId, treeResult]);
 
-  const effectiveRelationshipEditorEdge = relationshipEditorEdge ?? pendingRelationshipEdge;
+  const effectiveRelationshipEditorEdge =
+    relationshipEditorEdge ?? pendingRelationshipEdge;
   const effectiveRelationshipEditorSeed = relationshipEditorEdge
     ? relationshipEditorSeed
-    : pendingRelationshipOpen ?? relationshipEditorSeed;
+    : (pendingRelationshipOpen ?? relationshipEditorSeed);
 
   const toggleViewMode = useCallback(() => {
     setViewMode((prev) =>
-      prev === 'celebrate_strengths' ? 'surface_gaps' : 'celebrate_strengths'
+      prev === "celebrate_strengths" ? "surface_gaps" : "celebrate_strengths",
     );
   }, [setViewMode]);
 
@@ -362,35 +404,38 @@ export default function MemoryGraph({
       if (!target) return false;
       if (!(target instanceof HTMLElement)) return false;
       return Boolean(
-        target.closest('input, textarea, select, [contenteditable="true"]')
+        target.closest('input, textarea, select, [contenteditable="true"]'),
       );
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
 
-      if (event.key === 'Escape') {
+      if (event.key === "Escape") {
         event.preventDefault();
         setEditingMemory(null);
         setRelationshipEditorEdge(null);
         setChildrenPopoverNodeId(null);
         setRelationshipPreviewOverrides({});
         setSelectedNodeId(null);
-        setNodePanelView('details');
+        setNodePanelView("details");
         setOrphansOpen(false);
         setFilterPanelExpanded(false);
         return;
       }
 
       if (searchQuery && searchQuery.length >= 2 && searchMatchIds.length > 0) {
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           if (isEditableTarget(event.target)) return;
           event.preventDefault();
-          const direction = event.key === 'ArrowDown' ? 1 : -1;
-          const currentIndex = selectedNodeId ? searchMatchIds.indexOf(selectedNodeId) : -1;
+          const direction = event.key === "ArrowDown" ? 1 : -1;
+          const currentIndex = selectedNodeId
+            ? searchMatchIds.indexOf(selectedNodeId)
+            : -1;
           const baseIndex = currentIndex >= 0 ? currentIndex : 0;
           const nextIndex =
-            (baseIndex + direction + searchMatchIds.length) % searchMatchIds.length;
+            (baseIndex + direction + searchMatchIds.length) %
+            searchMatchIds.length;
           const nextId = searchMatchIds[nextIndex];
           if (nextId) selectNodeById(nextId);
           return;
@@ -407,15 +452,15 @@ export default function MemoryGraph({
         }
       }
 
-      if (event.key.toLowerCase() === 'r') {
+      if (event.key.toLowerCase() === "r") {
         if (isEditableTarget(event.target)) return;
         event.preventDefault();
         resetCurrentView();
       }
     };
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     resetCurrentView,
     searchMatchIds,
@@ -426,7 +471,7 @@ export default function MemoryGraph({
   ]);
 
   if (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
+    const message = error instanceof Error ? error.message : "Unknown error";
     return (
       <div className="memory-error">
         <p>Error loading graph data</p>
@@ -444,7 +489,8 @@ export default function MemoryGraph({
         <div className="memory-empty" style={{ marginBottom: 16 }}>
           <h3>WebGL not available</h3>
           <p className="memory-empty-hint">
-            Showing the Memory Table fallback. To use the 3D visualization, enable WebGL / hardware acceleration or try a different browser.
+            Showing the Memory Table fallback. To use the 3D visualization,
+            enable WebGL / hardware acceleration or try a different browser.
           </p>
         </div>
         <React.Suspense
@@ -465,9 +511,9 @@ export default function MemoryGraph({
     <div
       ref={containerRef}
       className={`memory-graph-container ${
-        treeState.viewMode === 'surface_gaps'
-          ? 'memory-graph-container--surface-gaps'
-          : 'memory-graph-container--celebrate'
+        treeState.viewMode === "surface_gaps"
+          ? "memory-graph-container--surface-gaps"
+          : "memory-graph-container--celebrate"
       }`}
     >
       {/* Loading overlay */}
@@ -493,7 +539,7 @@ export default function MemoryGraph({
         onCameraStateChange={handleCameraStateChange}
         onBackgroundClick={() => {
           setSelectedNodeId(null);
-          setNodePanelView('details');
+          setNodePanelView("details");
           setRelationshipEditorSeed(null);
           setRelationshipEditorEdge(null);
           onPendingRelationshipOpenHandled?.();
@@ -503,7 +549,9 @@ export default function MemoryGraph({
         onNodeClick={handleNodeClick}
         lastExpansionEvent={lastExpansionEvent}
         onToggleExpanded={(nodeId) => {
-          const action = treeState.expandedNodeIdSet.has(nodeId) ? 'collapse' : 'expand';
+          const action = treeState.expandedNodeIdSet.has(nodeId)
+            ? "collapse"
+            : "expand";
           treeState.toggleExpandedNode(nodeId);
           setLastExpansionEvent({ nodeId, action, at: Date.now() });
         }}
@@ -525,26 +573,43 @@ export default function MemoryGraph({
 
       {/* Empty state overlay */}
       {showEmptyOverlay && (
-        <div className="memory-graph-empty-overlay" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="memory-graph-empty-overlay"
+          onClick={(e) => e.stopPropagation()}
+        >
           <div className="memory-graph-empty-content">
             <p>No entities yet</p>
             <p className="memory-empty-hint">
-              Add a memory or run real interactions to populate the graph. If you just imported memories and this stays
-              empty, verify the Supabase entity-extraction trigger + Edge Function secrets are configured.
+              Add a memory or run real interactions to populate the graph. If
+              you just imported memories and this stays empty, verify the
+              Supabase entity-extraction trigger + Edge Function secrets are
+              configured.
             </p>
           </div>
         </div>
       )}
 
       {/* Controls */}
-      <div className="memory-graph-controls" onClick={(e) => e.stopPropagation()}>
-        <button onClick={() => particleControlsRef.current?.zoomIn()} title="Zoom in">
+      <div
+        className="memory-graph-controls"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          onClick={() => particleControlsRef.current?.zoomIn()}
+          title="Zoom in"
+        >
           <ZoomIn size={18} />
         </button>
-        <button onClick={() => particleControlsRef.current?.zoomOut()} title="Zoom out">
+        <button
+          onClick={() => particleControlsRef.current?.zoomOut()}
+          title="Zoom out"
+        >
           <ZoomOut size={18} />
         </button>
-        <button onClick={() => particleControlsRef.current?.reset()} title="Reset view">
+        <button
+          onClick={() => particleControlsRef.current?.reset()}
+          title="Reset view"
+        >
           <RotateCcw size={18} />
         </button>
         <button onClick={handleFullscreen} title="Fullscreen">
@@ -554,16 +619,20 @@ export default function MemoryGraph({
         <button
           onClick={toggleViewMode}
           title={
-            treeState.viewMode === 'celebrate_strengths' ? 'Surface gaps' : 'Celebrate strengths'
+            treeState.viewMode === "celebrate_strengths"
+              ? "Surface gaps"
+              : "Celebrate strengths"
           }
-          className={treeState.viewMode === 'surface_gaps' ? 'active' : ''}
+          className={treeState.viewMode === "surface_gaps" ? "active" : ""}
         >
           <Sparkles size={18} />
         </button>
         <button
           onClick={() => treeState.setShowAllLabels((prev) => !prev)}
-          title={treeState.showAllLabels ? 'Hide all labels' : 'Show all labels'}
-          className={treeState.showAllLabels ? 'active' : ''}
+          title={
+            treeState.showAllLabels ? "Hide all labels" : "Show all labels"
+          }
+          className={treeState.showAllLabels ? "active" : ""}
         >
           <Type size={18} />
         </button>
@@ -571,16 +640,34 @@ export default function MemoryGraph({
 
       {(() => {
         const items =
-          treeState.viewMode === 'celebrate_strengths'
+          treeState.viewMode === "celebrate_strengths"
             ? [
-                { dot: 'memory-graph-mode-legend__dot--gold', label: 'Strongest connections' },
-                { dot: 'memory-graph-mode-legend__dot--reviewed', label: 'Reviewed / edited' },
+                {
+                  dot: "memory-graph-mode-legend__dot--gold",
+                  label: "Strongest connections",
+                },
+                {
+                  dot: "memory-graph-mode-legend__dot--reviewed",
+                  label: "Reviewed / edited",
+                },
               ]
             : [
-                { dot: 'memory-graph-mode-legend__dot--review', label: 'Needs review / updated' },
-                { dot: 'memory-graph-mode-legend__dot--confidence', label: 'Low confidence (weight)' },
-                { dot: 'memory-graph-mode-legend__dot--weak', label: 'Weak relationships' },
-                { dot: 'memory-graph-mode-legend__dot--reviewed', label: 'Reviewed / edited' },
+                {
+                  dot: "memory-graph-mode-legend__dot--review",
+                  label: "Needs review / updated",
+                },
+                {
+                  dot: "memory-graph-mode-legend__dot--confidence",
+                  label: "Low confidence (weight)",
+                },
+                {
+                  dot: "memory-graph-mode-legend__dot--weak",
+                  label: "Weak relationships",
+                },
+                {
+                  dot: "memory-graph-mode-legend__dot--reviewed",
+                  label: "Reviewed / edited",
+                },
               ];
 
         const primary = items[0];
@@ -588,7 +675,7 @@ export default function MemoryGraph({
 
         return (
           <div
-            className={`memory-graph-mode-legend ${modeLegendExpanded ? 'is-expanded' : 'is-collapsed'}`}
+            className={`memory-graph-mode-legend ${modeLegendExpanded ? "is-expanded" : "is-collapsed"}`}
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -598,14 +685,18 @@ export default function MemoryGraph({
                 e.stopPropagation();
                 setModeLegendExpanded((prev) => !prev);
               }}
-              title={modeLegendExpanded ? 'Collapse legend' : 'Expand legend'}
+              title={modeLegendExpanded ? "Collapse legend" : "Expand legend"}
             >
-              <span className={`memory-graph-mode-legend__dot ${primary.dot}`} />
-              <span className="memory-graph-mode-legend__toggle-label">{primary.label}</span>
+              <span
+                className={`memory-graph-mode-legend__dot ${primary.dot}`}
+              />
+              <span className="memory-graph-mode-legend__toggle-label">
+                {primary.label}
+              </span>
               <ChevronDown
                 size={14}
                 className={`memory-graph-mode-legend__toggle-icon ${
-                  modeLegendExpanded ? 'is-rotated' : ''
+                  modeLegendExpanded ? "is-rotated" : ""
                 }`}
               />
             </button>
@@ -613,8 +704,13 @@ export default function MemoryGraph({
             {modeLegendExpanded ? (
               <div className="memory-graph-mode-legend__list">
                 {secondary.map((item) => (
-                  <div key={item.dot} className="memory-graph-mode-legend__item">
-                    <span className={`memory-graph-mode-legend__dot ${item.dot}`} />
+                  <div
+                    key={item.dot}
+                    className="memory-graph-mode-legend__item"
+                  >
+                    <span
+                      className={`memory-graph-mode-legend__dot ${item.dot}`}
+                    />
                     {item.label}
                   </div>
                 ))}
@@ -633,7 +729,9 @@ export default function MemoryGraph({
             onToggle={() => setOrphansOpen((prev) => !prev)}
             onSelect={(entityId) => {
               const node = visualData.nodes.find((n) => n.id === entityId);
-              const isOrphan = treeResult.orphans.some((orphan) => orphan.id === entityId);
+              const isOrphan = treeResult.orphans.some(
+                (orphan) => orphan.id === entityId,
+              );
               if (isOrphan) {
                 setRootNodeId(entityId);
               }
@@ -677,7 +775,9 @@ export default function MemoryGraph({
             open={Boolean(effectiveRelationshipEditorEdge)}
             edge={effectiveRelationshipEditorEdge}
             nodeById={treeResult.byId}
-            initialRelationshipId={effectiveRelationshipEditorSeed?.relationshipId ?? null}
+            initialRelationshipId={
+              effectiveRelationshipEditorSeed?.relationshipId ?? null
+            }
             initialTab={effectiveRelationshipEditorSeed?.tab}
             onClose={() => {
               setRelationshipEditorSeed(null);
@@ -690,13 +790,16 @@ export default function MemoryGraph({
               const node = visualData.nodes.find((n) => n.id === entityId);
               if (!node) return;
               setSelectedNodeId(node.id);
-              setNodePanelView('details');
+              setNodePanelView("details");
               setRelationshipPreviewOverrides({});
               onNodeClick?.(node);
             }}
             onInspectMemoryId={(memoryId, inspectedRelationshipId) => {
               if (onInspectMemoryFromRelationship) {
-                onInspectMemoryFromRelationship(memoryId, inspectedRelationshipId);
+                onInspectMemoryFromRelationship(
+                  memoryId,
+                  inspectedRelationshipId,
+                );
                 return;
               }
               setInspectedMemoryId(memoryId);
@@ -740,7 +843,10 @@ export default function MemoryGraph({
                       <Pencil size={14} />
                     </button>
                   ) : null}
-                  <button onClick={() => setInspectedMemoryId(null)} type="button">
+                  <button
+                    onClick={() => setInspectedMemoryId(null)}
+                    type="button"
+                  >
                     &times;
                   </button>
                 </div>
@@ -758,7 +864,7 @@ export default function MemoryGraph({
                     <p className="memory-empty-hint">
                       {inspectedMemoryQuery.error instanceof Error
                         ? inspectedMemoryQuery.error.message
-                        : 'Unknown error'}
+                        : "Unknown error"}
                     </p>
                   </div>
                 ) : inspectedMemoryQuery.data ? (
@@ -768,7 +874,7 @@ export default function MemoryGraph({
                       <div className="memory-detail-markdown">
                         <MemoryTipTapEditor
                           content={normalizeLegacyMemoryContent(
-                            inspectedMemoryQuery.data.content
+                            inspectedMemoryQuery.data.content,
                           )}
                           readOnly
                           className="memory-detail-tiptap"
@@ -778,11 +884,15 @@ export default function MemoryGraph({
                     <div className="memory-detail-grid">
                       <div className="memory-detail-item">
                         <label>Confidence</label>
-                        <ConfidenceBadge score={inspectedMemoryQuery.data.confidence_score} />
+                        <ConfidenceBadge
+                          score={inspectedMemoryQuery.data.confidence_score}
+                        />
                       </div>
                       <div className="memory-detail-item">
                         <label>Source</label>
-                        <SourceBadge sourceType={inspectedMemoryQuery.data.source_type} />
+                        <SourceBadge
+                          sourceType={inspectedMemoryQuery.data.source_type}
+                        />
                       </div>
                       <div className="memory-detail-item">
                         <label>Retrievals</label>
@@ -790,15 +900,22 @@ export default function MemoryGraph({
                       </div>
                       <div className="memory-detail-item">
                         <label>Created</label>
-                        <span>{formatDateTime(inspectedMemoryQuery.data.created_at)}</span>
+                        <span>
+                          {formatDateTime(inspectedMemoryQuery.data.created_at)}
+                        </span>
                       </div>
                     </div>
                     {inspectedMemoryQuery.data.metadata &&
-                    Object.keys(inspectedMemoryQuery.data.metadata).length > 0 ? (
+                    Object.keys(inspectedMemoryQuery.data.metadata).length >
+                      0 ? (
                       <div className="memory-detail-section">
                         <label>Metadata</label>
                         <pre className="memory-detail-metadata">
-                          {JSON.stringify(inspectedMemoryQuery.data.metadata, null, 2)}
+                          {JSON.stringify(
+                            inspectedMemoryQuery.data.metadata,
+                            null,
+                            2,
+                          )}
                         </pre>
                       </div>
                     ) : null}
@@ -817,7 +934,7 @@ export default function MemoryGraph({
 
       {/* Collapsible Entity Filter Panel */}
       <motion.div
-        className={`graph-filter-panel ${filterPanelExpanded ? 'expanded' : 'collapsed'}`}
+        className={`graph-filter-panel ${filterPanelExpanded ? "expanded" : "collapsed"}`}
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: 0.3 }}
@@ -827,7 +944,7 @@ export default function MemoryGraph({
         <motion.button
           className="graph-filter-header"
           onClick={() => setFilterPanelExpanded(!filterPanelExpanded)}
-          whileHover={{ backgroundColor: 'rgba(255, 255, 255, 0.03)' }}
+          whileHover={{ backgroundColor: "rgba(255, 255, 255, 0.03)" }}
           whileTap={{ scale: 0.99 }}
         >
           <div className="graph-filter-header-left">
@@ -851,9 +968,9 @@ export default function MemoryGraph({
             <motion.div
               className="graph-filter-content"
               initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
+              animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.25, ease: 'easeInOut' }}
+              transition={{ duration: 0.25, ease: "easeInOut" }}
             >
               {/* Quick Actions */}
               {onSelectAllEntities && onDeselectAllEntities && (
@@ -895,7 +1012,7 @@ export default function MemoryGraph({
                   return (
                     <motion.button
                       key={type}
-                      className={`graph-filter-item ${isSelected ? 'selected' : ''}`}
+                      className={`graph-filter-item ${isSelected ? "selected" : ""}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         onEntityFilterChange?.(type);
@@ -903,7 +1020,9 @@ export default function MemoryGraph({
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: index * 0.02 }}
-                      whileHover={{ backgroundColor: 'rgba(255, 255, 255, 0.05)' }}
+                      whileHover={{
+                        backgroundColor: "rgba(255, 255, 255, 0.05)",
+                      }}
                       whileTap={{ scale: 0.98 }}
                     >
                       {/* Custom Checkbox */}
@@ -911,7 +1030,7 @@ export default function MemoryGraph({
                         className="graph-filter-checkbox"
                         style={{
                           borderColor: color,
-                          backgroundColor: isSelected ? color : 'transparent',
+                          backgroundColor: isSelected ? color : "transparent",
                         }}
                       >
                         <AnimatePresence>
@@ -938,8 +1057,8 @@ export default function MemoryGraph({
               {/* Footer Hint */}
               <div className="graph-filter-hint">
                 {selectedEntityCount === 0
-                  ? 'Showing all entities'
-                  : `Filtering ${selectedEntityCount} type${selectedEntityCount > 1 ? 's' : ''}`}
+                  ? "Showing all entities"
+                  : `Filtering ${selectedEntityCount} type${selectedEntityCount > 1 ? "s" : ""}`}
               </div>
             </motion.div>
           )}
@@ -957,11 +1076,11 @@ export default function MemoryGraph({
       <AnimatePresence>
         {resolvedSelectedNode && (
           <motion.div
-            className={`node-detail-card ${nodePanelView === 'related' ? 'node-detail-card-related' : ''}`}
+            className={`node-detail-card ${nodePanelView === "related" ? "node-detail-card-related" : ""}`}
             initial={{ opacity: 0, scale: 0.9, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+            transition={{ type: "spring", stiffness: 400, damping: 30 }}
             onClick={(e) => e.stopPropagation()}
             drag
             dragControls={nodeDetailDragControls}
@@ -986,12 +1105,12 @@ export default function MemoryGraph({
               }}
               title="Drag"
             >
-              {nodePanelView === 'related' && (
+              {nodePanelView === "related" && (
                 <motion.button
                   className="node-detail-back"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setNodePanelView('details');
+                    setNodePanelView("details");
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
                   whileHover={{ scale: 1.1 }}
@@ -1005,7 +1124,7 @@ export default function MemoryGraph({
                 onClick={(e) => {
                   e.stopPropagation();
                   setSelectedNodeId(null);
-                  setNodePanelView('details');
+                  setNodePanelView("details");
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 whileHover={{ scale: 1.1, rotate: 90 }}
@@ -1015,7 +1134,7 @@ export default function MemoryGraph({
               </motion.button>
             </div>
 
-            {nodePanelView === 'details' ? (
+            {nodePanelView === "details" ? (
               <>
                 {/* Entity type badge */}
                 <div className="node-detail-type">
@@ -1033,7 +1152,9 @@ export default function MemoryGraph({
                 </div>
 
                 {/* Entity name */}
-                <h3 className="node-detail-name">{resolvedSelectedNode.entityName}</h3>
+                <h3 className="node-detail-name">
+                  {resolvedSelectedNode.entityName}
+                </h3>
 
                 {/* Stats grid */}
                 <div className="node-detail-stats">
@@ -1045,7 +1166,9 @@ export default function MemoryGraph({
                       <span className="node-detail-stat-value">
                         {resolvedSelectedNode.occurrenceCount}
                       </span>
-                      <span className="node-detail-stat-label">Occurrences</span>
+                      <span className="node-detail-stat-label">
+                        Occurrences
+                      </span>
                     </div>
                   </div>
                   <div className="node-detail-stat">
@@ -1058,11 +1181,13 @@ export default function MemoryGraph({
                           visualData.links.filter(
                             (l) =>
                               l.source === resolvedSelectedNode.id ||
-                              l.target === resolvedSelectedNode.id
+                              l.target === resolvedSelectedNode.id,
                           ).length
                         }
                       </span>
-                      <span className="node-detail-stat-label">Connections</span>
+                      <span className="node-detail-stat-label">
+                        Connections
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1072,7 +1197,7 @@ export default function MemoryGraph({
                   className="node-detail-action"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setNodePanelView('related');
+                    setNodePanelView("related");
                   }}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
@@ -1082,19 +1207,25 @@ export default function MemoryGraph({
                 </motion.button>
 
                 <motion.button
-                  className={`node-detail-action ${isEntityReviewed ? 'is-acknowledged' : ''}`}
+                  className={`node-detail-action ${isEntityReviewed ? "is-acknowledged" : ""}`}
                   onClick={async (e) => {
                     e.stopPropagation();
                     if (!resolvedSelectedNode) return;
-                    await acknowledgeEntity.mutateAsync(resolvedSelectedNode.id);
+                    await acknowledgeEntity.mutateAsync(
+                      resolvedSelectedNode.id,
+                    );
                   }}
                   whileHover={{ scale: isEntityReviewed ? 1 : 1.02 }}
                   whileTap={{ scale: isEntityReviewed ? 1 : 0.98 }}
                   disabled={isEntityReviewed || acknowledgeEntity.isPending}
-                  title={isEntityReviewed ? 'Already reviewed' : 'Mark entity as reviewed'}
+                  title={
+                    isEntityReviewed
+                      ? "Already reviewed"
+                      : "Mark entity as reviewed"
+                  }
                 >
                   <Check size={14} />
-                  {isEntityReviewed ? 'Reviewed' : 'Mark Reviewed'}
+                  {isEntityReviewed ? "Reviewed" : "Mark Reviewed"}
                 </motion.button>
               </>
             ) : (
@@ -1112,7 +1243,9 @@ export default function MemoryGraph({
                       <Layers size={12} />
                       {ENTITY_LABELS[resolvedSelectedNode.entityType]}
                     </span>
-                    <h3 className="node-related-entity">{resolvedSelectedNode.entityName}</h3>
+                    <h3 className="node-related-entity">
+                      {resolvedSelectedNode.entityName}
+                    </h3>
                   </div>
                   <div className="node-related-meta">
                     <span className="node-related-count">
@@ -1149,11 +1282,13 @@ export default function MemoryGraph({
                         {relatedMemoriesQuery.data.map((memory) => (
                           <div
                             key={memory.id}
-                            className={`node-related-item ${isMemoryEdited(memory) ? 'is-edited' : ''}`}
+                            className={`node-related-item ${isMemoryEdited(memory) ? "is-edited" : ""}`}
                           >
                             <div className="node-related-item-top">
                               <div className="node-related-item-badges">
-                                <ConfidenceBadge score={memory.confidence_score} />
+                                <ConfidenceBadge
+                                  score={memory.confidence_score}
+                                />
                                 <SourceBadge sourceType={memory.source_type} />
                               </div>
                               <button
@@ -1174,7 +1309,8 @@ export default function MemoryGraph({
                       <div className="node-related-empty">
                         <p>No related memories yet</p>
                         <p className="memory-empty-hint">
-                          Related memories appear after the entity extractor links memories to entities.
+                          Related memories appear after the entity extractor
+                          links memories to entities.
                         </p>
                       </div>
                     ))}

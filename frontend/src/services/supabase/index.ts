@@ -1,31 +1,37 @@
 // Browser client
-import { supabase } from './browser-client'
-export { supabase }
+import { supabase } from "./browser-client";
+export { supabase };
 
 // Server and edge helpers
-export * from './server-client'
-export * from './edge-client'
+export * from "./server-client";
+export * from "./edge-client";
 
 // Helper to get the current session
 export const getSession = async () => {
-  const { data: { session }, error } = await supabase.auth.getSession()
+  const {
+    data: { session },
+    error,
+  } = await supabase.auth.getSession();
   if (error) {
-    console.error('Error getting session:', error)
-    return null
+    console.error("Error getting session:", error);
+    return null;
   }
-  return session
-}
+  return session;
+};
 
 // Helper to get the current user
 export const getCurrentUser = async () => {
-  const { data: { user }, error } = await supabase.auth.getUser()
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
   if (error) {
-    console.error('Error getting user:', error)
-    return null
+    console.error("Error getting user:", error);
+    return null;
   }
-  return user
-}
+  return user;
+};
 
 // Type definitions for Supabase
-export type SupabaseUser = Awaited<ReturnType<typeof getCurrentUser>>
-export type SupabaseSession = Awaited<ReturnType<typeof getSession>>
+export type SupabaseUser = Awaited<ReturnType<typeof getCurrentUser>>;
+export type SupabaseSession = Awaited<ReturnType<typeof getSession>>;

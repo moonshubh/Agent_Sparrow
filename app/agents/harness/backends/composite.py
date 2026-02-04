@@ -228,7 +228,11 @@ class SparrowCompositeBackend:
         seen_paths = set()
 
         for route in self._routes:
-            if path == "/" or path.startswith(route.prefix) or route.prefix.startswith(path):
+            if (
+                path == "/"
+                or path.startswith(route.prefix)
+                or route.prefix.startswith(path)
+            ):
                 files = route.backend.glob_info(pattern, path)
                 for f in files:
                     if f.path not in seen_paths:
@@ -256,7 +260,11 @@ class SparrowCompositeBackend:
         seen_matches: set[tuple[str, int, str]] = set()
 
         for route in self._routes:
-            if path is None or path.startswith(route.prefix) or route.prefix.startswith(path):
+            if (
+                path is None
+                or path.startswith(route.prefix)
+                or route.prefix.startswith(path)
+            ):
                 matches = route.backend.grep_raw(pattern, path)
                 for match in matches:
                     # Create uniqueness key from identifying attributes

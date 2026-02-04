@@ -1,6 +1,9 @@
-'use client';
+"use client";
 
-import { useAcknowledgeEntity, useAcknowledgeRelationship } from './useMemoryData';
+import {
+  useAcknowledgeEntity,
+  useAcknowledgeRelationship,
+} from "./useMemoryData";
 
 export function useAcknowledgment() {
   const entity = useAcknowledgeEntity();
@@ -11,4 +14,3 @@ export function useAcknowledgment() {
     relationship,
   };
 }
-

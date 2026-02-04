@@ -80,7 +80,9 @@ def _iter_health_targets(config: ModelsConfig) -> Iterable[Tuple[str, str, str]]
             yield "zendesk.subagents", key, resolved.model_id
 
 
-def _collect_targets(config: ModelsConfig) -> Dict[Tuple[str, str, bool], HealthCheckTarget]:
+def _collect_targets(
+    config: ModelsConfig,
+) -> Dict[Tuple[str, str, bool], HealthCheckTarget]:
     targets: Dict[Tuple[str, str, bool], HealthCheckTarget] = {}
 
     for section, key, model_id in _iter_health_targets(config):
@@ -98,7 +100,9 @@ def _collect_targets(config: ModelsConfig) -> Dict[Tuple[str, str, bool], Health
             continue
 
         provider = model_cfg.provider or "google"
-        is_embedding = bool(model_cfg.embedding_dims) or model_cfg.model_id.startswith("models/")
+        is_embedding = bool(model_cfg.embedding_dims) or model_cfg.model_id.startswith(
+            "models/"
+        )
         bucket = f"{section}.{key}"
         key_tuple = (provider, model_cfg.model_id, is_embedding)
 
@@ -131,15 +135,20 @@ def _provider_status() -> Dict[str, bool]:
 def _openrouter_ready_for_model(model_id: str) -> bool:
     if getattr(settings, "openrouter_api_key", None):
         return True
-    return _is_minimax_model(model_id) and bool(getattr(settings, "minimax_api_key", None))
+    return _is_minimax_model(model_id) and bool(
+        getattr(settings, "minimax_api_key", None)
+    )
 
 
-async def _check_google_model(model_id: str, *, is_embedding: bool, timeout: float) -> bool:
+async def _check_google_model(
+    model_id: str, *, is_embedding: bool, timeout: float
+) -> bool:
     api_key = settings.gemini_api_key
     if not api_key:
         return False
 
     model_name = _normalize_google_model_id(model_id)
+    payload: Dict[str, Any]
     if is_embedding:
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:embedContent"
         payload = {"content": {"parts": [{"text": HEALTH_CHECK_PROMPT}]}}
@@ -152,7 +161,9 @@ async def _check_google_model(model_id: str, *, is_embedding: bool, timeout: flo
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(endpoint, params={"key": api_key}, json=payload)
+            response = await client.post(
+                endpoint, params={"key": api_key}, json=payload
+            )
         if response.status_code >= 200 and response.status_code < 300:
             return True
         logger.warning(
@@ -161,16 +172,21 @@ async def _check_google_model(model_id: str, *, is_embedding: bool, timeout: flo
         )
         return False
     except httpx.HTTPError as exc:
-        logger.warning("google_model_health_error", extra={"model": model_id, "error": str(exc)})
+        logger.warning(
+            "google_model_health_error", extra={"model": model_id, "error": str(exc)}
+        )
         return False
 
 
 async def _check_openrouter_model(model_id: str, *, timeout: float) -> bool:
     api_key = getattr(settings, "openrouter_api_key", None)
-    base_url = getattr(settings, "openrouter_base_url", None) or "https://openrouter.ai/api/v1"
+    base_url = (
+        getattr(settings, "openrouter_base_url", None) or "https://openrouter.ai/api/v1"
+    )
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "HTTP-Referer": getattr(settings, "openrouter_referer", None) or "https://agentsparrow.local",
+        "HTTP-Referer": getattr(settings, "openrouter_referer", None)
+        or "https://agentsparrow.local",
         "X-Title": getattr(settings, "openrouter_app_name", None) or "Agent Sparrow",
     }
 
@@ -182,7 +198,9 @@ async def _check_openrouter_model(model_id: str, *, timeout: float) -> bool:
     )
     if _is_minimax_model(model_id) and minimax_key:
         api_key = minimax_key
-        base_url = getattr(settings, "minimax_base_url", None) or "https://api.minimax.io/v1"
+        base_url = (
+            getattr(settings, "minimax_base_url", None) or "https://api.minimax.io/v1"
+        )
         headers = {"Authorization": f"Bearer {api_key}"}
         model_id = model_id.split("/")[-1] if "/" in model_id else model_id
 
@@ -240,7 +258,9 @@ async def _check_xai_model(model_id: str, *, timeout: float) -> bool:
         )
         return False
     except httpx.HTTPError as exc:
-        logger.warning("xai_model_health_error", extra={"model": model_id, "error": str(exc)})
+        logger.warning(
+            "xai_model_health_error", extra={"model": model_id, "error": str(exc)}
+        )
         return False
 
 
@@ -255,7 +275,9 @@ async def validate_model_connection(
     provider_key = (provider or "google").strip().lower()
 
     if provider_key == "google":
-        return await _check_google_model(model_id, is_embedding=is_embedding, timeout=timeout)
+        return await _check_google_model(
+            model_id, is_embedding=is_embedding, timeout=timeout
+        )
     if provider_key == "openrouter":
         return await _check_openrouter_model(model_id, timeout=timeout)
     if provider_key == "xai":
@@ -363,11 +385,16 @@ async def run_startup_health_checks(
                 logger.info("model_health_check_using_cached_results")
                 _log_summary(cached)
                 return cached
-            logger.info("model_health_check_skipped", extra={"reason": "lock_unavailable"})
+            logger.info(
+                "model_health_check_skipped", extra={"reason": "lock_unavailable"}
+            )
             return {}
 
         if lock_status is None:
-            logger.info("model_health_check_running_without_lock", extra={"reason": "redis_unavailable"})
+            logger.info(
+                "model_health_check_running_without_lock",
+                extra={"reason": "redis_unavailable"},
+            )
             redis_client = None
 
         limiter = get_rate_limiter()
@@ -379,27 +406,41 @@ async def run_startup_health_checks(
                 if target.provider == "openrouter":
                     if not _openrouter_ready_for_model(target.model_id):
                         outcomes.append(
-                            HealthCheckOutcome(target=target, ok=False, reason="api_key_missing")
+                            HealthCheckOutcome(
+                                target=target, ok=False, reason="api_key_missing"
+                            )
                         )
                         return
                 elif not provider_ready.get(target.provider, False):
                     outcomes.append(
-                        HealthCheckOutcome(target=target, ok=False, reason="api_key_missing")
+                        HealthCheckOutcome(
+                            target=target, ok=False, reason="api_key_missing"
+                        )
                     )
                     return
 
-                token_count = _estimate_tokens(HEALTH_CHECK_PROMPT) if target.is_embedding else None
+                token_count = (
+                    _estimate_tokens(HEALTH_CHECK_PROMPT)
+                    if target.is_embedding
+                    else None
+                )
                 try:
                     if limiter is not None:
-                        await limiter.check_and_consume(target.bucket, token_count=token_count)
+                        await limiter.check_and_consume(
+                            target.bucket, token_count=token_count
+                        )
                 except RateLimitExceededException:
                     outcomes.append(
-                        HealthCheckOutcome(target=target, ok=False, reason="rate_limited")
+                        HealthCheckOutcome(
+                            target=target, ok=False, reason="rate_limited"
+                        )
                     )
                     return
                 except CircuitBreakerOpenException:
                     outcomes.append(
-                        HealthCheckOutcome(target=target, ok=False, reason="circuit_open")
+                        HealthCheckOutcome(
+                            target=target, ok=False, reason="circuit_open"
+                        )
                     )
                     return
                 except GeminiServiceUnavailableException:

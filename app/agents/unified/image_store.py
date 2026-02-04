@@ -21,9 +21,12 @@ from loguru import logger
 
 from app.db.supabase.client import SupabaseClient, get_supabase_client
 
-
-DEFAULT_IMAGE_BUCKET = os.getenv("AGENT_IMAGE_BUCKET", "agent-images").strip() or "agent-images"
-DEFAULT_BUCKET_PUBLIC = os.getenv("AGENT_IMAGE_BUCKET_PUBLIC", "true").strip().lower() in {
+DEFAULT_IMAGE_BUCKET = (
+    os.getenv("AGENT_IMAGE_BUCKET", "agent-images").strip() or "agent-images"
+)
+DEFAULT_BUCKET_PUBLIC = os.getenv(
+    "AGENT_IMAGE_BUCKET_PUBLIC", "true"
+).strip().lower() in {
     "1",
     "true",
     "yes",
@@ -31,7 +34,9 @@ DEFAULT_BUCKET_PUBLIC = os.getenv("AGENT_IMAGE_BUCKET_PUBLIC", "true").strip().l
     "on",
 }
 DEFAULT_MAX_DIM_PX = int(os.getenv("AGENT_IMAGE_MAX_DIM_PX", "2048"))
-DEFAULT_SIGNED_URL_TTL_SEC = int(os.getenv("AGENT_IMAGE_SIGNED_URL_TTL_SEC", "604800"))  # 7d
+DEFAULT_SIGNED_URL_TTL_SEC = int(
+    os.getenv("AGENT_IMAGE_SIGNED_URL_TTL_SEC", "604800")
+)  # 7d
 DEFAULT_MAX_REWRITES = int(os.getenv("AGENT_IMAGE_MAX_REWRITES", "50"))
 
 _BUCKET_READY: set[str] = set()
@@ -89,7 +94,10 @@ def _maybe_downscale_image(
         scale = max_dim_px / float(max_dim)
         new_width = max(1, int(round(width * scale)))
         new_height = max(1, int(round(height * scale)))
-        resized = img.resize((new_width, new_height), resample=Image.LANCZOS)
+        resample_base = getattr(Image, "Resampling", Image)
+        fallback_filter = getattr(Image, "BICUBIC", 0)
+        resample_filter = getattr(resample_base, "LANCZOS", fallback_filter)
+        resized = img.resize((new_width, new_height), resample=resample_filter)
 
         out = BytesIO()
         normalized = (mime_type or "").split(";")[0].strip().lower() or mime_type
@@ -133,7 +141,9 @@ async def _ensure_bucket_ready(
                     )
                 )
             except Exception as exc:  # pragma: no cover - best effort
-                logger.warning("create_bucket_failed_or_exists", bucket=bucket, error=str(exc))
+                logger.warning(
+                    "create_bucket_failed_or_exists", bucket=bucket, error=str(exc)
+                )
 
         try:
             await supabase._exec(
@@ -158,7 +168,11 @@ def _extract_signed_url(result: object) -> Optional[str]:
 
 def _extract_public_url(result: object) -> Optional[str]:
     if isinstance(result, dict):
-        url = result.get("publicUrl") or result.get("publicURL") or result.get("public_url")
+        url = (
+            result.get("publicUrl")
+            or result.get("publicURL")
+            or result.get("public_url")
+        )
         if isinstance(url, str) and url.strip():
             return url.strip()
     if isinstance(result, str) and result.strip():
@@ -216,7 +230,7 @@ async def rewrite_base64_images_in_text(
         mime_type = match.group(1)
         payload = match.group(2)
 
-        rewritten.append(text[last_end:match.start()])
+        rewritten.append(text[last_end : match.start()])
         try:
             stored = await store_image_base64(
                 payload,

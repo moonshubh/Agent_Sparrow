@@ -19,12 +19,12 @@ from app.memory.observability import memory_metrics
 from app.security.pii_redactor import redact_pii
 
 try:  # pragma: no cover - import guard for optional dependency during boot
-    from mem0.configs.base import MemoryConfig
-    from mem0.configs.vector_stores.supabase import IndexMethod
-    from mem0.embeddings.configs import EmbedderConfig
-    from mem0.llms.configs import LlmConfig
-    from mem0.memory.main import AsyncMemory
-    from mem0.vector_stores.configs import VectorStoreConfig
+    from mem0.configs.base import MemoryConfig  # type: ignore[import-not-found]
+    from mem0.configs.vector_stores.supabase import IndexMethod  # type: ignore[import-not-found]
+    from mem0.embeddings.configs import EmbedderConfig  # type: ignore[import-not-found]
+    from mem0.llms.configs import LlmConfig  # type: ignore[import-not-found]
+    from mem0.memory.main import AsyncMemory  # type: ignore[import-not-found]
+    from mem0.vector_stores.configs import VectorStoreConfig  # type: ignore[import-not-found]
 
     _MEM0_AVAILABLE = True
 except ImportError:  # pragma: no cover - handled gracefully when mem0 is missing
@@ -53,7 +53,9 @@ class MemoryService:
         self._warned_missing_api_key = False
         self._warned_dim_mismatch = False
 
-    async def retrieve(self, agent_id: str, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def retrieve(
+        self, agent_id: str, query: str, top_k: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
         """
         Retrieve memories for a given agent scoped query.
 
@@ -173,11 +175,18 @@ class MemoryService:
             return {"results": []}
 
         extra_meta = dict(meta or {})
-        memory_type = str(extra_meta.pop("memory_type", DEFAULT_MEMORY_TYPE) or DEFAULT_MEMORY_TYPE)
+        memory_type = str(
+            extra_meta.pop("memory_type", DEFAULT_MEMORY_TYPE) or DEFAULT_MEMORY_TYPE
+        )
         source = str(extra_meta.pop("source", DEFAULT_SOURCE) or DEFAULT_SOURCE)
 
-        metadata = self._build_metadata(agent_id=agent_id, memory_type=memory_type, source=source, extra=extra_meta)
-        messages = [{"role": "assistant", "content": fact, "name": agent_id} for fact in normalized_facts]
+        metadata = self._build_metadata(
+            agent_id=agent_id, memory_type=memory_type, source=source, extra=extra_meta
+        )
+        messages = [
+            {"role": "assistant", "content": fact, "name": agent_id}
+            for fact in normalized_facts
+        ]
 
         start = perf_counter()
         success = False
@@ -193,7 +202,9 @@ class MemoryService:
             success = bool(response.get("results"))
             return response
         except Exception as exc:  # pragma: no cover - network/runtime failures
-            logger.exception("memory_add_facts_error", agent_id=agent_id, error=str(exc))
+            logger.exception(
+                "memory_add_facts_error", agent_id=agent_id, error=str(exc)
+            )
             error_flag = True
             return {"results": []}
         finally:
@@ -205,7 +216,9 @@ class MemoryService:
                 error=error_flag,
             )
 
-    async def retrieve_log_patterns(self, signature: str, limit: int = 3) -> List[Dict[str, Any]]:
+    async def retrieve_log_patterns(
+        self, signature: str, limit: int = 3
+    ) -> List[Dict[str, Any]]:
         """Return stored log patterns matching a deterministic signature."""
         if not self._is_configured():
             return []
@@ -221,7 +234,9 @@ class MemoryService:
                 limit=limit,
             )
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("memory_log_retrieve_error", signature=normalized, error=str(exc))
+            logger.exception(
+                "memory_log_retrieve_error", signature=normalized, error=str(exc)
+            )
             duration_ms = (perf_counter() - start) * 1000.0
             memory_metrics.record_retrieval(
                 "log_signature",
@@ -272,7 +287,11 @@ class MemoryService:
         try:
             existing = await self.retrieve_log_patterns(signature_value, limit=1)
         except Exception as exc:  # pragma: no cover
-            logger.exception("memory_log_signature_lookup_failed", signature=signature_value, error=str(exc))
+            logger.exception(
+                "memory_log_signature_lookup_failed",
+                signature=signature_value,
+                error=str(exc),
+            )
             existing = []
 
         existing_id: Optional[str] = existing[0].get("id") if existing else None
@@ -325,7 +344,9 @@ class MemoryService:
             success = bool(result.get("results")) or bool(result.get("replaced_id"))
             return result
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("memory_log_upsert_error", signature=signature_value, error=str(exc))
+            logger.exception(
+                "memory_log_upsert_error", signature=signature_value, error=str(exc)
+            )
             error_flag = True
             return {"results": [], "error": str(exc)}
         finally:
@@ -351,7 +372,10 @@ class MemoryService:
             return False
 
         if not _MEM0_AVAILABLE:
-            self._warn_once("_warned_mem0_missing", "mem0 package not installed; agent memory is disabled.")
+            self._warn_once(
+                "_warned_mem0_missing",
+                "mem0 package not installed; agent memory is disabled.",
+            )
             return False
 
         connection = settings.get_memory_connection_string()
@@ -396,8 +420,12 @@ class MemoryService:
             return client
 
     def _build_client(self, collection_name: str) -> AsyncMemory:
-        if AsyncMemory is None or MemoryConfig is None:  # pragma: no cover - safeguarded by _is_configured
-            raise RuntimeError("mem0 AsyncMemory is unavailable in the current environment.")
+        if (
+            AsyncMemory is None or MemoryConfig is None
+        ):  # pragma: no cover - safeguarded by _is_configured
+            raise RuntimeError(
+                "mem0 AsyncMemory is unavailable in the current environment."
+            )
 
         connection = settings.get_memory_connection_string()
         config = get_models_config()
@@ -451,7 +479,9 @@ class MemoryService:
     ) -> List[Dict[str, Any]]:
         """Fetch memories using metadata filters without embedding search."""
         client = await self._get_client(collection_name)
-        result = await client.get_all(agent_id=agent_id, filters=filters, limit=max(1, limit))
+        result = await client.get_all(
+            agent_id=agent_id, filters=filters, limit=max(1, limit)
+        )
         if isinstance(result, dict):
             candidates = result.get("results", [])
         else:
@@ -492,7 +522,11 @@ class MemoryService:
 
     def _resolve_limit(self, override: Optional[int]) -> int:
         """Clamp retrieval limits to a safe range."""
-        desired = override if isinstance(override, int) and override > 0 else settings.memory_top_k
+        desired = (
+            override
+            if isinstance(override, int) and override > 0
+            else settings.memory_top_k
+        )
         return max(1, min(settings.memory_top_k, desired))
 
     def _warn_once(self, attr: str, message: str) -> None:

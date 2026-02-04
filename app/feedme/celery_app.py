@@ -15,11 +15,11 @@ import logging
 from threading import Thread
 from typing import Dict, Any, Type
 
-from celery import Celery
-from celery.signals import worker_init, worker_shutdown
-from celery import Task
-from kombu import Queue
-import psycopg2
+from celery import Celery  # type: ignore[import-untyped]
+from celery.signals import worker_init, worker_shutdown  # type: ignore[import-untyped]
+from celery import Task  # type: ignore[import-untyped]
+from kombu import Queue  # type: ignore[import-untyped]
+import psycopg2  # type: ignore[import-untyped]
 import requests
 
 from app.core.settings import settings
@@ -34,9 +34,9 @@ default_backend = "redis://localhost:6379/2"
 
 celery_app = Celery(
     "feedme",
-    broker=getattr(settings, 'feedme_celery_broker', default_broker),
-    backend=getattr(settings, 'feedme_result_backend', default_backend),
-    include=["app.feedme.tasks"]
+    broker=getattr(settings, "feedme_celery_broker", default_broker),
+    backend=getattr(settings, "feedme_result_backend", default_backend),
+    include=["app.feedme.tasks"],
 )
 
 # Celery configuration
@@ -49,7 +49,9 @@ celery_app.conf.update(
     broker_transport_options={
         # With acks_late enabled, tasks must remain invisible while executing.
         # Keep comfortably above our task_time_limit (10 minutes).
-        "visibility_timeout": int(os.getenv("FEEDME_CELERY_VISIBILITY_TIMEOUT", "3600")),
+        "visibility_timeout": int(
+            os.getenv("FEEDME_CELERY_VISIBILITY_TIMEOUT", "3600")
+        ),
         # Keep connections alive and proactively detect dead sockets.
         "health_check_interval": int(
             os.getenv("FEEDME_CELERY_HEALTH_CHECK_INTERVAL", "30")
@@ -61,70 +63,63 @@ celery_app.conf.update(
         ),
         "socket_keepalive": True,
     },
-
     # Task routing
     task_routes={
-        'app.feedme.tasks.process_transcript': {'queue': 'feedme_processing'},
-        'app.feedme.tasks.generate_text_chunks_and_embeddings': {'queue': 'feedme_embeddings'},
-        'app.feedme.tasks.generate_ai_tags': {'queue': 'feedme_processing'},
-        'app.feedme.tasks.import_zendesk_tagged': {'queue': 'feedme_processing'},
-        'app.feedme.tasks.health_check': {'queue': 'feedme_health'},
+        "app.feedme.tasks.process_transcript": {"queue": "feedme_processing"},
+        "app.feedme.tasks.generate_text_chunks_and_embeddings": {
+            "queue": "feedme_embeddings"
+        },
+        "app.feedme.tasks.generate_ai_tags": {"queue": "feedme_processing"},
+        "app.feedme.tasks.import_zendesk_tagged": {"queue": "feedme_processing"},
+        "app.feedme.tasks.health_check": {"queue": "feedme_health"},
     },
-    
     # Queue configuration
-    task_default_queue='feedme_default',
+    task_default_queue="feedme_default",
     task_queues=(
-        Queue('feedme_default', routing_key='feedme_default'),
-        Queue('feedme_processing', routing_key='feedme_processing'),
-        Queue('feedme_embeddings', routing_key='feedme_embeddings'),
+        Queue("feedme_default", routing_key="feedme_default"),
+        Queue("feedme_processing", routing_key="feedme_processing"),
+        Queue("feedme_embeddings", routing_key="feedme_embeddings"),
         # 'feedme_parsing' queue removed with deprecation of parse_conversation
-        Queue('feedme_health', routing_key='feedme_health'),
+        Queue("feedme_health", routing_key="feedme_health"),
     ),
-    
     # Task execution
-    task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
-    timezone='UTC',
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
     enable_utc=True,
-    
     # Task result settings
     result_expires=3600,  # 1 hour
     result_persistent=True,
-    
     # Task retry configuration
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_reject_on_worker_lost=True,
-    
     # Task time limits
     task_soft_time_limit=300,  # 5 minutes
-    task_time_limit=600,       # 10 minutes
-    
+    task_time_limit=600,  # 10 minutes
     # Worker configuration - Memory optimization
     # Restart worker after 50 tasks to prevent memory accumulation from PDF processing
     worker_max_tasks_per_child=50,
     # Restart worker if memory exceeds 512MB (in KB) - Celery 5.2+ feature
     worker_max_memory_per_child=512000,
     worker_disable_rate_limits=True,
-    
     # Monitoring
     task_send_sent_event=True,
     task_track_started=True,
     worker_send_task_events=True,
-    
     # Error handling
     # Default task retry policy for unexpected errors
-    task_publish_retry_policy = {
-        'max_retries': 3,
-        'interval_start': 10,  # seconds
-        'interval_step': 10,
-        'interval_max': 60,
-    }
+    task_publish_retry_policy={
+        "max_retries": 3,
+        "interval_start": 10,  # seconds
+        "interval_step": 10,
+        "interval_max": 60,
+    },
 )
 
 # Task discovery
-celery_app.autodiscover_tasks(['app.feedme'])
+celery_app.autodiscover_tasks(["app.feedme"])
 
 
 # --- Type-Safe Base Task with Retry --- #
@@ -135,6 +130,7 @@ RETRYABLE_EXCEPTIONS: tuple[Type[Exception], ...] = (
     requests.exceptions.Timeout,
 )
 
+
 class BaseTaskWithRetry(Task):
     """
     A base Celery task with built-in, type-safe retry logic for recoverable errors.
@@ -142,8 +138,9 @@ class BaseTaskWithRetry(Task):
     Handles common transient issues like DB connection errors or network timeouts
     with exponential backoff.
     """
+
     autoretry_for = RETRYABLE_EXCEPTIONS
-    retry_kwargs = {'max_retries': 3}
+    retry_kwargs = {"max_retries": 3}
     retry_backoff = True
     retry_backoff_max = 60  # Max delay 60 seconds
     task_acks_late = True
@@ -171,19 +168,21 @@ def worker_init_handler(sender=None, **kwargs):
     logger.info(f"Celery worker starting: {sender}")
 
     _start_worker_health_server()
-    
+
     # Initialize Supabase client
     try:
         from app.db.supabase.client import get_supabase_client
-        client = get_supabase_client()
+
+        get_supabase_client()
         logger.info("Supabase client initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize Supabase client: {e}")
-    
+
     # Initialize embedding model
     try:
         from app.db.embedding.utils import get_embedding_model
-        model = get_embedding_model()
+
+        get_embedding_model()
         logger.info("Embedding model initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize embedding model: {e}")
@@ -197,7 +196,8 @@ def worker_shutdown_handler(sender=None, **kwargs):
     # Clear Gemini client singleton from tasks.py
     try:
         from app.feedme import tasks
-        if hasattr(tasks, '_genai_client') and tasks._genai_client is not None:
+
+        if hasattr(tasks, "_genai_client") and tasks._genai_client is not None:
             tasks._genai_client = None
             logger.info("Cleared tasks Gemini client")
     except Exception as e:
@@ -206,7 +206,11 @@ def worker_shutdown_handler(sender=None, **kwargs):
     # Clear Gemini client singleton from gemini_pdf_processor
     try:
         from app.feedme.processors import gemini_pdf_processor
-        if hasattr(gemini_pdf_processor, '_genai_client') and gemini_pdf_processor._genai_client is not None:
+
+        if (
+            hasattr(gemini_pdf_processor, "_genai_client")
+            and gemini_pdf_processor._genai_client is not None
+        ):
             gemini_pdf_processor._genai_client = None
             gemini_pdf_processor._genai_client_api_key = None
             logger.info("Cleared PDF processor Gemini client")
@@ -216,6 +220,7 @@ def worker_shutdown_handler(sender=None, **kwargs):
     # Clear embedding model LRU cache
     try:
         from app.db.embedding.utils import get_embedding_model
+
         get_embedding_model.cache_clear()
         logger.info("Cleared embedding model cache")
     except Exception as e:
@@ -224,6 +229,7 @@ def worker_shutdown_handler(sender=None, **kwargs):
     # Clear rate tracker singletons
     try:
         from app.feedme.rate_limiting import gemini_tracker
+
         gemini_tracker._tracker = None
         gemini_tracker._embed_tracker = None
         logger.info("Cleared rate tracker singletons")
@@ -232,6 +238,7 @@ def worker_shutdown_handler(sender=None, **kwargs):
 
     # Force garbage collection to release memory
     import gc
+
     gc.collect()
     logger.info("Worker shutdown complete with memory cleanup")
 
@@ -243,35 +250,38 @@ def check_celery_health() -> Dict[str, Any]:
         # Check if Celery is responsive
         inspect = celery_app.control.inspect()
         stats = inspect.stats()
-        
+
         if not stats:
             return {"status": "unhealthy", "error": "No workers available"}
-        
+
         # Check active tasks
         active_tasks = inspect.active()
         reserved_tasks = inspect.reserved()
-        
+
         total_workers = len(stats) if stats else 0
-        total_active = sum(len(tasks) for tasks in active_tasks.values()) if active_tasks else 0
-        total_reserved = sum(len(tasks) for tasks in reserved_tasks.values()) if reserved_tasks else 0
-        
+        total_active = (
+            sum(len(tasks) for tasks in active_tasks.values()) if active_tasks else 0
+        )
+        total_reserved = (
+            sum(len(tasks) for tasks in reserved_tasks.values())
+            if reserved_tasks
+            else 0
+        )
+
         return {
             "status": "healthy",
             "workers": total_workers,
             "active_tasks": total_active,
             "reserved_tasks": total_reserved,
             "queues": list(celery_app.conf.task_queues),
-            "broker": getattr(settings, 'feedme_celery_broker', default_broker),
-            "backend": getattr(settings, 'feedme_result_backend', default_backend)
+            "broker": getattr(settings, "feedme_celery_broker", default_broker),
+            "backend": getattr(settings, "feedme_result_backend", default_backend),
         }
-        
+
     except Exception as e:
         return {
-            "status": "unhealthy", 
-            "error": {
-                "type": type(e).__name__,
-                "message": str(e)
-            }
+            "status": "unhealthy",
+            "error": {"type": type(e).__name__, "message": str(e)},
         }
 
 
@@ -282,7 +292,7 @@ def _start_worker_health_server() -> None:
         return
 
     health_port_raw = os.getenv("HEALTH_PORT")
-    port_raw = health_port_raw or os.getenv("PORT", "8000")
+    port_raw = health_port_raw or os.getenv("PORT") or "8000"
     try:
         port = int(port_raw)
     except ValueError:
@@ -338,9 +348,11 @@ def _start_worker_health_server() -> None:
 if __name__ == "__main__":
     # Start worker for development
     logger.info("Starting Celery worker for FeedMe v2.0...")
-    celery_app.worker_main([
-        "worker",
-        "--loglevel=info",
-        "--concurrency=2",
-        "--queues=feedme_default,feedme_processing,feedme_embeddings,feedme_health"
-    ])
+    celery_app.worker_main(
+        [
+            "worker",
+            "--loglevel=info",
+            "--concurrency=2",
+            "--queues=feedme_default,feedme_processing,feedme_embeddings,feedme_health",
+        ]
+    )

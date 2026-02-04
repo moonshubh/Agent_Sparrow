@@ -1,551 +1,636 @@
+"use client";
 
-"use client"
-
-import React, { useState, useCallback, useRef } from 'react'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/shared/ui/dialog'
-import { Button } from '@/shared/ui/button'
-import { Input } from '@/shared/ui/input'
-import { Label } from '@/shared/ui/label'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/tabs'
-import { Progress } from '@/shared/ui/progress'
-import { Alert, AlertDescription } from '@/shared/ui/alert'
-import { Card, CardContent, CardHeader } from '@/shared/ui/card'
-import { Badge } from '@/shared/ui/badge'
-import { ScrollArea } from '@/shared/ui/scroll-area'
-import { 
-  Upload, 
-  FileText, 
-  Loader2, 
-  AlertCircle, 
-  CheckCircle2, 
-  X, 
+import React, { useState, useCallback, useRef } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Label } from "@/shared/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+import { Progress } from "@/shared/ui/progress";
+import { Alert, AlertDescription } from "@/shared/ui/alert";
+import { Card, CardContent, CardHeader } from "@/shared/ui/card";
+import { Badge } from "@/shared/ui/badge";
+import { ScrollArea } from "@/shared/ui/scroll-area";
+import {
+  Upload,
+  FileText,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
+  X,
   File,
   Folder,
   Clock,
-  AlertTriangle
-} from 'lucide-react'
-import { uploadTranscriptFile, getProcessingStatus } from '@/features/feedme/services/feedme-api'
-import { cn } from '@/shared/lib/utils'
-import type { ProcessingStatusResponse } from '@/features/feedme/services/feedme-api'
+  AlertTriangle,
+} from "lucide-react";
+import {
+  uploadTranscriptFile,
+  getProcessingStatus,
+} from "@/features/feedme/services/feedme-api";
+import { cn } from "@/shared/lib/utils";
+import type { ProcessingStatusResponse } from "@/features/feedme/services/feedme-api";
 
 interface EnhancedFeedMeModalProps {
-  isOpen: boolean
-  onClose: () => void
-  onUploadComplete?: (results: UploadResult[]) => void
+  isOpen: boolean;
+  onClose: () => void;
+  onUploadComplete?: (results: UploadResult[]) => void;
 }
 
 interface FileUploadState {
-  file: File
-  id: string
-  title: string
-  status: 'pending' | 'uploading' | 'processing' | 'completed' | 'error'
-  progress: number
-  error?: string
-  conversationId?: number
-  processingStatus?: string
-  preview?: FilePreview
+  file: File;
+  id: string;
+  title: string;
+  status: "pending" | "uploading" | "processing" | "completed" | "error";
+  progress: number;
+  error?: string;
+  conversationId?: number;
+  processingStatus?: string;
+  preview?: FilePreview;
 }
 
 interface FilePreview {
-  isHtml: boolean
-  isPdf?: boolean
-  messageCount?: number
-  attachmentCount?: number
-  description?: string
-  fileSize: string
-  lastModified: string
+  isHtml: boolean;
+  isPdf?: boolean;
+  messageCount?: number;
+  attachmentCount?: number;
+  description?: string;
+  fileSize: string;
+  lastModified: string;
 }
 
 interface UploadResult {
-  id: number
-  title: string
-  status: string
-  total_examples: number
+  id: number;
+  title: string;
+  status: string;
+  total_examples: number;
 }
 
 interface BatchUploadState {
-  isUploading: boolean
-  totalFiles: number
-  completedFiles: number
-  errors: string[]
-  results: UploadResult[]
+  isUploading: boolean;
+  totalFiles: number;
+  completedFiles: number;
+  errors: string[];
+  results: UploadResult[];
 }
 
-type UploadTab = 'multi-file' | 'single-file'
+type UploadTab = "multi-file" | "single-file";
 
-export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: EnhancedFeedMeModalProps) {
-  const [activeTab, setActiveTab] = useState<UploadTab>('multi-file')
-  const [isDragActive, setIsDragActive] = useState(false)
-  const [files, setFiles] = useState<FileUploadState[]>([])
+export function EnhancedFeedMeModal({
+  isOpen,
+  onClose,
+  onUploadComplete,
+}: EnhancedFeedMeModalProps) {
+  const [activeTab, setActiveTab] = useState<UploadTab>("multi-file");
+  const [isDragActive, setIsDragActive] = useState(false);
+  const [files, setFiles] = useState<FileUploadState[]>([]);
   const [batchUploadState, setBatchUploadState] = useState<BatchUploadState>({
     isUploading: false,
     totalFiles: 0,
     completedFiles: 0,
     errors: [],
-    results: []
-  })
-  
+    results: [],
+  });
+
   // Single file/text upload states (legacy compatibility)
-  const [singleTitle, setSingleTitle] = useState('')
-  const [singleFile, setSingleFile] = useState<File | null>(null)
-  const [singleFilePreview, setSingleFilePreview] = useState<FilePreview | null>(null)
-  
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const userId = process.env.NEXT_PUBLIC_FEEDME_USER_ID || 'web-user'
+  const [singleTitle, setSingleTitle] = useState("");
+  const [singleFile, setSingleFile] = useState<File | null>(null);
+  const [singleFilePreview, setSingleFilePreview] =
+    useState<FilePreview | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const userId = process.env.NEXT_PUBLIC_FEEDME_USER_ID || "web-user";
 
   // File validation
   const validateFile = useCallback((file: File): string | null => {
-    const allowedTypes = ['text/plain', 'text/html', 'application/html', 'text/csv', 'application/pdf', 'application/x-pdf']
-    const allowedExtensions = ['.txt', '.log', '.html', '.htm', '.csv', '.pdf']
-    
-    const hasValidType = file.type === '' || allowedTypes.includes(file.type) || file.type.startsWith('text/')
-    const hasValidExtension = allowedExtensions.some(ext => file.name.toLowerCase().endsWith(ext))
-    
+    const allowedTypes = [
+      "text/plain",
+      "text/html",
+      "application/html",
+      "text/csv",
+      "application/pdf",
+      "application/x-pdf",
+    ];
+    const allowedExtensions = [".txt", ".log", ".html", ".htm", ".csv", ".pdf"];
+
+    const hasValidType =
+      file.type === "" ||
+      allowedTypes.includes(file.type) ||
+      file.type.startsWith("text/");
+    const hasValidExtension = allowedExtensions.some((ext) =>
+      file.name.toLowerCase().endsWith(ext),
+    );
+
     if (!hasValidType && !hasValidExtension) {
-      return 'Invalid file type. We support text files (.txt, .log), HTML files (.html, .htm), CSV files (.csv), and PDF documents (.pdf). Please ensure your file has one of these extensions.'
+      return "Invalid file type. We support text files (.txt, .log), HTML files (.html, .htm), CSV files (.csv), and PDF documents (.pdf). Please ensure your file has one of these extensions.";
     }
 
     // Different size limits for different file types
-    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-    const maxSize = isPdf ? 20 * 1024 * 1024 : 10 * 1024 * 1024 // 20MB for PDF, 10MB for others
-    
+    const isPdf =
+      file.type === "application/pdf" ||
+      file.name.toLowerCase().endsWith(".pdf");
+    const maxSize = isPdf ? 20 * 1024 * 1024 : 10 * 1024 * 1024; // 20MB for PDF, 10MB for others
+
     if (file.size > maxSize) {
-      return `File size must be less than ${isPdf ? '20MB' : '10MB'}`
+      return `File size must be less than ${isPdf ? "20MB" : "10MB"}`;
     }
 
-    return null
-  }, [])
+    return null;
+  }, []);
 
   // File analysis
   const analyzeFile = useCallback(async (file: File): Promise<FilePreview> => {
-    const isHtmlFile = file.name.toLowerCase().endsWith('.html') || 
-                      file.name.toLowerCase().endsWith('.htm') ||
-                      file.type.includes('html')
-    
-    const isPdfFile = file.name.toLowerCase().endsWith('.pdf') ||
-                     file.type === 'application/pdf'
-    
+    const isHtmlFile =
+      file.name.toLowerCase().endsWith(".html") ||
+      file.name.toLowerCase().endsWith(".htm") ||
+      file.type.includes("html");
+
+    const isPdfFile =
+      file.name.toLowerCase().endsWith(".pdf") ||
+      file.type === "application/pdf";
+
     const basePreview: FilePreview = {
       isHtml: isHtmlFile,
       fileSize: formatFileSize(file.size),
-      lastModified: new Date(file.lastModified).toLocaleDateString()
-    }
+      lastModified: new Date(file.lastModified).toLocaleDateString(),
+    };
 
     if (isPdfFile) {
       return {
         ...basePreview,
         description: `PDF document detected - ${Math.round(file.size / 1024)}KB`,
-        isPdf: true
-      }
+        isPdf: true,
+      };
     }
 
     if (!isHtmlFile) {
       return {
         ...basePreview,
-        description: `Text file detected - ${Math.round(file.size / 1024)}KB`
-      }
+        description: `Text file detected - ${Math.round(file.size / 1024)}KB`,
+      };
     }
 
     try {
       // Handle file.text() method safely for testing environments
-      const content = typeof file.text === 'function' 
-        ? await file.text()
-        : await new Promise<string>((resolve) => {
-            const reader = new FileReader()
-            reader.onload = () => resolve(reader.result as string)
-            reader.readAsText(file)
-          })
-      
-      const parser = new DOMParser()
-      const doc = parser.parseFromString(content, 'text/html')
-      
+      const content =
+        typeof file.text === "function"
+          ? await file.text()
+          : await new Promise<string>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.readAsText(file);
+            });
+
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(content, "text/html");
+
       // Check for Zendesk ticket
       const zendeskSelectors = [
-        '.zd-comment',
+        ".zd-comment",
         '[data-test-id="ticket-title"]',
-        '[data-creator-name]',
-        'meta[name="generator"][content*="Zendesk"]'
-      ]
-      const isZendeskTicket = zendeskSelectors.some(sel => doc.querySelector(sel)) || 
-                             /zendesk|zd-comment/i.test(content)
-      
+        "[data-creator-name]",
+        'meta[name="generator"][content*="Zendesk"]',
+      ];
+      const isZendeskTicket =
+        zendeskSelectors.some((sel) => doc.querySelector(sel)) ||
+        /zendesk|zd-comment/i.test(content);
+
       if (isZendeskTicket) {
-        const commentDivs = doc.querySelectorAll('div.zd-comment, .zd-comment')
-        const attachmentLinks = doc.querySelectorAll('a[href*="attachment"], a[href*="download"], img')
-        const mainBody = doc.querySelector('#html')
-        const hasMainContent = mainBody && mainBody.textContent && mainBody.textContent.trim().length > 50
-        
-        const messageCount = commentDivs.length + (hasMainContent ? 1 : 0)
-        
+        const commentDivs = doc.querySelectorAll("div.zd-comment, .zd-comment");
+        const attachmentLinks = doc.querySelectorAll(
+          'a[href*="attachment"], a[href*="download"], img',
+        );
+        const mainBody = doc.querySelector("#html");
+        const hasMainContent =
+          mainBody &&
+          mainBody.textContent &&
+          mainBody.textContent.trim().length > 50;
+
+        const messageCount = commentDivs.length + (hasMainContent ? 1 : 0);
+
         return {
           ...basePreview,
           messageCount,
           attachmentCount: attachmentLinks.length,
-          description: `Zendesk ticket - ${messageCount} message${messageCount !== 1 ? 's' : ''}, ${attachmentLinks.length} attachment${attachmentLinks.length !== 1 ? 's' : ''}`
-        }
+          description: `Zendesk ticket - ${messageCount} message${messageCount !== 1 ? "s" : ""}, ${attachmentLinks.length} attachment${attachmentLinks.length !== 1 ? "s" : ""}`,
+        };
       } else {
-        const textLength = doc.body?.textContent?.length || 0
+        const textLength = doc.body?.textContent?.length || 0;
         return {
           ...basePreview,
-          description: `HTML file - ${Math.round(textLength / 100)} content blocks`
-        }
+          description: `HTML file - ${Math.round(textLength / 100)} content blocks`,
+        };
       }
     } catch (error) {
-      console.warn('Error analyzing HTML file:', error)
+      console.warn("Error analyzing HTML file:", error);
       return {
         ...basePreview,
-        description: 'HTML file detected'
-      }
+        description: "HTML file detected",
+      };
     }
-  }, [])
+  }, []);
 
   // Format file size
   const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return '0 B'
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-  }
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+  };
 
   // Generate unique ID for files
   const generateFileId = (): string => {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2)
-  }
+    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  };
 
   // Add files to upload queue
-  const addFiles = useCallback(async (newFiles: File[]) => {
-    const validFiles: FileUploadState[] = []
-    
-    for (const file of newFiles) {
-      const error = validateFile(file)
-      if (error) {
-        setBatchUploadState(prev => ({
-          ...prev,
-          errors: [...prev.errors, `${file.name}: ${error}`]
-        }))
-        continue
+  const addFiles = useCallback(
+    async (newFiles: File[]) => {
+      const validFiles: FileUploadState[] = [];
+
+      for (const file of newFiles) {
+        const error = validateFile(file);
+        if (error) {
+          setBatchUploadState((prev) => ({
+            ...prev,
+            errors: [...prev.errors, `${file.name}: ${error}`],
+          }));
+          continue;
+        }
+
+        const id = generateFileId();
+        const title = file.name.replace(/\.(txt|log|html|htm|csv)$/i, "");
+        const preview = await analyzeFile(file);
+
+        validFiles.push({
+          file,
+          id,
+          title,
+          status: "pending",
+          progress: 0,
+          preview,
+        });
       }
 
-      const id = generateFileId()
-      const title = file.name.replace(/\.(txt|log|html|htm|csv)$/i, '')
-      const preview = await analyzeFile(file)
-      
-      validFiles.push({
-        file,
-        id,
-        title,
-        status: 'pending',
-        progress: 0,
-        preview
-      })
-    }
-    
-    setFiles(prev => [...prev, ...validFiles])
-  }, [validateFile, analyzeFile])
+      setFiles((prev) => [...prev, ...validFiles]);
+    },
+    [validateFile, analyzeFile],
+  );
 
   // Handle file input change
-  const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(e.target.files || [])
-    if (selectedFiles.length > 0) {
-      addFiles(selectedFiles)
-    }
-    // Reset input value to allow re-selecting same files
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-  }, [addFiles])
+  const handleFileInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const selectedFiles = Array.from(e.target.files || []);
+      if (selectedFiles.length > 0) {
+        addFiles(selectedFiles);
+      }
+      // Reset input value to allow re-selecting same files
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    },
+    [addFiles],
+  );
 
   // Drag and drop handlers
   const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragActive(true)
-  }, [])
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(true);
+  }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragActive(false)
-  }, [])
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(false);
+  }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-  }, [])
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragActive(false)
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragActive(false);
 
-    const droppedFiles = Array.from(e.dataTransfer.files)
-    if (droppedFiles.length > 0) {
-      addFiles(droppedFiles)
-    }
-  }, [addFiles])
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      if (droppedFiles.length > 0) {
+        addFiles(droppedFiles);
+      }
+    },
+    [addFiles],
+  );
 
   // Remove file from queue
   const removeFile = useCallback((fileId: string) => {
-    setFiles(prev => prev.filter(f => f.id !== fileId))
-  }, [])
+    setFiles((prev) => prev.filter((f) => f.id !== fileId));
+  }, []);
 
   // Update file title
   const updateFileTitle = useCallback((fileId: string, newTitle: string) => {
-    setFiles(prev => prev.map(f => 
-      f.id === fileId ? { ...f, title: newTitle } : f
-    ))
-  }, [])
+    setFiles((prev) =>
+      prev.map((f) => (f.id === fileId ? { ...f, title: newTitle } : f)),
+    );
+  }, []);
 
   // Upload single file
-  const uploadSingleFile = useCallback(async (fileState: FileUploadState): Promise<'success' | 'error'> => {
-    setFiles(prev => prev.map(f => 
-      f.id === fileState.id 
-        ? { ...f, status: 'uploading', progress: 20 }
-        : f
-    ))
+  const uploadSingleFile = useCallback(
+    async (fileState: FileUploadState): Promise<"success" | "error"> => {
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.id === fileState.id
+            ? { ...f, status: "uploading", progress: 20 }
+            : f,
+        ),
+      );
 
-    try {
-      const uploadResponse = await uploadTranscriptFile(
-        fileState.title,
-        fileState.file,
-        userId,
-        true
-      )
+      try {
+        const uploadResponse = await uploadTranscriptFile(
+          fileState.title,
+          fileState.file,
+          userId,
+          true,
+        );
 
-      setFiles(prev => prev.map(f => 
-        f.id === fileState.id 
-          ? { 
-              ...f, 
-              status: 'processing',
-              progress: 60,
-              conversationId: uploadResponse.conversation_id || uploadResponse.id,
-              processingStatus: uploadResponse.processing_status
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === fileState.id
+              ? {
+                  ...f,
+                  status: "processing",
+                  progress: 60,
+                  conversationId:
+                    uploadResponse.conversation_id || uploadResponse.id,
+                  processingStatus: uploadResponse.processing_status,
+                }
+              : f,
+          ),
+        );
+
+        // Poll for processing completion
+        let delay = 1000;
+        let statusResponse: ProcessingStatusResponse | null = null;
+        while (true) {
+          try {
+            const conversationId =
+              uploadResponse.conversation_id || uploadResponse.id;
+            if (!conversationId) {
+              throw new Error("No conversation ID received from upload");
             }
-          : f
-      ))
-
-      // Poll for processing completion
-      let delay = 1000
-      let statusResponse: ProcessingStatusResponse | null = null
-      while (true) {
-        try {
-          const conversationId = uploadResponse.conversation_id || uploadResponse.id
-          if (!conversationId) {
-            throw new Error('No conversation ID received from upload')
+            statusResponse = await getProcessingStatus(conversationId);
+            setFiles((prev) =>
+              prev.map((f) =>
+                f.id === fileState.id
+                  ? {
+                      ...f,
+                      processingStatus:
+                        statusResponse?.status ?? f.processingStatus,
+                    }
+                  : f,
+              ),
+            );
+            if (statusResponse.status !== "processing") {
+              break;
+            }
+          } catch (statusError) {
+            console.warn("Status check failed:", statusError);
+            break;
           }
-          statusResponse = await getProcessingStatus(conversationId)
-          setFiles(prev => prev.map(f => 
-            f.id === fileState.id 
-              ? { ...f, processingStatus: statusResponse?.status ?? f.processingStatus }
-              : f
-          ))
-          if (statusResponse.status !== 'processing') {
-            break
-          }
-        } catch (statusError) {
-          console.warn('Status check failed:', statusError)
-          break
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          delay = Math.min(delay * 2, 10000);
         }
-        await new Promise(resolve => setTimeout(resolve, delay))
-        delay = Math.min(delay * 2, 10000)
+
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === fileState.id
+              ? {
+                  ...f,
+                  status: "completed",
+                  progress: 100,
+                  processingStatus:
+                    statusResponse?.status || f.processingStatus,
+                }
+              : f,
+          ),
+        );
+
+        const resultId =
+          uploadResponse.conversation_id || uploadResponse.id || 0;
+        setBatchUploadState((prev) => ({
+          ...prev,
+          completedFiles: prev.completedFiles + 1,
+          results: [
+            ...prev.results,
+            {
+              id: resultId,
+              title: fileState.title,
+              status: statusResponse?.status || "completed",
+              total_examples: uploadResponse.total_examples || 0,
+            },
+          ],
+        }));
+        return "success";
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Upload failed";
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === fileState.id
+              ? {
+                  ...f,
+                  status: "error",
+                  progress: 0,
+                  error: errorMessage,
+                }
+              : f,
+          ),
+        );
+        setBatchUploadState((prev) => ({
+          ...prev,
+          errors: [...prev.errors, `${fileState.title}: ${errorMessage}`],
+        }));
+        return "error";
       }
-
-      setFiles(prev => prev.map(f => 
-        f.id === fileState.id 
-          ? { 
-              ...f, 
-              status: 'completed',
-              progress: 100,
-              processingStatus: statusResponse?.status || f.processingStatus
-            }
-          : f
-      ))
-
-      const resultId = uploadResponse.conversation_id || uploadResponse.id || 0
-      setBatchUploadState(prev => ({
-        ...prev,
-        completedFiles: prev.completedFiles + 1,
-        results: [...prev.results, {
-          id: resultId,
-          title: fileState.title,
-          status: statusResponse?.status || 'completed',
-          total_examples: uploadResponse.total_examples || 0
-        }]
-      }))
-      return 'success'
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Upload failed'
-      setFiles(prev => prev.map(f => 
-        f.id === fileState.id 
-          ? { 
-              ...f, 
-              status: 'error',
-              progress: 0,
-              error: errorMessage
-            }
-          : f
-      ))
-      setBatchUploadState(prev => ({
-        ...prev,
-        errors: [...prev.errors, `${fileState.title}: ${errorMessage}`]
-      }))
-      return 'error'
-    }
-  }, [userId])
+    },
+    [userId],
+  );
 
   // Reset form
   const resetForm = useCallback(() => {
-    setFiles([])
-    setSingleTitle('')
-    setSingleFile(null)
-    setSingleFilePreview(null)
+    setFiles([]);
+    setSingleTitle("");
+    setSingleFile(null);
+    setSingleFilePreview(null);
     setBatchUploadState({
       isUploading: false,
       totalFiles: 0,
       completedFiles: 0,
       errors: [],
-      results: []
-    })
-    setActiveTab('multi-file')
-  }, [])
+      results: [],
+    });
+    setActiveTab("multi-file");
+  }, []);
 
   // Handle modal close
   const handleClose = useCallback(() => {
     if (!batchUploadState.isUploading) {
       if (onUploadComplete && batchUploadState.results.length > 0) {
-        onUploadComplete(batchUploadState.results)
+        onUploadComplete(batchUploadState.results);
       }
-      resetForm()
-      onClose()
+      resetForm();
+      onClose();
     }
-  }, [batchUploadState.isUploading, batchUploadState.results, onUploadComplete, resetForm, onClose])
+  }, [
+    batchUploadState.isUploading,
+    batchUploadState.results,
+    onUploadComplete,
+    resetForm,
+    onClose,
+  ]);
 
   // Batch upload all files
   const handleBatchUpload = useCallback(async () => {
-    if (files.length === 0) return
+    if (files.length === 0) return;
 
     setBatchUploadState({
       isUploading: true,
       totalFiles: files.length,
       completedFiles: 0,
       errors: [],
-      results: []
-    })
+      results: [],
+    });
 
-    let encounteredErrors = false
+    let encounteredErrors = false;
     // Upload files sequentially to avoid overwhelming the server
     for (const fileState of files) {
-      if (fileState.status === 'pending') {
-        const outcome = await uploadSingleFile(fileState)
-        if (outcome === 'error') {
-          encounteredErrors = true
+      if (fileState.status === "pending") {
+        const outcome = await uploadSingleFile(fileState);
+        if (outcome === "error") {
+          encounteredErrors = true;
         }
       }
     }
 
-    setBatchUploadState(prev => ({
+    setBatchUploadState((prev) => ({
       ...prev,
-      isUploading: false
-    }))
+      isUploading: false,
+    }));
 
     // Auto-close after successful batch upload
     if (!encounteredErrors) {
       setTimeout(() => {
-        handleClose()
-      }, 3000)
+        handleClose();
+      }, 3000);
     }
-  }, [files, uploadSingleFile, handleClose])
+  }, [files, uploadSingleFile, handleClose]);
 
   // Legacy single file upload handler
-  const handleSingleFileUpload = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault()
-    
-    if (!singleTitle.trim() || !singleFile) {
-      return
-    }
+  const handleSingleFileUpload = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
 
-    const fileState: FileUploadState = {
-      file: singleFile,
-      id: generateFileId(),
-      title: singleTitle,
-      status: 'pending',
-      progress: 0,
-      preview: singleFilePreview || undefined
-    }
+      if (!singleTitle.trim() || !singleFile) {
+        return;
+      }
 
-    setFiles([fileState])
-    setBatchUploadState({
-      isUploading: true,
-      totalFiles: 1,
-      completedFiles: 0,
-      errors: [],
-      results: []
-    })
+      const fileState: FileUploadState = {
+        file: singleFile,
+        id: generateFileId(),
+        title: singleTitle,
+        status: "pending",
+        progress: 0,
+        preview: singleFilePreview || undefined,
+      };
 
-    await uploadSingleFile(fileState)
-    
-    setBatchUploadState(prev => ({
-      ...prev,
-      isUploading: false
-    }))
-  }, [singleTitle, singleFile, singleFilePreview, uploadSingleFile])
+      setFiles([fileState]);
+      setBatchUploadState({
+        isUploading: true,
+        totalFiles: 1,
+        completedFiles: 0,
+        errors: [],
+        results: [],
+      });
+
+      await uploadSingleFile(fileState);
+
+      setBatchUploadState((prev) => ({
+        ...prev,
+        isUploading: false,
+      }));
+    },
+    [singleTitle, singleFile, singleFilePreview, uploadSingleFile],
+  );
 
   // Handle single file selection (legacy)
-  const handleSingleFileSelect = useCallback(async (file: File) => {
-    const error = validateFile(file)
-    if (!error) {
-      setSingleFile(file)
-      if (!singleTitle.trim()) {
-        setSingleTitle(file.name.replace(/\.(txt|log|html|htm|csv)$/i, ''))
+  const handleSingleFileSelect = useCallback(
+    async (file: File) => {
+      const error = validateFile(file);
+      if (!error) {
+        setSingleFile(file);
+        if (!singleTitle.trim()) {
+          setSingleTitle(file.name.replace(/\.(txt|log|html|htm|csv)$/i, ""));
+        }
+        const preview = await analyzeFile(file);
+        setSingleFilePreview(preview);
       }
-      const preview = await analyzeFile(file)
-      setSingleFilePreview(preview)
-    }
-  }, [validateFile, analyzeFile, singleTitle])
+    },
+    [validateFile, analyzeFile, singleTitle],
+  );
 
   // Get status icon for file
-  const getStatusIcon = (status: FileUploadState['status']) => {
+  const getStatusIcon = (status: FileUploadState["status"]) => {
     switch (status) {
-      case 'completed':
-        return <CheckCircle2 className="h-4 w-4 text-green-600" />
-      case 'uploading':
-      case 'processing':
-        return <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />
-      case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-600" />
+      case "completed":
+        return <CheckCircle2 className="h-4 w-4 text-green-600" />;
+      case "uploading":
+      case "processing":
+        return <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />;
+      case "error":
+        return <AlertCircle className="h-4 w-4 text-red-600" />;
       default:
-        return <Clock className="h-4 w-4 text-gray-400" />
+        return <Clock className="h-4 w-4 text-gray-400" />;
     }
-  }
+  };
 
   // Get status color
-  const getStatusColor = (status: FileUploadState['status']) => {
+  const getStatusColor = (status: FileUploadState["status"]) => {
     switch (status) {
-      case 'completed':
-        return 'text-green-600 bg-green-50 border-green-200'
-      case 'uploading':
-      case 'processing':
-        return 'text-blue-600 bg-blue-50 border-blue-200'
-      case 'error':
-        return 'text-red-600 bg-red-50 border-red-200'
+      case "completed":
+        return "text-green-600 bg-green-50 border-green-200";
+      case "uploading":
+      case "processing":
+        return "text-blue-600 bg-blue-50 border-blue-200";
+      case "error":
+        return "text-red-600 bg-red-50 border-red-200";
       default:
-        return 'text-gray-600 bg-gray-50 border-gray-200'
+        return "text-gray-600 bg-gray-50 border-gray-200";
     }
-  }
+  };
 
   const handleTabChange = useCallback((value: string) => {
-    if (value === 'multi-file' || value === 'single-file') {
-      setActiveTab(value)
+    if (value === "multi-file" || value === "single-file") {
+      setActiveTab(value);
     }
-  }, [])
+  }, []);
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => {
-      if (!open && !batchUploadState.isUploading) {
-        handleClose()
-      }
-    }}>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open && !batchUploadState.isUploading) {
+          handleClose();
+        }
+      }}
+    >
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-accent">
@@ -553,17 +638,28 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
             Enhanced FeedMe Upload
           </DialogTitle>
           <DialogDescription>
-            Upload customer support transcripts with advanced multi-file support, real-time preview, and batch processing.
+            Upload customer support transcripts with advanced multi-file
+            support, real-time preview, and batch processing.
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col overflow-hidden">
+        <Tabs
+          value={activeTab}
+          onValueChange={handleTabChange}
+          className="flex-1 flex flex-col overflow-hidden"
+        >
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="multi-file" disabled={batchUploadState.isUploading}>
+            <TabsTrigger
+              value="multi-file"
+              disabled={batchUploadState.isUploading}
+            >
               <Folder className="h-4 w-4 mr-2" />
               Multi-File Upload
             </TabsTrigger>
-            <TabsTrigger value="single-file" disabled={batchUploadState.isUploading}>
+            <TabsTrigger
+              value="single-file"
+              disabled={batchUploadState.isUploading}
+            >
               <FileText className="h-4 w-4 mr-2" />
               Single File
             </TabsTrigger>
@@ -571,7 +667,10 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
           </TabsList>
 
           {/* Multi-File Upload Tab */}
-          <TabsContent value="multi-file" className="flex-1 flex flex-col overflow-hidden mt-4">
+          <TabsContent
+            value="multi-file"
+            className="flex-1 flex flex-col overflow-hidden mt-4"
+          >
             <div className="flex-1 flex flex-col gap-4 overflow-hidden">
               {/* Drop Zone */}
               <div
@@ -582,9 +681,13 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                 onClick={() => fileInputRef.current?.click()}
                 className={cn(
                   "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
-                  isDragActive ? "border-accent bg-accent/5" : "border-muted-foreground/25",
+                  isDragActive
+                    ? "border-accent bg-accent/5"
+                    : "border-muted-foreground/25",
                   files.length > 0 ? "border-accent bg-accent/5" : "",
-                  batchUploadState.isUploading ? "pointer-events-none opacity-50" : "hover:bg-mb-blue-300 hover:bg-mb-blue-300/5"
+                  batchUploadState.isUploading
+                    ? "pointer-events-none opacity-50"
+                    : "hover:bg-mb-blue-300 hover:bg-mb-blue-300/5",
                 )}
               >
                 <input
@@ -599,9 +702,13 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                 <div className="space-y-2">
                   <Upload className="h-8 w-8 text-muted-foreground mx-auto" />
                   <p className="text-sm font-medium">
-                    {isDragActive ? 'Drop files here...' : 'Drag and drop files here, or click to select'}
+                    {isDragActive
+                      ? "Drop files here..."
+                      : "Drag and drop files here, or click to select"}
                   </p>
-                  <p className="text-xs text-muted-foreground">Supports multiple PDF files (up to 20MB each)</p>
+                  <p className="text-xs text-muted-foreground">
+                    Supports multiple PDF files (up to 20MB each)
+                  </p>
                 </div>
               </div>
 
@@ -609,7 +716,9 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
               {files.length > 0 && (
                 <div className="flex-1 overflow-hidden">
                   <div className="flex items-center justify-between mb-3">
-                    <h4 className="text-sm font-medium">Files ({files.length})</h4>
+                    <h4 className="text-sm font-medium">
+                      Files ({files.length})
+                    </h4>
                     <div className="flex gap-2">
                       <Button
                         variant="outline"
@@ -621,14 +730,17 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                       </Button>
                       <Button
                         onClick={handleBatchUpload}
-                        disabled={files.length === 0 || batchUploadState.isUploading}
+                        disabled={
+                          files.length === 0 || batchUploadState.isUploading
+                        }
                         className="bg-accent hover:bg-mb-blue-300/90"
                         size="sm"
                       >
                         {batchUploadState.isUploading ? (
                           <>
                             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Uploading ({batchUploadState.completedFiles}/{batchUploadState.totalFiles})
+                            Uploading ({batchUploadState.completedFiles}/
+                            {batchUploadState.totalFiles})
                           </>
                         ) : (
                           <>
@@ -643,7 +755,10 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                   <ScrollArea className="h-[300px]">
                     <div className="space-y-3 pr-4">
                       {files.map((fileState) => (
-                        <Card key={fileState.id} className="transition-all hover:shadow-md">
+                        <Card
+                          key={fileState.id}
+                          className="transition-all hover:shadow-md"
+                        >
                           <CardHeader className="pb-2">
                             <div className="flex items-start justify-between">
                               <div className="flex-1 min-w-0">
@@ -651,8 +766,13 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                                   <File className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                                   <Input
                                     value={fileState.title}
-                                    onChange={(e) => updateFileTitle(fileState.id, e.target.value)}
-                                    disabled={fileState.status !== 'pending'}
+                                    onChange={(e) =>
+                                      updateFileTitle(
+                                        fileState.id,
+                                        e.target.value,
+                                      )
+                                    }
+                                    disabled={fileState.status !== "pending"}
                                     className="h-7 text-sm border-0 p-0 focus-visible:ring-0"
                                   />
                                 </div>
@@ -663,16 +783,21 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                                   )}
                                 </div>
                               </div>
-                              
+
                               <div className="flex items-center gap-2 ml-2 flex-shrink-0">
-                                <Badge 
-                                  variant="outline" 
-                                  className={cn("text-xs", getStatusColor(fileState.status))}
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    "text-xs",
+                                    getStatusColor(fileState.status),
+                                  )}
                                 >
-                                  <span className="mr-1">{getStatusIcon(fileState.status)}</span>
+                                  <span className="mr-1">
+                                    {getStatusIcon(fileState.status)}
+                                  </span>
                                   {fileState.status}
                                 </Badge>
-                                {fileState.status === 'pending' && (
+                                {fileState.status === "pending" && (
                                   <Button
                                     variant="ghost"
                                     size="sm"
@@ -687,30 +812,39 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                           </CardHeader>
 
                           <CardContent className="pt-0">
-                            {fileState.preview && fileState.preview.description && (
-                              <div className="mb-2 p-2 bg-blue-50 border border-blue-200 rounded-md">
-                                <p className="text-xs text-blue-700 font-medium">
-                                  {fileState.preview.description}
-                                </p>
-                              </div>
-                            )}
-                            
-                            {(fileState.status === 'uploading' || fileState.status === 'processing') && (
+                            {fileState.preview &&
+                              fileState.preview.description && (
+                                <div className="mb-2 p-2 bg-blue-50 border border-blue-200 rounded-md">
+                                  <p className="text-xs text-blue-700 font-medium">
+                                    {fileState.preview.description}
+                                  </p>
+                                </div>
+                              )}
+
+                            {(fileState.status === "uploading" ||
+                              fileState.status === "processing") && (
                               <div className="space-y-2">
                                 <div className="flex items-center justify-between text-xs">
                                   <span>
-                                    {fileState.status === 'uploading' ? 'Uploading...' : 'Processing...'}
+                                    {fileState.status === "uploading"
+                                      ? "Uploading..."
+                                      : "Processing..."}
                                   </span>
                                   <span>{fileState.progress}%</span>
                                 </div>
-                                <Progress value={fileState.progress} className="h-1" />
+                                <Progress
+                                  value={fileState.progress}
+                                  className="h-1"
+                                />
                               </div>
                             )}
-                            
+
                             {fileState.error && (
                               <Alert variant="destructive" className="mt-2">
                                 <AlertCircle className="h-4 w-4" />
-                                <AlertDescription className="text-xs">{fileState.error}</AlertDescription>
+                                <AlertDescription className="text-xs">
+                                  {fileState.error}
+                                </AlertDescription>
                               </Alert>
                             )}
                           </CardContent>
@@ -726,11 +860,18 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                 <div className="space-y-2 p-4 bg-blue-50 border border-blue-200 rounded-md">
                   <div className="flex items-center justify-between text-sm">
                     <span>Batch Upload Progress</span>
-                    <span>{batchUploadState.completedFiles}/{batchUploadState.totalFiles} completed</span>
+                    <span>
+                      {batchUploadState.completedFiles}/
+                      {batchUploadState.totalFiles} completed
+                    </span>
                   </div>
-                  <Progress 
-                    value={(batchUploadState.completedFiles / batchUploadState.totalFiles) * 100} 
-                    className="h-2" 
+                  <Progress
+                    value={
+                      (batchUploadState.completedFiles /
+                        batchUploadState.totalFiles) *
+                      100
+                    }
+                    className="h-2"
                   />
                 </div>
               )}
@@ -740,8 +881,13 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                 <Alert className="border-green-200 text-green-800 bg-green-50">
                   <CheckCircle2 className="h-4 w-4" />
                   <AlertDescription>
-                    Successfully uploaded {batchUploadState.results.length} file{batchUploadState.results.length !== 1 ? 's' : ''}!
-                    {batchUploadState.results.reduce((total, result) => total + result.total_examples, 0)} examples extracted.
+                    Successfully uploaded {batchUploadState.results.length} file
+                    {batchUploadState.results.length !== 1 ? "s" : ""}!
+                    {batchUploadState.results.reduce(
+                      (total, result) => total + result.total_examples,
+                      0,
+                    )}{" "}
+                    examples extracted.
                   </AlertDescription>
                 </Alert>
               )}
@@ -752,9 +898,15 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                   <AlertTriangle className="h-4 w-4" />
                   <AlertDescription>
                     <div className="space-y-1">
-                      <p className="font-medium">{batchUploadState.errors.length} error{batchUploadState.errors.length !== 1 ? 's' : ''} occurred:</p>
+                      <p className="font-medium">
+                        {batchUploadState.errors.length} error
+                        {batchUploadState.errors.length !== 1 ? "s" : ""}{" "}
+                        occurred:
+                      </p>
                       {batchUploadState.errors.map((error, index) => (
-                        <p key={index} className="text-xs">{error}</p>
+                        <p key={index} className="text-xs">
+                          {error}
+                        </p>
                       ))}
                     </div>
                   </AlertDescription>
@@ -764,7 +916,10 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
           </TabsContent>
 
           {/* Single File Tab (Legacy Compatibility) */}
-          <TabsContent value="single-file" className="flex-1 overflow-auto mt-4">
+          <TabsContent
+            value="single-file"
+            className="flex-1 overflow-auto mt-4"
+          >
             <form onSubmit={handleSingleFileUpload} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="single-title">Conversation Title *</Label>
@@ -783,18 +938,24 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                 onDragLeave={handleDragLeave}
                 onDragOver={handleDragOver}
                 onDrop={(e) => {
-                  handleDrop(e)
-                  const files = Array.from(e.dataTransfer.files)
+                  handleDrop(e);
+                  const files = Array.from(e.dataTransfer.files);
                   if (files.length > 0) {
-                    handleSingleFileSelect(files[0])
+                    handleSingleFileSelect(files[0]);
                   }
                 }}
-                onClick={() => document.getElementById('single-file-input')?.click()}
+                onClick={() =>
+                  document.getElementById("single-file-input")?.click()
+                }
                 className={cn(
                   "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
-                  isDragActive ? "border-accent bg-accent/5" : "border-muted-foreground/25",
+                  isDragActive
+                    ? "border-accent bg-accent/5"
+                    : "border-muted-foreground/25",
                   singleFile ? "border-accent bg-accent/5" : "",
-                  batchUploadState.isUploading ? "pointer-events-none opacity-50" : "hover:bg-mb-blue-300 hover:bg-mb-blue-300/5"
+                  batchUploadState.isUploading
+                    ? "pointer-events-none opacity-50"
+                    : "hover:bg-mb-blue-300 hover:bg-mb-blue-300/5",
                 )}
               >
                 <input
@@ -802,9 +963,9 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                   type="file"
                   accept=".txt,.log,.html,.htm,.csv,.pdf,text/*"
                   onChange={(e) => {
-                    const files = e.target.files
+                    const files = e.target.files;
                     if (files && files.length > 0) {
-                      handleSingleFileSelect(files[0])
+                      handleSingleFileSelect(files[0]);
                     }
                   }}
                   className="hidden"
@@ -830,9 +991,13 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                     <>
                       <Upload className="h-8 w-8 text-muted-foreground mx-auto" />
                       <p className="text-sm font-medium">
-                        {isDragActive ? 'Drop the file here...' : 'Drag and drop a file here, or click to select'}
+                        {isDragActive
+                          ? "Drop the file here..."
+                          : "Drag and drop a file here, or click to select"}
                       </p>
-                      <p className="text-xs text-muted-foreground">Supports PDF files (up to 20MB)</p>
+                      <p className="text-xs text-muted-foreground">
+                        Supports PDF files (up to 20MB)
+                      </p>
                     </>
                   )}
                 </div>
@@ -849,7 +1014,11 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                 </Button>
                 <Button
                   type="submit"
-                  disabled={!singleTitle.trim() || !singleFile || batchUploadState.isUploading}
+                  disabled={
+                    !singleTitle.trim() ||
+                    !singleFile ||
+                    batchUploadState.isUploading
+                  }
                   className="bg-accent hover:bg-mb-blue-300/90"
                 >
                   {batchUploadState.isUploading ? (
@@ -872,5 +1041,5 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
         </Tabs>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

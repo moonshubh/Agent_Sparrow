@@ -5,32 +5,28 @@ Provides Redis-backed caching for expensive analytics queries.
 Uses the new RPC aggregation functions for efficient database-side processing.
 Integrates with database-side invalidation tracking via cache_invalidation_tracker table.
 """
+
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from functools import wraps
 import inspect
-from typing import Any, Callable, Optional, TypeVar, ParamSpec
+from typing import Any, Callable, Optional
 
 from app.cache.redis_cache import RedisCache
 
 logger = logging.getLogger(__name__)
 
-# Type variables for decorator
-P = ParamSpec("P")
-R = TypeVar("R")
-
 # Cache TTL configurations (in seconds)
 CACHE_TTL = {
-    "conversation_analytics": 300,      # 5 minutes
-    "approval_workflow_stats": 300,     # 5 minutes
-    "feedme_summary": 120,              # 2 minutes
-    "folders_with_stats": 180,          # 3 minutes
-    "chat_session_stats": 300,          # 5 minutes
-    "conversation_processing_stats": 60, # 1 minute (per-conversation)
-    "embedding": 3600,                  # 1 hour (embeddings are expensive)
+    "conversation_analytics": 300,  # 5 minutes
+    "approval_workflow_stats": 300,  # 5 minutes
+    "feedme_summary": 120,  # 2 minutes
+    "folders_with_stats": 180,  # 3 minutes
+    "chat_session_stats": 300,  # 5 minutes
+    "conversation_processing_stats": 60,  # 1 minute (per-conversation)
+    "embedding": 3600,  # 1 hour (embeddings are expensive)
 }
 
 
@@ -103,7 +99,7 @@ class AnalyticsCache:
         value: Any,
         *args: Any,
         ttl: Optional[int] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         """
         Cache a result for an operation.
@@ -148,9 +144,9 @@ class AnalyticsCache:
             try:
                 from supabase import create_client
                 from app.core.settings import settings
+
                 self._supabase_client = create_client(
-                    settings.supabase_url,
-                    settings.supabase_anon_key
+                    settings.supabase_url, settings.supabase_anon_key
                 )
             except Exception as e:
                 logger.warning(f"Failed to initialize Supabase client for cache: {e}")
@@ -174,8 +170,8 @@ class AnalyticsCache:
                 return True  # Assume valid if can't check
 
             result = client.rpc(
-                'is_cache_valid',
-                {'p_cache_key': operation, 'p_cached_at': cached_at.isoformat()}
+                "is_cache_valid",
+                {"p_cache_key": operation, "p_cached_at": cached_at.isoformat()},
             ).execute()
 
             if result.data is not None:
@@ -186,10 +182,7 @@ class AnalyticsCache:
             return True  # Assume valid on error
 
     def get_with_db_validation(
-        self,
-        operation: str,
-        *args: Any,
-        **kwargs: Any
+        self, operation: str, *args: Any, **kwargs: Any
     ) -> tuple[Optional[Any], bool]:
         """
         Get cached result with database invalidation validation.
@@ -250,7 +243,7 @@ class AnalyticsCache:
         value: Any,
         *args: Any,
         ttl: Optional[int] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         """
         Cache a result with metadata for database invalidation tracking.
@@ -275,8 +268,8 @@ class AnalyticsCache:
 
             # Store metadata with timestamp
             meta = {
-                'cached_at': datetime.now(timezone.utc).isoformat(),
-                'operation': operation
+                "cached_at": datetime.now(timezone.utc).isoformat(),
+                "operation": operation,
             }
             self._redis.set(meta_key, meta, ttl=cache_ttl)
 
@@ -287,8 +280,8 @@ class AnalyticsCache:
 
 def cached_analytics(
     operation: str,
-    ttl: Optional[int] = None
-) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    ttl: Optional[int] = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator for caching analytics method results.
 
@@ -304,19 +297,20 @@ def cached_analytics(
     Returns:
         Decorated function with caching
     """
-    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         signature = inspect.signature(func)
         param_names = list(signature.parameters.keys())
         skip_first_arg = bool(param_names and param_names[0] in {"self", "cls"})
 
-        def _args_for_cache_key(args: P.args) -> tuple[Any, ...]:
+        def _args_for_cache_key(args: tuple[Any, ...]) -> tuple[Any, ...]:
             # Avoid including instance/class references in cache keys.
             if skip_first_arg and len(args) > 0:
                 return tuple(args[1:])
             return tuple(args)
 
         @wraps(func)
-        async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             # Get or create cache instance
             cache = _get_analytics_cache()
 
@@ -335,7 +329,7 @@ def cached_analytics(
             return result
 
         @wraps(func)
-        def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             cache = _get_analytics_cache()
 
             key_args = _args_for_cache_key(args)
@@ -350,6 +344,7 @@ def cached_analytics(
 
         # Return appropriate wrapper based on function type
         import asyncio
+
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper

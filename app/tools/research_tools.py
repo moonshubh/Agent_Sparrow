@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 from dotenv import load_dotenv
 from tenacity import (
@@ -32,6 +32,7 @@ load_dotenv()
 # NOTE: Redis caching for Firecrawl has been removed.
 # Firecrawl caching is handled by the service itself via the `max_age` parameter
 # when using scrape endpoints. The unified tool wrappers avoid extra cache layers.
+
 
 class TavilySearchTool:
     """Enhanced Tavily Search Tool with full API feature support.
@@ -116,7 +117,7 @@ class TavilySearchTool:
             return {"urls": [], "images": [], "results": []}
 
         # Build search kwargs with all supported parameters
-        search_kwargs: dict = {
+        search_kwargs: dict[str, Any] = {
             "query": query,
             "max_results": max_results,
             "search_depth": search_depth,  # Use advanced by default
@@ -138,7 +139,11 @@ class TavilySearchTool:
         if topic:
             search_kwargs["topic"] = topic
 
-        results = self.client.search(**search_kwargs)
+        client = self.client
+        if client is None:
+            return {"urls": [], "images": [], "results": []}
+
+        results = client.search(**search_kwargs)
 
         structured_results = results.get("results", [])
         urls = []
@@ -151,40 +156,52 @@ class TavilySearchTool:
 
         # Extract images from results
         # Tavily may return images in the main response or within individual results
-        images = []
-        
+        images: list[dict[str, Any]] = []
+
         # Check for top-level images array (Tavily API may include this)
         raw_images = results.get("images", [])
         if isinstance(raw_images, list):
             for img in raw_images[:10]:  # Limit to 10 images
                 if isinstance(img, str):
                     # Simple URL string
-                    images.append({
-                        "url": img,
-                        "alt": f"Search result image for: {query}",
-                        "source": "tavily",
-                    })
+                    images.append(
+                        {
+                            "url": img,
+                            "alt": f"Search result image for: {query}",
+                            "source": "tavily",
+                        }
+                    )
                 elif isinstance(img, dict):
                     # Structured image object
-                    images.append({
-                        "url": img.get("url") or img.get("src", ""),
-                        "alt": img.get("alt") or img.get("title") or f"Image for: {query}",
-                        "source": img.get("source") or "tavily",
-                        "width": img.get("width"),
-                        "height": img.get("height"),
-                    })
-        
+                    images.append(
+                        {
+                            "url": img.get("url") or img.get("src", ""),
+                            "alt": img.get("alt")
+                            or img.get("title")
+                            or f"Image for: {query}",
+                            "source": img.get("source") or "tavily",
+                            "width": img.get("width"),
+                            "height": img.get("height"),
+                        }
+                    )
+
         # Also check individual results for thumbnail/image fields
         for item in structured_results[:max_results]:
             thumbnail = item.get("thumbnail") or item.get("image") or item.get("img")
-            if thumbnail and isinstance(thumbnail, str) and thumbnail.startswith("http"):
+            if (
+                thumbnail
+                and isinstance(thumbnail, str)
+                and thumbnail.startswith("http")
+            ):
                 # Avoid duplicates
                 if not any(img.get("url") == thumbnail for img in images):
-                    images.append({
-                        "url": thumbnail,
-                        "alt": item.get("title") or f"Thumbnail for: {query}",
-                        "source": item.get("url") or "tavily",
-                    })
+                    images.append(
+                        {
+                            "url": thumbnail,
+                            "alt": item.get("title") or f"Thumbnail for: {query}",
+                            "source": item.get("url") or "tavily",
+                        }
+                    )
 
         return {
             "query": query,
@@ -219,11 +236,14 @@ class TavilySearchTool:
 
         # Limit to 10 URLs as per Tavily's API limits
         urls = urls[:10]
+        client = self.client
+        if client is None:
+            return {"error": "tavily_unavailable", "results": []}
 
         try:
             # Use Tavily's extract API if available
-            if hasattr(self.client, 'extract'):
-                results = self.client.extract(urls=urls)
+            if hasattr(client, "extract"):
+                results = client.extract(urls=urls)
                 return {
                     "urls": urls,
                     "results": results.get("results", []),
@@ -234,17 +254,21 @@ class TavilySearchTool:
                 all_results = []
                 for url in urls:
                     try:
-                        result = self.client.search(
+                        result = client.search(
                             query=f"site:{url}",
                             max_results=1,
                             include_answer=True,
                         )
                         if result.get("results"):
-                            all_results.append({
-                                "url": url,
-                                "content": result["results"][0].get("content", ""),
-                                "raw_content": result["results"][0].get("raw_content", ""),
-                            })
+                            all_results.append(
+                                {
+                                    "url": url,
+                                    "content": result["results"][0].get("content", ""),
+                                    "raw_content": result["results"][0].get(
+                                        "raw_content", ""
+                                    ),
+                                }
+                            )
                     except Exception:
                         all_results.append({"url": url, "error": "extraction_failed"})
 
@@ -437,6 +461,9 @@ class FirecrawlTool:
         """
         if self.disabled:
             return {"error": "firecrawl_disabled"}
+        app = self.app
+        if app is None:
+            return {"error": "firecrawl_disabled"}
 
         @retry(
             reraise=True,
@@ -445,7 +472,7 @@ class FirecrawlTool:
             retry=retry_if_exception_type(Exception),
         )
         def _call_search(q: str):
-            return self.app.search(q)
+            return app.search(q)
 
         try:
             results = _call_search(query)
@@ -619,7 +646,7 @@ class FirecrawlTool:
                 return {
                     "status": "started",
                     "crawl_id": crawl_id,
-                    "message": f"Async crawl started. Use firecrawl_crawl_status to check progress.",
+                    "message": "Async crawl started. Use firecrawl_crawl_status to check progress.",
                 }
         except Exception as e:
             return {"error": str(e)}
@@ -705,7 +732,8 @@ class FirecrawlTool:
 
 # Convenience helper to expose all research-related tools from a single place
 
-def get_research_tools() -> list[callable]:
+
+def get_research_tools() -> list[Callable[..., Any]]:
     """Return instantiated research tools for agent binding.
 
     When optional dependencies or API keys are missing, we fall back to
@@ -715,7 +743,7 @@ def get_research_tools() -> list[callable]:
     full functionality in production environments where the dependencies are
     installed and configured.
     """
-    tools: list[callable] = []
+    tools: list[Callable[..., Any]] = []
 
     # Tavily search tool
     try:
@@ -738,7 +766,7 @@ def get_research_tools() -> list[callable]:
     return tools
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example usage (for testing purposes)
     firecrawl_tool = FirecrawlTool()
 

@@ -6,7 +6,6 @@ import json
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-
 LOG_LEVEL_RE = re.compile(
     r"\b(INFO|WARN|WARNING|ERROR|ERR|DEBUG|TRACE|FATAL|CRITICAL)\b", re.IGNORECASE
 )
@@ -40,10 +39,7 @@ def _is_error_start(line: str) -> bool:
     if STACK_RE.search(line):
         return True
     if LOG_LEVEL_RE.search(line):
-        return any(
-            level in lowered
-            for level in ("error", "err", "fatal", "critical")
-        )
+        return any(level in lowered for level in ("error", "err", "fatal", "critical"))
     return False
 
 
@@ -118,7 +114,9 @@ def extract_log_errors(
     for block in raw_blocks:
         lines = block.get("lines") or []
         first_line = lines[0] if lines else ""
-        signature = _normalize_signature(first_line) or _normalize_signature(" ".join(lines[:2]))
+        signature = _normalize_signature(first_line) or _normalize_signature(
+            " ".join(lines[:2])
+        )
         if not signature:
             continue
         record = aggregated.get(signature)
@@ -196,7 +194,9 @@ def _as_list(value: Any, *, max_items: int = 10) -> List[str]:
     if isinstance(value, list):
         raw_items = value
     elif isinstance(value, str):
-        raw_items = [chunk.strip() for chunk in re.split(r"[\n;]+", value) if chunk.strip()]
+        raw_items = [
+            chunk.strip() for chunk in re.split(r"[\n;]+", value) if chunk.strip()
+        ]
     else:
         raw_items = [str(value)]
 
@@ -230,9 +230,13 @@ def normalize_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def fallback_summary_from_text(text: str, *, subject: str | None = None) -> Dict[str, Any]:
+def fallback_summary_from_text(
+    text: str, *, subject: str | None = None
+) -> Dict[str, Any]:
     lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
-    bullets = [ln.lstrip("-•* ").strip() for ln in lines if ln.startswith(("-", "•", "*"))]
+    bullets = [
+        ln.lstrip("-•* ").strip() for ln in lines if ln.startswith(("-", "•", "*"))
+    ]
     if not bullets:
         bullets = [ln for ln in lines[:6]]
     return {

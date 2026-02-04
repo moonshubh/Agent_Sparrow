@@ -6,7 +6,7 @@ with field-level reducers following LangGraph best practices for state managemen
 """
 
 import operator
-from typing import Annotated, Any, Callable, ClassVar, Dict, List, Optional, Set, TypeVar
+from typing import Annotated, Any, ClassVar, Dict, List, Optional, Set, TypeVar, cast
 
 from langchain_core.messages import BaseMessage, SystemMessage
 from langgraph.graph import add_messages
@@ -37,11 +37,7 @@ def merge_scratchpad(current: Dict[str, Any], update: Dict[str, Any]) -> Dict[st
 
     result = current.copy()
     for key, value in update.items():
-        if (
-            isinstance(value, dict)
-            and key in result
-            and isinstance(result[key], dict)
-        ):
+        if isinstance(value, dict) and key in result and isinstance(result[key], dict):
             # Recursive merge for nested dicts
             result[key] = merge_scratchpad(result[key], value)
         else:
@@ -67,6 +63,7 @@ def merge_forwarded_props(
     if update is None:
         return current
     return {**current, **update}
+
 
 class Attachment(BaseModel):
     """Represents an attachment provided via the AG-UI or SSE frontends."""
@@ -94,9 +91,17 @@ class Attachment(BaseModel):
     }
     MAX_ATTACHMENT_SIZE_BYTES: ClassVar[int] = 10 * 1024 * 1024  # 10 MiB
 
-    name: Optional[str] = Field(default=None, description="Original filename provided by the client if available.")
-    mime_type: Optional[str] = Field(default=None, description="Attachment MIME type constrained to a safe allowlist.")
-    data_url: str = Field(..., description="Inline data URL representation of the attachment contents.")
+    name: Optional[str] = Field(
+        default=None,
+        description="Original filename provided by the client if available.",
+    )
+    mime_type: Optional[str] = Field(
+        default=None,
+        description="Attachment MIME type constrained to a safe allowlist.",
+    )
+    data_url: str = Field(
+        ..., description="Inline data URL representation of the attachment contents."
+    )
     size: Optional[int] = Field(
         default=None,
         ge=0,
@@ -112,7 +117,9 @@ class Attachment(BaseModel):
         if not value.startswith("data:"):
             raise ValueError("Attachment data_url must be a valid data: URL.")
         if "," not in value:
-            raise ValueError("Attachment data_url must contain encoded content after metadata.")
+            raise ValueError(
+                "Attachment data_url must contain encoded content after metadata."
+            )
         return value
 
     @field_validator("mime_type")
@@ -143,24 +150,39 @@ class Attachment(BaseModel):
         if value is None:
             return value
         if value > cls.MAX_ATTACHMENT_SIZE_BYTES:
-            raise ValueError("Attachment size exceeds the maximum allowed limit of 10 MiB.")
+            raise ValueError(
+                "Attachment size exceeds the maximum allowed limit of 10 MiB."
+            )
         return value
 
 
 def bounded_add_messages(max_messages: int = 30):
     """Reducer that preserves memory system messages and keeps the last N others."""
-    def reducer(current: List[BaseMessage], update: List[BaseMessage]) -> List[BaseMessage]:
-        merged = add_messages(current or [], update or [])
+
+    def reducer(
+        current: List[BaseMessage], update: List[BaseMessage]
+    ) -> List[BaseMessage]:
+        merged = cast(
+            List[BaseMessage],
+            add_messages(cast(List[Any], current or []), cast(List[Any], update or [])),
+        )
         memory_msgs = [
-            m for m in merged
-            if isinstance(m, SystemMessage) and getattr(m, "name", "") == "server_memory_context"
+            m
+            for m in merged
+            if isinstance(m, SystemMessage)
+            and getattr(m, "name", "") == "server_memory_context"
         ]
         non_memory = [
-            m for m in merged
-            if not (isinstance(m, SystemMessage) and getattr(m, "name", "") == "server_memory_context")
+            m
+            for m in merged
+            if not (
+                isinstance(m, SystemMessage)
+                and getattr(m, "name", "") == "server_memory_context"
+            )
         ]
         tail = non_memory[-max_messages:]
         return [*memory_msgs, *tail]
+
     return reducer
 
 
@@ -185,7 +207,9 @@ class ThreadState(BaseModel):
         description="Single-line status including what's happening + next TODOs.",
     )
     user_intent: str = Field(default="", description="Best-effort user intent summary.")
-    constraints: List[str] = Field(default_factory=list, description="Known constraints.")
+    constraints: List[str] = Field(
+        default_factory=list, description="Known constraints."
+    )
     decisions: List[ThreadStateDecision] = Field(
         default_factory=list, description="Key decisions and rationales."
     )
@@ -198,10 +222,16 @@ class ThreadState(BaseModel):
         description="High-signal summary of progress, tool evidence, and outcomes so far.",
     )
 
-    open_questions: List[str] = Field(default_factory=list, description="Open questions.")
-    artifacts: List[str] = Field(default_factory=list, description="Artifact IDs/links only.")
+    open_questions: List[str] = Field(
+        default_factory=list, description="Open questions."
+    )
+    artifacts: List[str] = Field(
+        default_factory=list, description="Artifact IDs/links only."
+    )
     risks: List[str] = Field(default_factory=list, description="Known risks.")
-    assumptions: List[str] = Field(default_factory=list, description="Assumptions being made.")
+    assumptions: List[str] = Field(
+        default_factory=list, description="Assumptions being made."
+    )
     last_updated_at: Optional[str] = Field(
         default=None,
         description="UTC timestamp (ISO-8601) of last update.",
@@ -228,7 +258,9 @@ class LogAnalysisNote(BaseModel):
         le=1.0,
         description="Confidence in the analysis (0-1).",
     )
-    evidence: List[str] = Field(default_factory=list, description="Key evidence strings.")
+    evidence: List[str] = Field(
+        default_factory=list, description="Key evidence strings."
+    )
     recommended_actions: List[str] = Field(
         default_factory=list,
         description="Suggested next actions or remediation steps.",
@@ -256,9 +288,16 @@ class GraphState(BaseModel):
     """
 
     # Session identification
-    session_id: str = Field(default="default", description="Logical conversation / thread identifier.")
-    trace_id: Optional[str] = Field(default=None, description="Trace or run identifier propagated to LangSmith.")
-    user_id: Optional[str] = Field(default=None, description="Authenticated user id for memory scoping and auditing.")
+    session_id: str = Field(
+        default="default", description="Logical conversation / thread identifier."
+    )
+    trace_id: Optional[str] = Field(
+        default=None, description="Trace or run identifier propagated to LangSmith."
+    )
+    user_id: Optional[str] = Field(
+        default=None,
+        description="Authenticated user id for memory scoping and auditing.",
+    )
 
     # Message history with LangGraph reducer for proper handling
     messages: Annotated[List[BaseMessage], bounded_add_messages(30)] = Field(
@@ -304,11 +343,6 @@ class GraphState(BaseModel):
         description="Ephemeral state used by tools/subagents during execution.",
     )
 
-    thread_state: ThreadState | None = Field(
-        default=None,
-        description="Compressed thread state for resumptions and long-running sessions.",
-    )
-
     # Todos with append reducer
     todos: Annotated[List[Dict[str, Any]], operator.add] = Field(
         default_factory=list,
@@ -322,13 +356,17 @@ class GraphState(BaseModel):
     )
 
     # Persisted internal notes (checkpointed)
-    log_analysis_notes: Annotated[Dict[str, LogAnalysisNote], merge_forwarded_props] = Field(
-        default_factory=dict,
-        description="Per-file log analysis notes keyed by tool_call_id.",
+    log_analysis_notes: Annotated[Dict[str, LogAnalysisNote], merge_forwarded_props] = (
+        Field(
+            default_factory=dict,
+            description="Per-file log analysis notes keyed by tool_call_id.",
+        )
     )
 
     # Step counter for safety caps
-    step: int = Field(default=0, description="Internal step counter for graph execution.")
+    step: int = Field(
+        default=0, description="Internal step counter for graph execution."
+    )
 
     @field_validator("forwarded_props", "scratchpad", mode="before")
     @classmethod
@@ -356,7 +394,7 @@ class GraphState(BaseModel):
         """Compatibility helper for dict-like get()."""
         return getattr(self, key, default)
 
-    @model_serializer(when_used='always')
+    @model_serializer(when_used="always")
     def serialize_model(self):
         # This custom serializer is used to address a RecursionError caused by
         # `model_dump()` calling the serializer itself. By manually building the
@@ -364,13 +402,12 @@ class GraphState(BaseModel):
         # We also ensure the `messages` field preserves its BaseMessage objects,
         # as required by the LangGraph framework.
         serialized_data = {
-            key: getattr(self, key)
-            for key in self.model_fields
-            if hasattr(self, key)
+            key: getattr(self, key) for key in self.model_fields if hasattr(self, key)
         }
         serialized_data["messages"] = self.messages
         return serialized_data
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
 
 GraphState.model_rebuild()

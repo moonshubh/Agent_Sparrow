@@ -21,19 +21,28 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Optional, cast
+from typing import Any, Dict, Optional, cast
 
 from langchain_core.language_models import BaseChatModel
 from loguru import logger
+from pydantic import SecretStr
 
 from app.core.settings import settings
 from app.core.config import find_model_config, get_models_config
 from app.core.config.model_registry import get_model_by_id
 from app.core.rate_limiting.agent_wrapper import RateLimitedAgent, wrap_gemini_agent
 
-
 # Type alias for supported providers
 Provider = str  # "google" | "xai" | "openrouter"
+
+
+def _to_secret(value: str | SecretStr | None) -> SecretStr | None:
+    if isinstance(value, SecretStr):
+        return value
+    if value:
+        return SecretStr(value)
+    return None
+
 
 # =============================================================================
 # GROK CONFIGURATION - Always enabled reasoning for maximum quality
@@ -82,7 +91,10 @@ def get_temperature_for_role(role: str, model: str | None = None) -> float:
             return match.temperature
 
     role_key = (role or "").strip().lower()
-    if role_key in {"summarization", "state_extraction"} and "summarizer" in config.internal:
+    if (
+        role_key in {"summarization", "state_extraction"}
+        and "summarizer" in config.internal
+    ):
         return config.internal["summarizer"].temperature
     if role_key == "feedme" and "feedme" in config.internal:
         return config.internal["feedme"].temperature
@@ -174,7 +186,9 @@ def build_summarization_model() -> BaseChatModel:
         role="summarization",
     )
     if model.__class__.__name__ == "ChatGoogleGenerativeAI":
-        return cast(BaseChatModel, wrap_gemini_agent(model, "internal.summarizer", model_id))
+        return cast(
+            BaseChatModel, wrap_gemini_agent(model, "internal.summarizer", model_id)
+        )
     return cast(BaseChatModel, RateLimitedAgent(model, "internal.summarizer"))
 
 
@@ -313,7 +327,7 @@ def _build_xai_model(
     return ChatXAI(
         model=model,
         temperature=temperature,
-        xai_api_key=settings.xai_api_key,
+        api_key=_to_secret(settings.xai_api_key),
         extra_body=extra_body,
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
@@ -357,7 +371,9 @@ def _build_openrouter_model(
 
     if is_minimax and minimax_api_key:
         # Route Minimax models to Minimax API directly
-        base_url = getattr(settings, "minimax_base_url", None) or "https://api.minimax.io/v1"
+        base_url = (
+            getattr(settings, "minimax_base_url", None) or "https://api.minimax.io/v1"
+        )
         api_key = minimax_api_key
 
         # Extract the actual model name (e.g., "minimax/MiniMax-M2.1" -> "MiniMax-M2.1")
@@ -375,9 +391,9 @@ def _build_openrouter_model(
         # - Our OpenRouterChatOpenAI wrapper preserves reasoning_details across turns
         # - This enables M2.1's chain-of-thought to remain uninterrupted
         # See: https://platform.minimax.io/docs/guides/text-m2-function-call
-        extra_body = {"reasoning_split": True}
+        minimax_extra_body: Dict[str, Any] = {"reasoning_split": True}
         if top_k is not None:
-            extra_body["top_k"] = top_k
+            minimax_extra_body["top_k"] = top_k
 
         # Minimax recommended parameters: temperature=1.0, top_p=0.95, top_k=40.
         # We respect the per-model config for sampling values.
@@ -387,7 +403,7 @@ def _build_openrouter_model(
             "temperature": temperature,
             "api_key": api_key,
             "base_url": base_url,
-            "extra_body": extra_body,
+            "extra_body": minimax_extra_body,
             "timeout": timeout,
         }
         if top_p is not None:
@@ -408,9 +424,12 @@ def _build_openrouter_model(
         )
         return _build_google_model(fallback_model, temperature)
 
-    base_url = getattr(settings, "openrouter_base_url", None) or "https://openrouter.ai/api/v1"
+    base_url = (
+        getattr(settings, "openrouter_base_url", None) or "https://openrouter.ai/api/v1"
+    )
     headers = {
-        "HTTP-Referer": getattr(settings, "openrouter_referer", None) or "https://agentsparrow.local",
+        "HTTP-Referer": getattr(settings, "openrouter_referer", None)
+        or "https://agentsparrow.local",
         "X-Title": getattr(settings, "openrouter_app_name", None) or "Agent Sparrow",
     }
 
@@ -428,7 +447,7 @@ def _build_openrouter_model(
 
     # OpenRouter reasoning tokens: enable to receive `reasoning_details` and allow
     # reasoning continuity by echoing `reasoning_details` back in subsequent turns.
-    extra_body = None
+    extra_body: Optional[Dict[str, Any]] = None
     if supports_reasoning:
         always_enable = spec.always_enable_reasoning if spec is not None else False
         if always_enable or include_reasoning:

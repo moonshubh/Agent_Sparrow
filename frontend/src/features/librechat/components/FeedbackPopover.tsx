@@ -1,26 +1,26 @@
-'use client';
+"use client";
 
-import React, { useState, useCallback, memo, useEffect, useRef } from 'react';
-import { ThumbsUp, ThumbsDown, ChevronDown, Check } from 'lucide-react';
-import * as Popover from '@radix-ui/react-popover';
+import React, { useState, useCallback, memo, useEffect, useRef } from "react";
+import { ThumbsUp, ThumbsDown, ChevronDown, Check } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
 
 const POSITIVE_CATEGORIES = [
-  { id: 'accurate', label: 'Accurate & Reliable' },
-  { id: 'creative', label: 'Creative Solution' },
-  { id: 'clear', label: 'Clear & Well-Written' },
+  { id: "accurate", label: "Accurate & Reliable" },
+  { id: "creative", label: "Creative Solution" },
+  { id: "clear", label: "Clear & Well-Written" },
 ] as const;
 
 const NEGATIVE_CATEGORIES = [
-  { id: 'inaccurate', label: 'Inaccurate Information' },
-  { id: 'not_helpful', label: 'Not Helpful' },
-  { id: 'bad_style', label: 'Poor Writing Style' },
-  { id: 'off_topic', label: 'Off Topic' },
-  { id: 'other', label: 'Other Issue' },
+  { id: "inaccurate", label: "Inaccurate Information" },
+  { id: "not_helpful", label: "Not Helpful" },
+  { id: "bad_style", label: "Poor Writing Style" },
+  { id: "off_topic", label: "Off Topic" },
+  { id: "other", label: "Other Issue" },
 ] as const;
 
-type FeedbackType = 'positive' | 'negative';
-type PositiveCategory = typeof POSITIVE_CATEGORIES[number]['id'];
-type NegativeCategory = typeof NEGATIVE_CATEGORIES[number]['id'];
+type FeedbackType = "positive" | "negative";
+type PositiveCategory = (typeof POSITIVE_CATEGORIES)[number]["id"];
+type NegativeCategory = (typeof NEGATIVE_CATEGORIES)[number]["id"];
 
 interface FeedbackPopoverProps {
   messageId: string;
@@ -49,36 +49,43 @@ export const FeedbackPopover = memo(function FeedbackPopover({
     };
   }, []);
 
-  const handleFeedbackClick = useCallback((type: FeedbackType) => {
-    if (submitted) return;
-    setFeedbackType(type);
-    setSelectedCategory(null);
-  }, [submitted]);
+  const handleFeedbackClick = useCallback(
+    (type: FeedbackType) => {
+      if (submitted) return;
+      setFeedbackType(type);
+      setSelectedCategory(null);
+    },
+    [submitted],
+  );
 
-  const handleCategorySelect = useCallback(async (category: string) => {
-    if (!feedbackType || isSubmitting) return;
+  const handleCategorySelect = useCallback(
+    async (category: string) => {
+      if (!feedbackType || isSubmitting) return;
 
-    setSelectedCategory(category);
-    setIsSubmitting(true);
+      setSelectedCategory(category);
+      setIsSubmitting(true);
 
-    try {
-      if (onSubmit) {
-        await onSubmit(feedbackType, category);
-      } else {
-        // Default submission to API
-        await submitFeedback(messageId, sessionId, feedbackType, category);
+      try {
+        if (onSubmit) {
+          await onSubmit(feedbackType, category);
+        } else {
+          // Default submission to API
+          await submitFeedback(messageId, sessionId, feedbackType, category);
+        }
+        setSubmitted(true);
+        // Close popover after short delay (with cleanup ref to prevent memory leak)
+        closeTimeoutRef.current = setTimeout(() => setIsOpen(false), 800);
+      } catch (error) {
+        console.error("[FeedbackPopover] Failed to submit feedback:", error);
+      } finally {
+        setIsSubmitting(false);
       }
-      setSubmitted(true);
-      // Close popover after short delay (with cleanup ref to prevent memory leak)
-      closeTimeoutRef.current = setTimeout(() => setIsOpen(false), 800);
-    } catch (error) {
-      console.error('[FeedbackPopover] Failed to submit feedback:', error);
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [feedbackType, isSubmitting, messageId, sessionId, onSubmit]);
+    },
+    [feedbackType, isSubmitting, messageId, sessionId, onSubmit],
+  );
 
-  const categories = feedbackType === 'positive' ? POSITIVE_CATEGORIES : NEGATIVE_CATEGORIES;
+  const categories =
+    feedbackType === "positive" ? POSITIVE_CATEGORIES : NEGATIVE_CATEGORIES;
 
   return (
     <Popover.Root open={isOpen} onOpenChange={setIsOpen}>
@@ -86,14 +93,18 @@ export const FeedbackPopover = memo(function FeedbackPopover({
         {/* Thumbs Up */}
         <Popover.Trigger asChild>
           <button
-            className={`lc-action-btn ${feedbackType === 'positive' && submitted ? 'lc-feedback-submitted' : ''}`}
-            onClick={() => handleFeedbackClick('positive')}
+            className={`lc-action-btn ${feedbackType === "positive" && submitted ? "lc-feedback-submitted" : ""}`}
+            onClick={() => handleFeedbackClick("positive")}
             aria-label="Good response"
             disabled={submitted}
           >
             <ThumbsUp
               size={14}
-              className={feedbackType === 'positive' && submitted ? 'lc-feedback-positive' : ''}
+              className={
+                feedbackType === "positive" && submitted
+                  ? "lc-feedback-positive"
+                  : ""
+              }
             />
           </button>
         </Popover.Trigger>
@@ -101,14 +112,18 @@ export const FeedbackPopover = memo(function FeedbackPopover({
         {/* Thumbs Down */}
         <Popover.Trigger asChild>
           <button
-            className={`lc-action-btn ${feedbackType === 'negative' && submitted ? 'lc-feedback-submitted' : ''}`}
-            onClick={() => handleFeedbackClick('negative')}
+            className={`lc-action-btn ${feedbackType === "negative" && submitted ? "lc-feedback-submitted" : ""}`}
+            onClick={() => handleFeedbackClick("negative")}
             aria-label="Bad response"
             disabled={submitted}
           >
             <ThumbsDown
               size={14}
-              className={feedbackType === 'negative' && submitted ? 'lc-feedback-negative' : ''}
+              className={
+                feedbackType === "negative" && submitted
+                  ? "lc-feedback-negative"
+                  : ""
+              }
             />
           </button>
         </Popover.Trigger>
@@ -129,15 +144,15 @@ export const FeedbackPopover = memo(function FeedbackPopover({
           ) : feedbackType ? (
             <div className="lc-feedback-categories">
               <p className="lc-feedback-prompt">
-                {feedbackType === 'positive'
-                  ? 'What did you like about this response?'
-                  : 'What was the issue with this response?'}
+                {feedbackType === "positive"
+                  ? "What did you like about this response?"
+                  : "What was the issue with this response?"}
               </p>
               <div className="lc-feedback-category-list">
                 {categories.map((cat) => (
                   <button
                     key={cat.id}
-                    className={`lc-feedback-category ${selectedCategory === cat.id ? 'selected' : ''}`}
+                    className={`lc-feedback-category ${selectedCategory === cat.id ? "selected" : ""}`}
                     onClick={() => handleCategorySelect(cat.id)}
                     disabled={isSubmitting}
                   >
@@ -166,12 +181,12 @@ async function submitFeedback(
   messageId: string,
   sessionId: string | undefined,
   feedbackType: FeedbackType,
-  category: string
+  category: string,
 ): Promise<void> {
-  const response = await fetch('/api/v1/feedback/message', {
-    method: 'POST',
+  const response = await fetch("/api/v1/feedback/message", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       message_id: messageId,

@@ -10,4 +10,4 @@ if env_path.is_file():
     load_dotenv(dotenv_path=env_path, override=True)
 
 # Import settings after environment variables are loaded
-from app.core.settings import settings  # noqa: F401
+from app.core.settings import settings  # noqa: F401,E402

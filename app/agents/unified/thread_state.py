@@ -16,10 +16,20 @@ from hashlib import sha256
 from typing import Any, Optional, Sequence
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from loguru import logger
 
-from app.agents.orchestration.orchestration.state import GraphState, ThreadState, ThreadStateDecision
+from app.agents.orchestration.orchestration.state import (
+    GraphState,
+    ThreadState,
+    ThreadStateDecision,
+)
 
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
 
@@ -167,12 +177,18 @@ def map_workspace_handoff_to_thread_state(handoff: dict[str, Any]) -> ThreadStat
     if isinstance(decisions_raw, list):
         for item in decisions_raw:
             if isinstance(item, dict):
-                decision = str(item.get("decision") or item.get("content") or "").strip()
+                decision = str(
+                    item.get("decision") or item.get("content") or ""
+                ).strip()
                 rationale = str(item.get("rationale") or "").strip()
                 if decision:
-                    decisions.append(ThreadStateDecision(decision=decision, rationale=rationale))
+                    decisions.append(
+                        ThreadStateDecision(decision=decision, rationale=rationale)
+                    )
             elif isinstance(item, str) and item.strip():
-                decisions.append(ThreadStateDecision(decision=item.strip(), rationale=""))
+                decisions.append(
+                    ThreadStateDecision(decision=item.strip(), rationale="")
+                )
 
     user_intent = ""
     match = re.search(r"^User Request:\s*(.+)$", summary, re.IGNORECASE | re.MULTILINE)
@@ -191,7 +207,9 @@ def map_workspace_handoff_to_thread_state(handoff: dict[str, Any]) -> ThreadStat
     if summary:
         progress_so_far_parts.append(summary)
     if next_steps:
-        rendered = "\n".join(f"- {str(step)}" for step in next_steps if step is not None)
+        rendered = "\n".join(
+            f"- {str(step)}" for step in next_steps if step is not None
+        )
         if rendered.strip():
             progress_so_far_parts.append(f"Suggested next steps:\n{rendered}")
 
@@ -216,8 +234,12 @@ def _build_thread_state_extraction_input(
     current_date: str,
     tool_burst_signature: str,
 ) -> str:
-    previous = state.thread_state.model_dump() if state.thread_state is not None else None
-    previous_json = json.dumps(previous, ensure_ascii=False, indent=2) if previous else "{}"
+    previous = (
+        state.thread_state.model_dump() if state.thread_state is not None else None
+    )
+    previous_json = (
+        json.dumps(previous, ensure_ascii=False, indent=2) if previous else "{}"
+    )
 
     todos = state.todos or []
     todos_json = json.dumps(todos, ensure_ascii=False, indent=2) if todos else "[]"
@@ -229,8 +251,10 @@ def _build_thread_state_extraction_input(
     tool_request: Optional[AIMessage] = None
     if trailing_tools:
         idx = len(messages) - len(trailing_tools) - 1
-        if idx >= 0 and isinstance(messages[idx], AIMessage):
-            tool_request = messages[idx]
+        if idx >= 0:
+            tool_candidate = messages[idx]
+            if isinstance(tool_candidate, AIMessage):
+                tool_request = tool_candidate
 
     parts: list[str] = [
         f"Current date: {current_date}",
@@ -246,9 +270,13 @@ def _build_thread_state_extraction_input(
     ]
 
     if tool_request is not None:
-        tool_calls = getattr(tool_request, "tool_calls", None) or (
-            (getattr(tool_request, "additional_kwargs", {}) or {}).get("tool_calls")
-        ) or []
+        tool_calls = (
+            getattr(tool_request, "tool_calls", None)
+            or (
+                (getattr(tool_request, "additional_kwargs", {}) or {}).get("tool_calls")
+            )
+            or []
+        )
         tool_names = [tc.get("name") for tc in tool_calls if isinstance(tc, dict)]
         parts.append(f"AI tool request: tools={tool_names}")
 
@@ -256,12 +284,17 @@ def _build_thread_state_extraction_input(
         tool_name = getattr(msg, "name", None) or "tool"
         tool_call_id = getattr(msg, "tool_call_id", None) or ""
         content = _truncate(_coerce_message_text(msg), 8000)
-        parts.append(f"\n[ToolResult] name={tool_name} tool_call_id={tool_call_id}\n{content}")
+        parts.append(
+            f"\n[ToolResult] name={tool_name} tool_call_id={tool_call_id}\n{content}"
+        )
 
     # Also include the most recent user message (helps stabilize user_intent).
-    for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
-            parts.append("\nMost recent user message:\n" + _truncate(_coerce_message_text(msg), 4000))
+    for recent_msg in reversed(messages):
+        if isinstance(recent_msg, HumanMessage):
+            parts.append(
+                "\nMost recent user message:\n"
+                + _truncate(_coerce_message_text(recent_msg), 4000)
+            )
             break
 
     return "\n".join(parts).strip()
@@ -306,7 +339,11 @@ async def extract_thread_state_at_tool_burst(
         logger.warning("thread_state_extraction_model_failed", error=str(exc))
         return None
 
-    raw = _coerce_message_text(response) if isinstance(response, BaseMessage) else str(response)
+    raw = (
+        _coerce_message_text(response)
+        if isinstance(response, BaseMessage)
+        else str(response)
+    )
     cleaned = _strip_code_fences(raw)
     json_text = _extract_json_object(cleaned) or _extract_json_object(raw)
     if not json_text:
@@ -325,7 +362,9 @@ async def extract_thread_state_at_tool_burst(
 
     payload.setdefault("last_updated_at", _utc_now_iso())
     if isinstance(payload.get("one_line_status"), str):
-        payload["one_line_status"] = " ".join(payload["one_line_status"].splitlines()).strip()
+        payload["one_line_status"] = " ".join(
+            payload["one_line_status"].splitlines()
+        ).strip()
 
     try:
         next_state = ThreadState.model_validate(payload)
@@ -383,4 +422,3 @@ async def maybe_ingest_legacy_handoff(
     except Exception as exc:
         logger.warning("handoff_migration_failed", error=str(exc))
         return False
-

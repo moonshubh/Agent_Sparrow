@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 import re
-import json
 import time
 import logging
 from datetime import datetime, timezone
@@ -34,8 +33,7 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"), override=True)
 load_dotenv(os.path.join(PROJECT_ROOT, ".env.local"), override=True)
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -107,6 +105,7 @@ def get_zendesk_client_config() -> Dict[str, str]:
 def create_zendesk_headers(email: str, api_token: str) -> Dict[str, str]:
     """Create headers for Zendesk API requests."""
     import base64
+
     auth_bytes = f"{email}/token:{api_token}".encode("utf-8")
     b64 = base64.b64encode(auth_bytes).decode("ascii")
     return {
@@ -117,9 +116,7 @@ def create_zendesk_headers(email: str, api_token: str) -> Dict[str, str]:
 
 
 def fetch_all_macros(
-    subdomain: str,
-    headers: Dict[str, str],
-    active_only: bool = True
+    subdomain: str, headers: Dict[str, str], active_only: bool = True
 ) -> List[Dict[str, Any]]:
     """Fetch all macros from Zendesk API with pagination.
 
@@ -141,7 +138,7 @@ def fetch_all_macros(
             resp = requests.get(next_url, headers=headers, timeout=30)
             resp.raise_for_status()
             payload = resp.json()
-        except requests.RequestException as exc:
+        except requests.RequestException:
             logger.exception(
                 "Zendesk API error during macros fetch",
                 extra={"page": page, "fetched": len(all_macros)},
@@ -194,21 +191,54 @@ def extract_comment_from_actions(actions: List[Dict[str, Any]]) -> tuple[str, st
 # Non-English language indicators for filtering
 NON_ENGLISH_INDICATORS = [
     # German
-    "in German", "(German)", "auf Deutsch", "Hallo!", "Mein Name ist", "ich bin ein Agent",
-    "Kundenzufriedenheit", "Entschuldigung", "Vielen Dank",
+    "in German",
+    "(German)",
+    "auf Deutsch",
+    "Hallo!",
+    "Mein Name ist",
+    "ich bin ein Agent",
+    "Kundenzufriedenheit",
+    "Entschuldigung",
+    "Vielen Dank",
     # French
-    "in French", "(French)", "en français", "Bonjour!", "Je m'appelle", "je suis agent",
-    "bonheur client", "Merci",
+    "in French",
+    "(French)",
+    "en français",
+    "Bonjour!",
+    "Je m'appelle",
+    "je suis agent",
+    "bonheur client",
+    "Merci",
     # Spanish
-    "in Spanish", "(Spanish)", "en español", "Hola!", "Mi nombre es", "soy un agente",
-    "felicidad del cliente", "Gracias",
+    "in Spanish",
+    "(Spanish)",
+    "en español",
+    "Hola!",
+    "Mi nombre es",
+    "soy un agente",
+    "felicidad del cliente",
+    "Gracias",
     # Italian
-    "in Italian", "(Italian)", "in italiano", "Ciao!", "Mi chiamo", "sono un agente",
-    "felicità del cliente", "Grazie",
+    "in Italian",
+    "(Italian)",
+    "in italiano",
+    "Ciao!",
+    "Mi chiamo",
+    "sono un agente",
+    "felicità del cliente",
+    "Grazie",
     # Portuguese
-    "in Portuguese", "(Portuguese)", "em português", "Olá!", "Meu nome é",
+    "in Portuguese",
+    "(Portuguese)",
+    "em português",
+    "Olá!",
+    "Meu nome é",
     # Dutch
-    "in Dutch", "(Dutch)", "in het Nederlands", "Hallo!", "Mijn naam is",
+    "in Dutch",
+    "(Dutch)",
+    "in het Nederlands",
+    "Hallo!",
+    "Mijn naam is",
 ]
 
 
@@ -234,7 +264,9 @@ def get_supabase_client():
     key = _env("SUPABASE_KEY") or _env("SUPABASE_ANON_KEY")
 
     if not url or not key:
-        raise RuntimeError("Missing Supabase credentials. Set SUPABASE_URL and SUPABASE_KEY")
+        raise RuntimeError(
+            "Missing Supabase credentials. Set SUPABASE_URL and SUPABASE_KEY"
+        )
 
     return create_client(url, key)
 
@@ -246,15 +278,18 @@ def get_embedding_model():
 
     api_key = _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY")
     if not api_key:
-        raise RuntimeError("Missing Gemini API key. Set GEMINI_API_KEY or GOOGLE_API_KEY")
+        raise RuntimeError(
+            "Missing Gemini API key. Set GEMINI_API_KEY or GOOGLE_API_KEY"
+        )
 
     return gen_embeddings.GoogleGenerativeAIEmbeddings(
-        model=MODEL_NAME,
-        google_api_key=api_key
+        model=MODEL_NAME, google_api_key=api_key
     )
 
 
-def generate_embedding(embed_model, text: str, context: str = "macro") -> Optional[List[float]]:
+def generate_embedding(
+    embed_model, text: str, context: str = "macro"
+) -> Optional[List[float]]:
     """Generate embedding for text with rate limiting and retry."""
     from app.db.embedding_config import EXPECTED_DIM
 
@@ -270,14 +305,18 @@ def generate_embedding(embed_model, text: str, context: str = "macro") -> Option
             if vectors and len(vectors) > 0:
                 vec = vectors[0]
                 if len(vec) != EXPECTED_DIM:
-                    logger.error(f"Dimension mismatch for {context}: got {len(vec)}, expected {EXPECTED_DIM}")
+                    logger.error(
+                        f"Dimension mismatch for {context}: got {len(vec)}, expected {EXPECTED_DIM}"
+                    )
                     return None
                 return vec
         except Exception as e:
             msg = str(e).lower()
             if "rate" in msg or "quota" in msg or "429" in msg:
                 wait = min(60, 10 * attempt)
-                logger.warning(f"Rate limit on {context} (attempt {attempt}); waiting {wait}s")
+                logger.warning(
+                    f"Rate limit on {context} (attempt {attempt}); waiting {wait}s"
+                )
                 time.sleep(wait)
             else:
                 logger.error(f"Embedding error for {context}: {e}")
@@ -306,9 +345,7 @@ def export_macros():
     # Fetch macros
     try:
         macros = fetch_all_macros(
-            subdomain=config["subdomain"],
-            headers=headers,
-            active_only=ACTIVE_ONLY
+            subdomain=config["subdomain"], headers=headers, active_only=ACTIVE_ONLY
         )
     except requests.RequestException:
         logger.error("Failed to fetch macros; export aborted.")
@@ -391,8 +428,7 @@ def export_macros():
         # Upsert to Supabase
         try:
             supabase.table("zendesk_macros").upsert(
-                row,
-                on_conflict="zendesk_id"
+                row, on_conflict="zendesk_id"
             ).execute()
             logger.info(f"  Upserted: {title}")
             success_count += 1
@@ -421,9 +457,7 @@ def list_macros_preview():
 
     try:
         macros = fetch_all_macros(
-            subdomain=config["subdomain"],
-            headers=headers,
-            active_only=ACTIVE_ONLY
+            subdomain=config["subdomain"], headers=headers, active_only=ACTIVE_ONLY
         )
     except requests.RequestException:
         logger.error("Failed to fetch macros for preview.")
@@ -439,7 +473,9 @@ def list_macros_preview():
 
         status = "active" if active else "inactive"
         has_reply = "yes" if comment_value else "no"
-        preview = comment_value[:80] + "..." if len(comment_value) > 80 else comment_value
+        preview = (
+            comment_value[:80] + "..." if len(comment_value) > 80 else comment_value
+        )
 
         print(f"  [{zendesk_id}] {title}")
         print(f"      Status: {status}, Has Reply: {has_reply}")
@@ -456,24 +492,20 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Export Zendesk macros to Supabase")
     parser.add_argument(
-        "--preview",
-        action="store_true",
-        help="Preview macros without exporting"
+        "--preview", action="store_true", help="Preview macros without exporting"
     )
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run without writing to Supabase"
+        "--dry-run", action="store_true", help="Run without writing to Supabase"
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Include inactive macros (default: active only)"
+        help="Include inactive macros (default: active only)",
     )
     parser.add_argument(
         "--all-languages",
         action="store_true",
-        help="Include all languages (default: English only)"
+        help="Include all languages (default: English only)",
     )
 
     args = parser.parse_args()

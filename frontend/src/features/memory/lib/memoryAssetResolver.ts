@@ -1,9 +1,9 @@
-import { supabase } from '@/services/supabase';
-import { getAuthToken as getLocalToken } from '@/services/auth/local-auth';
+import { supabase } from "@/services/supabase";
+import { getAuthToken as getLocalToken } from "@/services/auth/local-auth";
 
-const MEMORY_ASSET_PREFIX = 'memory-asset://';
+const MEMORY_ASSET_PREFIX = "memory-asset://";
 const MEMORY_API_BASE =
-  process.env.NEXT_PUBLIC_MEMORY_API_BASE || '/api/v1/memory';
+  process.env.NEXT_PUBLIC_MEMORY_API_BASE || "/api/v1/memory";
 
 const signedUrlCache = new Map<
   string,
@@ -17,7 +17,7 @@ const getAuthToken = async (): Promise<string | null> => {
   try {
     const session = await supabase.auth.getSession();
     const supaToken = session.data.session?.access_token || null;
-    const localBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true';
+    const localBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === "true";
     const localToken = localBypass ? getLocalToken() : null;
     return supaToken || localToken || null;
   } catch {
@@ -27,9 +27,9 @@ const getAuthToken = async (): Promise<string | null> => {
 
 const stripAssetSuffix = (src: string): string => {
   if (!src) return src;
-  const hashIndex = src.indexOf('#');
-  const queryIndex = src.indexOf('?');
-  const encodedHashIndex = src.indexOf('%23');
+  const hashIndex = src.indexOf("#");
+  const queryIndex = src.indexOf("?");
+  const encodedHashIndex = src.indexOf("%23");
   let endIndex = src.length;
   if (hashIndex >= 0) endIndex = Math.min(endIndex, hashIndex);
   if (queryIndex >= 0) endIndex = Math.min(endIndex, queryIndex);
@@ -38,13 +38,13 @@ const stripAssetSuffix = (src: string): string => {
 };
 
 const parseMemoryAsset = (
-  src: string
+  src: string,
 ): { bucket: string; path: string } | null => {
   if (!src) return null;
   const stripped = stripAssetSuffix(src);
   if (stripped.startsWith(MEMORY_ASSET_PREFIX)) {
     const trimmed = stripped.slice(MEMORY_ASSET_PREFIX.length);
-    const slashIndex = trimmed.indexOf('/');
+    const slashIndex = trimmed.indexOf("/");
     if (slashIndex <= 0) return null;
     const bucket = trimmed.slice(0, slashIndex);
     const path = trimmed.slice(slashIndex + 1);
@@ -55,7 +55,7 @@ const parseMemoryAsset = (
   const prefix = `${MEMORY_API_BASE}/assets/`;
   if (stripped.startsWith(prefix)) {
     const trimmed = stripped.slice(prefix.length);
-    const slashIndex = trimmed.indexOf('/');
+    const slashIndex = trimmed.indexOf("/");
     if (slashIndex <= 0) return null;
     const bucket = trimmed.slice(0, slashIndex);
     const path = trimmed.slice(slashIndex + 1);
@@ -70,7 +70,7 @@ const buildAssetApiUrl = (bucket: string, path: string): string =>
   `${MEMORY_API_BASE}/assets/${bucket}/${path}`;
 
 const fetchAssetBlobUrl = async (
-  assetUrl: string
+  assetUrl: string,
 ): Promise<{ url: string; revoke: () => void } | null> => {
   const token = await getAuthToken();
   const resp = await fetch(assetUrl, {
@@ -87,7 +87,7 @@ const fetchAssetBlobUrl = async (
 
 const getSignedUrl = async (
   bucket: string,
-  path: string
+  path: string,
 ): Promise<string | null> => {
   const cacheKey = `${bucket}/${path}`;
   const cached = signedUrlCache.get(cacheKey);
@@ -100,7 +100,7 @@ const getSignedUrl = async (
     `${MEMORY_API_BASE}/assets/${bucket}/${path}/signed`,
     {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    }
+    },
   );
   if (!resp.ok) return null;
   const data = (await resp.json()) as {
@@ -125,7 +125,7 @@ export type ResolvedAsset = {
 };
 
 export const resolveMemoryAssetUrl = async (
-  src: string
+  src: string,
 ): Promise<ResolvedAsset | null> => {
   if (!src) return null;
   const asset = parseMemoryAsset(src);
@@ -141,8 +141,8 @@ export const resolveMemoryAssetUrl = async (
       return { src: blob.url, revoke: blob.revoke, original: src };
     }
   } catch (error) {
-    if (process.env.NODE_ENV !== 'production') {
-      console.warn('[memory-asset] Blob fetch failed', error);
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[memory-asset] Blob fetch failed", error);
     }
   }
 
@@ -151,8 +151,8 @@ export const resolveMemoryAssetUrl = async (
     return { src: signed, original: src };
   }
 
-  if (process.env.NODE_ENV !== 'production') {
-    console.warn('[memory-asset] Signed URL fetch failed', assetUrl);
+  if (process.env.NODE_ENV !== "production") {
+    console.warn("[memory-asset] Signed URL fetch failed", assetUrl);
   }
 
   return { src: assetUrl, original: src };
