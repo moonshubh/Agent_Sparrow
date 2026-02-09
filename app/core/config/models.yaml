@@ -223,6 +223,14 @@ subagents:
   explorer:
     # Uses _default (Minimax M2.1)
 
+  # Draft writer subagent - structured writing and response composition
+  draft-writer:
+    # Uses _default (Minimax M2.1)
+
+  # Data analyst subagent - data retrieval and trend analysis
+  data-analyst:
+    # Uses _default (Minimax M2.1)
+
 # -----------------------------------------------------------------------------
 # ZENDESK MODELS - Separate coordinator/subagent config and quotas
 # -----------------------------------------------------------------------------

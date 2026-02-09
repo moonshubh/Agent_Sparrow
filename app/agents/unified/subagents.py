@@ -24,7 +24,9 @@ from app.core.rate_limiting.agent_wrapper import RateLimitedAgent, wrap_gemini_a
 from .model_router import model_router
 
 from .prompts import (
+    DATA_ANALYST_PROMPT,
     DATABASE_RETRIEVAL_PROMPT,
+    DRAFT_WRITER_PROMPT,
     EXPLORER_PROMPT,
     LOG_ANALYSIS_PROMPT,
     RESEARCH_PROMPT,
@@ -39,6 +41,8 @@ from .tools import (
     get_db_retrieval_tools,
     memory_list_tool,
     memory_search_tool,
+    supabase_query_tool,
+    write_article_tool,
     is_firecrawl_agent_enabled,
     # Firecrawl tools for enhanced web scraping (MCP-backed)
     firecrawl_fetch_tool,
@@ -96,6 +100,12 @@ LOG_ANALYSIS_MW_CONFIG = MiddlewareConfig(
 )
 DB_RETRIEVAL_MW_CONFIG = MiddlewareConfig(
     max_tokens_before_summary=80000, messages_to_keep=3
+)
+DRAFT_WRITER_MW_CONFIG = MiddlewareConfig(
+    max_tokens_before_summary=90000, messages_to_keep=5
+)
+DATA_ANALYST_MW_CONFIG = MiddlewareConfig(
+    max_tokens_before_summary=100000, messages_to_keep=5
 )
 
 
@@ -263,6 +273,42 @@ def _build_db_retrieval_middleware(model: BaseChatModel) -> List[Any]:
         )
     )
 
+    return middleware
+
+
+def _build_draft_writer_middleware(model: BaseChatModel) -> List[Any]:
+    """Build middleware stack for draft writer subagent."""
+    middleware: List[Any] = []
+
+    if not MIDDLEWARE_AVAILABLE:
+        return middleware
+
+    middleware.append(
+        SummarizationMiddleware(
+            model=model,
+            trigger=("tokens", DRAFT_WRITER_MW_CONFIG.max_tokens_before_summary),
+            keep=("messages", DRAFT_WRITER_MW_CONFIG.messages_to_keep),
+            token_counter=_summarization_token_counter(model),
+        )
+    )
+    return middleware
+
+
+def _build_data_analyst_middleware(model: BaseChatModel) -> List[Any]:
+    """Build middleware stack for data analyst subagent."""
+    middleware: List[Any] = []
+
+    if not MIDDLEWARE_AVAILABLE:
+        return middleware
+
+    middleware.append(
+        SummarizationMiddleware(
+            model=model,
+            trigger=("tokens", DATA_ANALYST_MW_CONFIG.max_tokens_before_summary),
+            keep=("messages", DATA_ANALYST_MW_CONFIG.messages_to_keep),
+            token_counter=_summarization_token_counter(model),
+        )
+    )
     return middleware
 
 
@@ -467,6 +513,7 @@ def _research_subagent(
         "model": model,
         "model_name": model_name,
         "model_provider": provider,
+        "skills": ["research", "fact-checking", "source-attribution"],
         "middleware": _build_research_middleware(model),
     }
 
@@ -544,6 +591,7 @@ def _log_diagnoser_subagent(
         "model": model,
         "model_name": model_name,
         "model_provider": provider,
+        "skills": ["log-analysis", "troubleshooting", "error-diagnosis"],
         "middleware": _build_log_analysis_middleware(model),
     }
 
@@ -624,6 +672,7 @@ def _db_retrieval_subagent(
         "model": model,
         "model_name": model_name,
         "model_provider": provider,
+        "skills": ["retrieval", "kb-lookup", "macro-lookup"],
         "middleware": _build_db_retrieval_middleware(model),
     }
 
@@ -700,6 +749,7 @@ def _explorer_subagent(
         "model": model,
         "model_name": model_name,
         "model_provider": provider,
+        "skills": ["discovery", "planning", "routing-hints"],
         "middleware": _build_research_middleware(model),
     }
 
@@ -710,6 +760,104 @@ def _explorer_subagent(
         tools=[t.name for t in subagent_spec["tools"]],
         middleware_count=len(subagent_spec["middleware"]),
         minimax_prioritized=use_minimax,
+    )
+
+    return subagent_spec
+
+
+def _draft_writer_subagent(
+    *,
+    zendesk: bool = False,
+    workspace_tools: Optional[List[BaseTool]] = None,
+) -> Dict[str, Any]:
+    """Create draft writer subagent specification."""
+    model_name, provider, model = _get_subagent_model(
+        "draft-writer",
+        role="research",
+        zendesk=zendesk,
+    )
+    current_date = get_current_utc_date()
+
+    tools: List[BaseTool] = [
+        write_article_tool,
+        kb_search_tool,
+        feedme_search_tool,
+        memory_search_tool,
+        memory_list_tool,
+        *get_db_retrieval_tools(),
+        *_subagent_read_tools(),
+    ]
+
+    subagent_spec: Dict[str, Any] = {
+        "name": "draft-writer",
+        "description": (
+            "Draft-writing specialist for polished, structured responses and documents. "
+            "Use after discovery/retrieval work is complete to produce clear final drafts."
+        ),
+        "system_prompt": f"{DRAFT_WRITER_PROMPT}\n\nCurrent date: {current_date}",
+        "tools": _merge_tools(tools, workspace_tools),
+        "model": model,
+        "model_name": model_name,
+        "model_provider": provider,
+        "skills": ["writing", "editing", "response-formatting"],
+        "middleware": _build_draft_writer_middleware(model),
+    }
+
+    logger.debug(
+        "draft_writer_subagent_created",
+        model=model_name,
+        provider=provider,
+        tools=[t.name for t in subagent_spec["tools"]],
+        middleware_count=len(subagent_spec["middleware"]),
+    )
+
+    return subagent_spec
+
+
+def _data_analyst_subagent(
+    *,
+    zendesk: bool = False,
+    workspace_tools: Optional[List[BaseTool]] = None,
+) -> Dict[str, Any]:
+    """Create data analyst subagent specification."""
+    model_name, provider, model = _get_subagent_model(
+        "data-analyst",
+        role="db_retrieval",
+        zendesk=zendesk,
+    )
+    current_date = get_current_utc_date()
+
+    tools: List[BaseTool] = [
+        supabase_query_tool,
+        kb_search_tool,
+        feedme_search_tool,
+        memory_search_tool,
+        memory_list_tool,
+        *get_db_retrieval_tools(),
+        *_subagent_read_tools(),
+    ]
+
+    subagent_spec: Dict[str, Any] = {
+        "name": "data-analyst",
+        "description": (
+            "Data analysis specialist for extracting trends, anomalies, and evidence-backed "
+            "insights from retrieved sources and structured tables."
+        ),
+        "system_prompt": f"{DATA_ANALYST_PROMPT}\n\nCurrent date: {current_date}",
+        "tools": _merge_tools(tools, workspace_tools),
+        "model": model,
+        "model_name": model_name,
+        "model_provider": provider,
+        "skills": ["data-analysis", "trend-detection", "evidence-synthesis"],
+        "middleware": _build_data_analyst_middleware(model),
+    }
+
+    logger.debug(
+        "data_analyst_subagent_created",
+        model=model_name,
+        provider=provider,
+        tools=[t.name for t in subagent_spec["tools"]],
+        middleware_count=len(subagent_spec["middleware"]),
     )
 
     return subagent_spec
@@ -748,6 +896,8 @@ def get_subagent_specs(
         _research_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
         _log_diagnoser_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
         _db_retrieval_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
+        _draft_writer_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
+        _data_analyst_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
     ]
 
 

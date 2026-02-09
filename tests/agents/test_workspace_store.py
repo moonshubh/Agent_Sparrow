@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.agents.harness.store.workspace_store import (
+    PersistenceScope,
     SparrowWorkspaceStore,
     _IMPORT_FAILED,
 )
@@ -150,3 +151,17 @@ async def test_prune_user_sessions_paginates_over_large_indices() -> None:
     assert set(deleted_index_files) == {
         f"/user/sessions/{sid}.json" for sid in deleted_set
     }
+
+
+@pytest.mark.asyncio
+async def test_scope_routing_for_new_roots() -> None:
+    store = SparrowWorkspaceStore(
+        session_id="sess-scope-roots",
+        user_id="user-1",
+        customer_id="cust-1",
+        supabase_client=_IMPORT_FAILED,
+    )
+
+    assert store._get_scope_for_path("/evidence/log.json") == PersistenceScope.SESSION
+    assert store._get_scope_for_path("/reports/summary.md") == PersistenceScope.SESSION
+    assert store._get_scope_for_path("/shared/account.md") == PersistenceScope.CUSTOMER

@@ -1,5 +1,20 @@
 # Repository Guidelines
 
+Last updated: 2026-02-09
+
+## Implementation Update (2026-02-09)
+
+- Activated mem0 v1 in backend (`mem0ai==1.0.3`) with compatible vector stack (`vecs==0.4.5`, `pgvector==0.3.6`).
+- Upgraded `app/memory/service.py` to use mem0 public APIs and added resilience for production:
+  - dimension clamp (`3072 -> 2000`) for index constraints
+  - collection fallback on dimension mismatch
+  - telemetry vector-store fallback so `mem0migrations` failures do not disable primary memory.
+- Hardened unified tool inputs against model-provided invalid values, including `db_unified_search`, `db_grep_search`, and `web_search`.
+- Improved orchestration observability with explicit routing/dispatch logs for subgraph paths.
+- Added/validated AG-UI smoke contract for `task -> subgraph -> subagent_spawn/subagent_end`.
+- Added CI dependency drift guard using a fresh venv install plus `pip check`.
+- Current backend quality gate snapshot: `pytest -q` pass, `ruff check .` pass, `mypy app/` still has pre-existing baseline issues unrelated to this rollout.
+
 ## Project Structure & Module Organization
 
 ### Frontend (Next.js/TypeScript)

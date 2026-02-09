@@ -8,6 +8,7 @@ to retrieve and persist long-term memories without importing mem0 details.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Any, Dict, List, Optional, Sequence
 from time import perf_counter
 
@@ -19,17 +20,11 @@ from app.memory.observability import memory_metrics
 from app.security.pii_redactor import redact_pii
 
 try:  # pragma: no cover - import guard for optional dependency during boot
-    from mem0.configs.base import MemoryConfig  # type: ignore[import-not-found]
-    from mem0.configs.vector_stores.supabase import IndexMethod  # type: ignore[import-not-found]
-    from mem0.embeddings.configs import EmbedderConfig  # type: ignore[import-not-found]
-    from mem0.llms.configs import LlmConfig  # type: ignore[import-not-found]
-    from mem0.memory.main import AsyncMemory  # type: ignore[import-not-found]
-    from mem0.vector_stores.configs import VectorStoreConfig  # type: ignore[import-not-found]
+    from mem0 import Memory as Mem0Memory  # type: ignore[import-not-found,import-untyped]
 
     _MEM0_AVAILABLE = True
 except ImportError:  # pragma: no cover - handled gracefully when mem0 is missing
-    AsyncMemory = None  # type: ignore
-    MemoryConfig = EmbedderConfig = LlmConfig = VectorStoreConfig = None  # type: ignore
+    Mem0Memory = None  # type: ignore
     _MEM0_AVAILABLE = False
 
 
@@ -40,18 +35,41 @@ DEFAULT_MEMORY_TYPE = "fact"
 DEFAULT_SOURCE = "primary_agent"
 LOG_AGENT_ID = "log_analyst"
 LOG_MEMORY_TYPE = "log_pattern"
+MEM0_MAX_INDEX_DIM = 2000
+
+
+class _NoopTelemetryVectorStore:
+    """Best-effort fallback store used when mem0 telemetry store initialization fails."""
+
+    def __init__(self, embedding_model_dims: int) -> None:
+        self.embedding_model_dims = max(1, int(embedding_model_dims))
+
+    def get(self, vector_id: str) -> None:  # pragma: no cover - trivial fallback
+        _ = vector_id
+        return None
+
+    def insert(
+        self,
+        vectors: Sequence[Sequence[float]],
+        payloads: Optional[Sequence[Dict[str, Any]]] = None,
+        ids: Optional[Sequence[str]] = None,
+    ) -> None:  # pragma: no cover - trivial fallback
+        _ = (vectors, payloads, ids)
+        return None
 
 
 class MemoryService:
-    """Facade around mem0.AsyncMemory configured for Supabase pgvector."""
+    """Facade around mem0 Memory configured for Supabase pgvector."""
 
     def __init__(self) -> None:
-        self._clients: Dict[str, AsyncMemory] = {}
+        self._clients: Dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._warned_mem0_missing = False
+        self._warned_mem0_runtime_unavailable = False
         self._warned_missing_connection = False
         self._warned_missing_api_key = False
         self._warned_dim_mismatch = False
+        self._runtime_unavailable = False
 
     async def retrieve(
         self, agent_id: str, query: str, top_k: Optional[int] = None
@@ -79,7 +97,9 @@ class MemoryService:
         start = perf_counter()
         try:
             client = await self._get_client(settings.memory_collection_primary)
-            result = await client.search(
+            result = await self._call_mem0_method(
+                client,
+                "search",
                 query_text,
                 agent_id=agent_id,
                 limit=limit,
@@ -97,7 +117,7 @@ class MemoryService:
             )
             return []
 
-        raw_results = result.get("results", [])
+        raw_results = self._extract_results(result)
         formatted: List[Dict[str, Any]] = []
         for item in raw_results:
             formatted.append(
@@ -193,14 +213,17 @@ class MemoryService:
         error_flag = False
         try:
             client = await self._get_client(settings.memory_collection_primary)
-            response = await client.add(
+            response = await self._call_mem0_method(
+                client,
+                "add",
                 messages,
                 agent_id=agent_id,
                 metadata=metadata,
                 infer=settings.memory_llm_inference,
             )
-            success = bool(response.get("results"))
-            return response
+            normalized_response = self._normalize_response(response)
+            success = bool(self._extract_results(normalized_response))
+            return normalized_response
         except Exception as exc:  # pragma: no cover - network/runtime failures
             logger.exception(
                 "memory_add_facts_error", agent_id=agent_id, error=str(exc)
@@ -325,7 +348,7 @@ class MemoryService:
             client = await self._get_client(settings.memory_collection_logs)
             if existing_id:
                 try:
-                    await client.delete(existing_id)
+                    await self._call_mem0_method(client, "delete", existing_id)
                 except Exception as exc:  # pragma: no cover - best effort delete
                     logger.warning(
                         "memory_log_delete_failed",
@@ -333,12 +356,15 @@ class MemoryService:
                         memory_id=existing_id,
                         error=str(exc),
                     )
-            result = await client.add(
+            result = await self._call_mem0_method(
+                client,
+                "add",
                 messages,
                 agent_id=LOG_AGENT_ID,
                 metadata=metadata_payload,
                 infer=settings.memory_llm_inference,
             )
+            result = self._normalize_response(result)
             if existing_id:
                 result["replaced_id"] = existing_id
             success = bool(result.get("results")) or bool(result.get("replaced_id"))
@@ -377,6 +403,12 @@ class MemoryService:
                 "mem0 package not installed; agent memory is disabled.",
             )
             return False
+        if self._runtime_unavailable:
+            self._warn_once(
+                "_warned_mem0_runtime_unavailable",
+                "mem0 runtime dependencies are unavailable; agent memory is disabled.",
+            )
+            return False
 
         connection = settings.get_memory_connection_string()
         if not connection:
@@ -404,8 +436,8 @@ class MemoryService:
 
         return True
 
-    async def _get_client(self, collection_name: str) -> AsyncMemory:
-        """Return or lazily instantiate a mem0 AsyncMemory client for a collection."""
+    async def _get_client(self, collection_name: str) -> Any:
+        """Return or lazily instantiate a mem0 client for a collection."""
         cached = self._clients.get(collection_name)
         if cached is not None:
             return cached
@@ -415,59 +447,147 @@ class MemoryService:
             if cached is not None:
                 return cached
 
-            client = self._build_client(collection_name)
+            try:
+                client = self._build_client(collection_name)
+            except Exception as exc:
+                if self._is_mem0_runtime_dependency_error(exc):
+                    self._runtime_unavailable = True
+                    self._warn_once(
+                        "_warned_mem0_runtime_unavailable",
+                        "mem0 runtime dependencies are unavailable (vecs/pgvector).",
+                    )
+                raise
             self._clients[collection_name] = client
             return client
 
-    def _build_client(self, collection_name: str) -> AsyncMemory:
-        if (
-            AsyncMemory is None or MemoryConfig is None
-        ):  # pragma: no cover - safeguarded by _is_configured
+    def _build_client(self, collection_name: str) -> Any:
+        if Mem0Memory is None:  # pragma: no cover - safeguarded by _is_configured
             raise RuntimeError(
-                "mem0 AsyncMemory is unavailable in the current environment."
+                "mem0 Memory is unavailable in the current environment."
             )
 
         connection = settings.get_memory_connection_string()
         config = get_models_config()
         embedding_cfg = config.internal["embedding"]
         embedding_dims = embedding_cfg.embedding_dims or EXPECTED_DIM
+        mem0_dims = min(int(embedding_dims), MEM0_MAX_INDEX_DIM)
+        if mem0_dims != int(embedding_dims):
+            logger.warning(
+                "mem0_embedding_dims_clamped",
+                requested_dims=int(embedding_dims),
+                applied_dims=mem0_dims,
+                max_supported_dims=MEM0_MAX_INDEX_DIM,
+            )
         embedder_provider = embedding_cfg.provider or "google"
         mem0_provider = "gemini" if embedder_provider == "google" else embedder_provider
 
-        vector_config = VectorStoreConfig(
-            provider=settings.memory_backend,
-            config={
-                "connection_string": connection,
-                "collection_name": collection_name,
-                "embedding_model_dims": embedding_dims,
-                "index_method": IndexMethod.IVFFLAT,  # Use IVFFlat to support 3072 dimensions
-                # IVFFlat has no dimension limit, unlike HNSW (max 2000)
-            },
-        )
-        embedder_config = EmbedderConfig(
-            provider=mem0_provider,
-            config={
-                "model": embedding_cfg.model_id,
-                "api_key": settings.gemini_api_key,
-                "embedding_dims": embedding_dims,
-                "output_dimensionality": embedding_dims,
-            },
-        )
         coordinator_model = config.coordinators["google"].model_id
-        llm_config = LlmConfig(
-            provider="gemini",
-            config={
-                "model": coordinator_model,
-                "api_key": settings.gemini_api_key,
+        mem0_config: Dict[str, Any] = {
+            "vector_store": {
+                "provider": settings.memory_backend,
+                "config": {
+                    "connection_string": connection,
+                    "collection_name": collection_name,
+                    "embedding_model_dims": mem0_dims,
+                    "index_method": "ivfflat",
+                },
             },
-        )
+            "embedder": {
+                "provider": mem0_provider,
+                "config": {
+                    "model": embedding_cfg.model_id,
+                    "api_key": settings.gemini_api_key,
+                    "embedding_dims": mem0_dims,
+                    "output_dimensionality": mem0_dims,
+                },
+            },
+            "llm": {
+                "provider": "gemini",
+                "config": {
+                    "model": coordinator_model,
+                    "api_key": settings.gemini_api_key,
+                },
+            },
+        }
+        try:
+            return self._create_mem0_client(mem0_config)
+        except Exception as exc:
+            if not self._is_mem0_dimension_mismatch_error(exc):
+                raise
 
-        config = MemoryConfig(
-            vector_store=vector_config,
-            embedder=embedder_config,
-            llm=llm_config,
-        )
-        return AsyncMemory(config)
+            fallback_collection = f"{collection_name}_dim{mem0_dims}"
+            if fallback_collection == collection_name:
+                raise
+
+            logger.warning(
+                "mem0_collection_dimension_mismatch_fallback",
+                collection=collection_name,
+                fallback_collection=fallback_collection,
+                dims=mem0_dims,
+            )
+            vector_cfg = mem0_config.get("vector_store", {}).get("config", {})
+            if isinstance(vector_cfg, dict):
+                vector_cfg["collection_name"] = fallback_collection
+            return self._create_mem0_client(mem0_config)
+
+    def _create_mem0_client(self, mem0_config: Dict[str, Any]) -> Any:
+        """Build a mem0 client while tolerating telemetry vector-store init failures."""
+        if Mem0Memory is None:  # pragma: no cover - safeguarded by _is_configured
+            raise RuntimeError("mem0 Memory is unavailable in the current environment.")
+        try:
+            from mem0.utils.factory import (  # type: ignore[import-untyped]
+                VectorStoreFactory as Mem0VectorStoreFactory,
+            )
+        except Exception:
+            return Mem0Memory.from_config(mem0_config)
+
+        original_create_descriptor = Mem0VectorStoreFactory.__dict__.get("create")
+        if original_create_descriptor is None:
+            return Mem0Memory.from_config(mem0_config)
+
+        original_create = Mem0VectorStoreFactory.create
+
+        def _patched_create(cls: Any, provider_name: str, config: Any) -> Any:
+            _ = cls
+            collection_name = self._get_mem0_config_value(config, "collection_name")
+            if collection_name != "mem0migrations":
+                return original_create(provider_name, config)
+            try:
+                return original_create(provider_name, config)
+            except Exception as exc:
+                dims = self._coerce_mem0_dims(
+                    self._get_mem0_config_value(config, "embedding_model_dims", 1536)
+                )
+                logger.warning(
+                    "mem0_telemetry_vector_store_disabled",
+                    collection="mem0migrations",
+                    dims=dims,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                return _NoopTelemetryVectorStore(dims)
+
+        Mem0VectorStoreFactory.create = classmethod(_patched_create)
+        try:
+            return Mem0Memory.from_config(mem0_config)
+        finally:
+            Mem0VectorStoreFactory.create = original_create_descriptor
+
+    def _get_mem0_config_value(
+        self,
+        config: Any,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        if isinstance(config, dict):
+            return config.get(key, default)
+        return getattr(config, key, default)
+
+    def _coerce_mem0_dims(self, value: Any) -> int:
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return 1536
 
     async def _get_by_filters(
         self,
@@ -479,16 +599,17 @@ class MemoryService:
     ) -> List[Dict[str, Any]]:
         """Fetch memories using metadata filters without embedding search."""
         client = await self._get_client(collection_name)
-        result = await client.get_all(
-            agent_id=agent_id, filters=filters, limit=max(1, limit)
+        result = await self._call_mem0_method(
+            client,
+            "get_all",
+            agent_id=agent_id,
+            filters=filters,
+            limit=max(1, limit),
         )
-        if isinstance(result, dict):
-            candidates = result.get("results", [])
-        else:
-            candidates = result
+        candidates = self._extract_results(result)
 
         formatted: List[Dict[str, Any]] = []
-        for item in candidates or []:
+        for item in candidates:
             formatted.append(
                 {
                     "id": item.get("id"),
@@ -497,6 +618,83 @@ class MemoryService:
                 }
             )
         return formatted
+
+    async def _call_mem0_method(
+        self,
+        client: Any,
+        method_name: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Call mem0 methods with async-mode preference and sync fallback."""
+        method = getattr(client, method_name, None)
+        if method is None:
+            raise AttributeError(f"mem0 client does not implement '{method_name}'")
+
+        async_kwargs = dict(kwargs)
+        async_kwargs.setdefault("async_mode", True)
+
+        try:
+            return await self._invoke_callable(method, *args, **async_kwargs)
+        except TypeError as exc:
+            if not self._is_async_mode_signature_error(exc):
+                raise
+        return await self._invoke_callable(method, *args, **kwargs)
+
+    async def _invoke_callable(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        """Invoke callable while tolerating sync and async return styles."""
+        if inspect.iscoroutinefunction(fn):
+            return await fn(*args, **kwargs)
+
+        value = await asyncio.to_thread(fn, *args, **kwargs)
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    def _extract_results(self, payload: Any) -> List[Dict[str, Any]]:
+        """Unwrap mem0 responses that may be dict-with-results or direct lists."""
+        candidates: Any
+        if isinstance(payload, dict):
+            candidates = payload.get("results", payload)
+        else:
+            candidates = payload
+
+        if not isinstance(candidates, list):
+            return []
+
+        return [item for item in candidates if isinstance(item, dict)]
+
+    def _normalize_response(self, payload: Any) -> Dict[str, Any]:
+        """Return a consistent dict shape with a `results` list."""
+        if isinstance(payload, dict):
+            response = dict(payload)
+            response["results"] = self._extract_results(payload)
+            return response
+        return {"results": self._extract_results(payload)}
+
+    def _is_async_mode_signature_error(self, exc: TypeError) -> bool:
+        text = str(exc).lower()
+        return (
+            "async_mode" in text
+            and ("unexpected keyword" in text or "got an unexpected" in text)
+        )
+
+    def _is_mem0_runtime_dependency_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        if "vecs" in text or "pgvector" in text:
+            return True
+        if isinstance(exc, ModuleNotFoundError):
+            module_name = str(getattr(exc, "name", "") or "").lower()
+            return module_name in {"vecs", "pgvector"}
+        return False
+
+    def _is_mem0_dimension_mismatch_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        if "mismatcheddimension" in text:
+            return True
+        if "dimension" in text and "do not match" in text:
+            return True
+        return False
 
     def _build_metadata(
         self,

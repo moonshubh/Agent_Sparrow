@@ -13,7 +13,7 @@ from datetime import datetime
 from functools import lru_cache
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Annotated, Callable, Literal
+from typing import Any, Dict, List, Optional, Annotated, Callable, Literal, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -202,6 +202,75 @@ def _filter_memories_by_scope(
         ):
             filtered.append(item)
     return filtered
+
+
+def _extract_last_user_message_text(state: Any) -> str:
+    messages = _state_value(state, "messages", []) or []
+    for msg in reversed(messages):
+        if getattr(msg, "type", None) != "human":
+            continue
+        content = getattr(msg, "content", "")
+        if isinstance(content, str):
+            text = content.strip()
+            if text:
+                return text
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    part_text = str(part.get("text") or "").strip()
+                    if part_text:
+                        parts.append(part_text)
+            text = " ".join(parts).strip()
+            if text:
+                return text
+    return ""
+
+
+def _extract_todos_from_scratchpad(state: Any) -> list[dict[str, Any]]:
+    scratchpad = _state_value(state, "scratchpad", {}) or {}
+    if not isinstance(scratchpad, dict):
+        return []
+
+    todos = scratchpad.get("todos")
+    if not isinstance(todos, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for todo in todos:
+        if isinstance(todo, dict):
+            normalized.append(
+                {
+                    "id": todo.get("id"),
+                    "title": todo.get("title") or todo.get("content") or "",
+                    "status": todo.get("status") or "pending",
+                }
+            )
+        else:
+            normalized.append(
+                {
+                    "id": None,
+                    "title": str(todo),
+                    "status": "pending",
+                }
+            )
+    return normalized
+
+
+def _thread_state_to_dict(state: Any) -> dict[str, Any]:
+    thread_state = _state_value(state, "thread_state", None)
+    if thread_state is None:
+        return {}
+    if isinstance(thread_state, dict):
+        return thread_state
+    if hasattr(thread_state, "model_dump"):
+        try:
+            dumped = thread_state.model_dump()
+            if isinstance(dumped, dict):
+                return dumped
+        except Exception:
+            return {}
+    return {}
 
 
 # Naming guidance for new tools:
@@ -724,6 +793,14 @@ class WebSearchInput(BaseModel):
         description="Search topic: 'general' or 'news' for topic-specific results.",
     )
 
+    @field_validator("max_results", mode="before")
+    @classmethod
+    def _coerce_max_results(cls, value: Any) -> int:
+        try:
+            return max(1, min(10, int(value)))
+        except (TypeError, ValueError):
+            return 5
+
 
 class TavilyExtractInput(BaseModel):
     """Input schema for Tavily extract (full-content fetch)."""
@@ -790,8 +867,32 @@ class DbUnifiedSearchInput(BaseModel):
         default=["kb", "macros", "feedme"],
         description="Sources to search: kb, macros, feedme",
     )
-    max_results_per_source: int = Field(default=5, ge=1, le=10)
-    min_relevance: float = Field(default=0.3, ge=0.0, le=1.0)
+    max_results_per_source: int = Field(
+        default=5,
+        description="Per-source result count (clamped to 1-10).",
+    )
+    min_relevance: float = Field(
+        default=0.3,
+        description="Similarity threshold (clamped to 0.0-1.0).",
+    )
+
+    @field_validator("max_results_per_source", mode="before")
+    @classmethod
+    def _coerce_max_results_per_source(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 5
+        return max(1, min(10, parsed))
+
+    @field_validator("min_relevance", mode="before")
+    @classmethod
+    def _coerce_min_relevance(cls, value: Any) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return 0.3
+        return max(0.0, min(1.0, parsed))
 
 
 class DbGrepSearchInput(BaseModel):
@@ -803,7 +904,19 @@ class DbGrepSearchInput(BaseModel):
         description="Sources to search: kb, macros, feedme",
     )
     case_sensitive: bool = Field(default=False, description="Case-sensitive matching")
-    max_results: int = Field(default=10, ge=1, le=20)
+    max_results: int = Field(
+        default=10,
+        description="Maximum results to return (clamped to 1-20).",
+    )
+
+    @field_validator("max_results", mode="before")
+    @classmethod
+    def _coerce_max_results(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 10
+        return max(1, min(20, parsed))
 
 
 class DbContextSearchInput(BaseModel):
@@ -2848,6 +2961,8 @@ def get_registered_tools() -> List[BaseTool]:
             log_diagnoser_tool,
             memory_search_tool,
             memory_list_tool,
+            memory_feedback_tool,
+            session_summary_tool,
             write_article_tool,  # Rich article/report artifact creation
             read_skill_tool,  # Progressive skill disclosure - load full skill on demand
             get_weather,
@@ -3637,6 +3752,252 @@ async def memory_list_tool(
     }
 
 
+class MemoryFeedbackInput(BaseModel):
+    memory_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Memory UUID to update. If omitted, the most recent retrieved memory UUID "
+            "from session scratchpad will be used."
+        ),
+    )
+    feedback_type: Literal[
+        "positive",
+        "negative",
+        "correction",
+        "thumbs_up",
+        "thumbs_down",
+        "resolution_success",
+        "resolution_failure",
+    ] = Field(default="positive", description="Type of memory feedback to record.")
+    notes: Optional[str] = Field(
+        default=None, description="Optional operator notes for this feedback."
+    )
+    session_id: Optional[str] = Field(
+        default=None, description="Optional session id associated with feedback."
+    )
+    ticket_id: Optional[str] = Field(
+        default=None, description="Optional ticket id associated with feedback."
+    )
+    user_id: Optional[str] = Field(
+        default=None,
+        description="Optional user UUID override. Falls back to state user_id.",
+    )
+
+
+def _first_valid_uuid(values: list[Any]) -> Optional[uuid.UUID]:
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return uuid.UUID(str(value))
+        except Exception:
+            continue
+    return None
+
+
+@tool("memory_feedback", args_schema=MemoryFeedbackInput)
+async def memory_feedback_tool(
+    input: MemoryFeedbackInput | None = None,
+    memory_id: Optional[str] = None,
+    feedback_type: str = "positive",
+    notes: Optional[str] = None,
+    session_id: Optional[str] = None,
+    ticket_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    state: Annotated[GraphState | None, InjectedState] = None,
+    runtime: ToolRuntime | None = None,
+) -> Dict[str, Any]:
+    """Record feedback for a memory entry (coordinator-only write tool)."""
+    if input is None:
+        input = MemoryFeedbackInput(
+            memory_id=memory_id,
+            feedback_type=cast(
+                Literal[
+                    "positive",
+                    "negative",
+                    "correction",
+                    "thumbs_up",
+                    "thumbs_down",
+                    "resolution_success",
+                    "resolution_failure",
+                ],
+                feedback_type,
+            ),
+            notes=notes,
+            session_id=session_id,
+            ticket_id=ticket_id,
+            user_id=user_id,
+        )
+
+    if _is_subagent_call(state, runtime):
+        return {
+            "success": False,
+            "error": "memory_feedback is coordinator-only and cannot run from subagents",
+            "reason": "coordinator_only",
+        }
+
+    scratchpad = _state_value(state, "scratchpad", {}) or {}
+    system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+    memory_stats = (
+        system_bucket.get("memory_stats", {}) if isinstance(system_bucket, dict) else {}
+    )
+    retrieved_ids = (
+        memory_stats.get("retrieved_memory_ids")
+        if isinstance(memory_stats, dict)
+        else None
+    )
+    candidate_memory_ids: list[Any] = [input.memory_id]
+    if isinstance(retrieved_ids, list):
+        candidate_memory_ids.extend(retrieved_ids)
+
+    resolved_memory_id = _first_valid_uuid(candidate_memory_ids)
+    if resolved_memory_id is None:
+        return {
+            "success": False,
+            "error": "No valid memory_id available for feedback",
+            "reason": "missing_memory_id",
+        }
+
+    resolved_user_id = _first_valid_uuid(
+        [
+            input.user_id,
+            _state_value(state, "user_id", None),
+            getattr(settings, "development_user_id", None),
+            "00000000-0000-0000-0000-000000000000",
+        ]
+    )
+    if resolved_user_id is None:
+        return {
+            "success": False,
+            "error": "Unable to resolve a valid user UUID for memory feedback",
+            "reason": "missing_user_id",
+        }
+
+    try:
+        from app.memory.memory_ui_service import get_memory_ui_service
+
+        service = get_memory_ui_service()
+        result = await service.submit_feedback(
+            memory_id=resolved_memory_id,
+            user_id=resolved_user_id,
+            feedback_type=input.feedback_type,
+            session_id=input.session_id or _state_value(state, "session_id", None),
+            ticket_id=input.ticket_id,
+            notes=input.notes,
+        )
+    except Exception as exc:
+        logger.warning("memory_feedback_tool_failed", error=str(exc))
+        return {
+            "success": False,
+            "error": str(exc),
+            "memory_id": str(resolved_memory_id),
+            "user_id": str(resolved_user_id),
+        }
+
+    return {
+        "success": True,
+        "memory_id": str(resolved_memory_id),
+        "user_id": str(resolved_user_id),
+        "feedback_type": input.feedback_type,
+        "result": result if isinstance(result, dict) else {"value": result},
+    }
+
+
+class SessionSummaryInput(BaseModel):
+    include_recent_messages: bool = Field(
+        default=False,
+        description="Include the most recent user/assistant text snippets.",
+    )
+    recent_message_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="How many recent messages to include when enabled.",
+    )
+
+
+@tool("session_summary", args_schema=SessionSummaryInput)
+def session_summary_tool(
+    input: SessionSummaryInput | None = None,
+    include_recent_messages: bool = False,
+    recent_message_limit: int = 3,
+    state: Annotated[GraphState | None, InjectedState] = None,
+    runtime: ToolRuntime | None = None,  # noqa: ARG001
+) -> Dict[str, Any]:
+    """Return a read-only summary of current session/thread context."""
+    if input is None:
+        input = SessionSummaryInput(
+            include_recent_messages=include_recent_messages,
+            recent_message_limit=recent_message_limit,
+        )
+
+    messages = list(_state_value(state, "messages", []) or [])
+    scratchpad = _state_value(state, "scratchpad", {}) or {}
+    system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+    memory_stats = (
+        system_bucket.get("memory_stats", {}) if isinstance(system_bucket, dict) else {}
+    )
+    subagent_reports = (
+        system_bucket.get("subagent_reports", {})
+        if isinstance(system_bucket, dict)
+        else {}
+    )
+    unread_reports: list[str] = []
+    if isinstance(subagent_reports, dict):
+        for tool_call_id, report in subagent_reports.items():
+            if isinstance(report, dict) and report.get("read") is not True:
+                unread_reports.append(str(tool_call_id))
+
+    response: Dict[str, Any] = {
+        "session_id": _state_value(state, "session_id", None),
+        "trace_id": _state_value(state, "trace_id", None),
+        "user_id": _state_value(state, "user_id", None),
+        "message_count": len(messages),
+        "last_user_message": _extract_last_user_message_text(state),
+        "active_todos": _extract_todos_from_scratchpad(state),
+        "thread_state": _thread_state_to_dict(state),
+        "memory": {
+            "retrieved_memory_ids": (
+                memory_stats.get("retrieved_memory_ids", [])
+                if isinstance(memory_stats, dict)
+                else []
+            ),
+            "memory_ui_retrieved": (
+                memory_stats.get("memory_ui_retrieved", 0)
+                if isinstance(memory_stats, dict)
+                else 0
+            ),
+            "mem0_retrieved": (
+                memory_stats.get("mem0_retrieved", 0)
+                if isinstance(memory_stats, dict)
+                else 0
+            ),
+        },
+        "unread_subagent_reports": sorted(unread_reports),
+    }
+
+    if input.include_recent_messages:
+        recent_slice = messages[-int(input.recent_message_limit) :]
+        recent_messages: list[Dict[str, Any]] = []
+        for msg in recent_slice:
+            content = getattr(msg, "content", "")
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(str(part.get("text") or ""))
+                content = "".join(text_parts)
+            recent_messages.append(
+                {
+                    "type": getattr(msg, "type", None),
+                    "content": str(content)[:600],
+                }
+            )
+        response["recent_messages"] = recent_messages
+
+    return response
+
+
 # --- Database Retrieval Subagent Tools ---
 
 FEEDME_SUMMARIZE_THRESHOLD = 3000  # Chars threshold for FeedMe summarization
@@ -3688,6 +4049,14 @@ async def db_unified_search_tool(
     """
     if sources is None:
         sources = ["kb", "macros", "feedme"]
+    try:
+        max_results_per_source = max(1, min(10, int(max_results_per_source)))
+    except (TypeError, ValueError):
+        max_results_per_source = 5
+    try:
+        min_relevance = max(0.0, min(1.0, float(min_relevance)))
+    except (TypeError, ValueError):
+        min_relevance = 0.3
     weights = getattr(
         settings, "db_source_weights", {"kb": 1.0, "macro": 0.9, "feedme": 0.8}
     )

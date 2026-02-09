@@ -4,17 +4,59 @@ from pathlib import Path
 from typing import Optional, Any
 
 from app.agents.harness.persistence.memory_checkpointer import SanitizingMemorySaver
-from langgraph.config import RunnableConfig
+from langgraph.config import RunnableConfig, get_stream_writer
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import AIMessage, ToolMessage
 
 from app.core.logging_config import get_logger
 from app.core.settings import settings
 from app.agents.unified.quota_manager import QuotaExceededError
+from app.agents.orchestration.subgraphs import build_subgraph_runners
 
 from .state import GraphState
+from .subagent_state import (
+    extract_pending_task_calls,
+    has_routable_pending_task_calls,
+    resolve_subgraph_key,
+)
 
 logger = get_logger(__name__)
+
+
+def _extract_tool_calls(message: AIMessage) -> list[dict[str, Any]]:
+    tool_calls = getattr(message, "tool_calls", None)
+    if isinstance(tool_calls, list):
+        return [tc for tc in tool_calls if isinstance(tc, dict)]
+
+    additional = getattr(message, "additional_kwargs", {}) or {}
+    fallback = additional.get("tool_calls")
+    if isinstance(fallback, list):
+        return [tc for tc in fallback if isinstance(tc, dict)]
+
+    return []
+
+
+def _route_from_agent(state: GraphState) -> str:
+    """Route agent output to tools, subgraphs, or end."""
+    if not state.messages:
+        logger.debug("graph_route_decision", route="end", reason="no_messages")
+        return "end"
+
+    last_message = state.messages[-1]
+    if not isinstance(last_message, AIMessage):
+        logger.debug("graph_route_decision", route="end", reason="last_not_ai_message")
+        return "end"
+
+    if not _extract_tool_calls(last_message):
+        logger.debug("graph_route_decision", route="end", reason="no_tool_calls")
+        return "end"
+
+    if has_routable_pending_task_calls(state):
+        logger.info("graph_route_decision", route="subgraphs", reason="pending_task_calls")
+        return "subgraphs"
+
+    logger.debug("graph_route_decision", route="tools", reason="non_task_tool_calls")
+    return "tools"
 
 
 def _build_checkpointer() -> Optional[object]:
@@ -255,6 +297,76 @@ def _build_tool_node():
     return ParallelToolNode()
 
 
+def _build_subgraph_node():
+    """Create a task-subgraph dispatcher for pending `task` tool calls."""
+
+    class SubgraphTaskNode:
+        def __init__(self):
+            self.runners = build_subgraph_runners()
+
+        async def __call__(self, state: GraphState, config=None):
+            pending = extract_pending_task_calls(state)
+            if not pending:
+                return {}
+
+            scratchpad = dict(state.scratchpad or {})
+            system_bucket = dict((scratchpad.get("_system") or {}))
+            executed = set(system_bucket.get("_executed_tool_calls") or [])
+
+            logger.info(
+                "subgraph_dispatch_start",
+                session_id=getattr(state, "session_id", None),
+                pending_count=len(pending),
+                pending_subagent_types=[call.subagent_type for call in pending],
+            )
+
+            stream_writer = None
+            try:
+                stream_writer = get_stream_writer()
+            except Exception:
+                stream_writer = None
+
+            async def run_one(call):
+                subgraph_key = resolve_subgraph_key(call.subagent_type)
+                runner = self.runners.get(subgraph_key) if subgraph_key else None
+                if runner is None:
+                    logger.warning(
+                        "subgraph_dispatch_unsupported_subagent",
+                        subagent_type=call.subagent_type,
+                        tool_call_id=call.tool_call_id,
+                    )
+                    return ToolMessage(
+                        tool_call_id=call.tool_call_id,
+                        name="task",
+                        content=(
+                            f"Unsupported subagent_type '{call.subagent_type}' for LangGraph subgraph routing. "
+                            "Retry with a configured subagent type."
+                        ),
+                        additional_kwargs={
+                            "is_error": True,
+                            "error_type": "unsupported_subagent_type",
+                        },
+                    )
+                return await runner(state, call, stream_writer, config)
+
+            results = await asyncio.gather(*(run_one(call) for call in pending))
+
+            new_executed = list(executed | {call.tool_call_id for call in pending})
+            system_bucket["_executed_tool_calls"] = new_executed
+            scratchpad["_system"] = system_bucket
+
+            logger.info(
+                "subgraph_dispatch_complete",
+                session_id=getattr(state, "session_id", None),
+                completed_count=len(results),
+                tool_call_ids=[call.tool_call_id for call in pending],
+            )
+
+            return {"messages": results, "scratchpad": scratchpad}
+
+    return SubgraphTaskNode()
+
+
 async def _run_agent_with_retry(
     state: GraphState,
     config: RunnableConfig | None = None,
@@ -296,8 +408,6 @@ async def _run_agent_with_retry(
 
 def build_unified_graph():
     """Construct the unified LangGraph app."""
-    from app.agents.unified.agent_sparrow import should_continue
-
     workflow = StateGraph(GraphState)
     logger.debug("state_graph_instantiated")
 
@@ -306,15 +416,19 @@ def build_unified_graph():
 
     workflow.add_node("tools", _build_tool_node())
     logger.debug("graph_node_added", node="tools")
+    workflow.add_node("subgraphs", _build_subgraph_node())
+    logger.debug("graph_node_added", node="subgraphs")
 
     workflow.set_entry_point("agent")
     logger.debug("graph_entry_point_set", node="agent")
 
     workflow.add_conditional_edges(
         "agent",
-        should_continue,
+        _route_from_agent,
         {
             "continue": "tools",
+            "tools": "tools",
+            "subgraphs": "subgraphs",
             "end": END,
         },
     )
@@ -322,6 +436,8 @@ def build_unified_graph():
 
     workflow.add_edge("tools", "agent")
     logger.debug("graph_edge_added", source="tools", target="agent")
+    workflow.add_edge("subgraphs", "agent")
+    logger.debug("graph_edge_added", source="subgraphs", target="agent")
 
     checkpointer = _build_checkpointer()
     store = _get_store()

@@ -375,32 +375,32 @@ class ToolExecutor:
                         async with asyncio.timeout(resolved_timeout):
                             result = await tool.ainvoke(tool_args, config=config)
 
-                        duration_ms = int((time.monotonic() - start_time) * 1000)
+                    duration_ms = int((time.monotonic() - start_time) * 1000)
 
-                        logger.debug(
-                            "tool_execution_success",
-                            tool=tool.name,
-                            tool_call_id=tool_call_id,
-                            duration_ms=duration_ms,
-                            retries_used=retries_used,
-                        )
+                    logger.debug(
+                        "tool_execution_success",
+                        tool=tool.name,
+                        tool_call_id=tool_call_id,
+                        duration_ms=duration_ms,
+                        retries_used=retries_used,
+                    )
 
-                        artifact = _extract_artifact(result)
-                        result_obj = ToolExecutionResult(
-                            tool_name=tool.name,
-                            tool_call_id=tool_call_id,
-                            success=True,
-                            result=result,
-                            error=None,
-                            error_type=None,
-                            duration_ms=duration_ms,
-                            retries_used=retries_used,
-                            artifact=artifact,
-                            args_summary=args_summary,
-                            status="success",
-                        )
-                        self._emit_result(result_obj)
-                        return result_obj
+                    artifact = _extract_artifact(result)
+                    result_obj = ToolExecutionResult(
+                        tool_name=tool.name,
+                        tool_call_id=tool_call_id,
+                        success=True,
+                        result=result,
+                        error=None,
+                        error_type=None,
+                        duration_ms=duration_ms,
+                        retries_used=retries_used,
+                        artifact=artifact,
+                        args_summary=args_summary,
+                        status="success",
+                    )
+                    self._emit_result(result_obj)
+                    return result_obj
 
                 except tool_config.retryable_errors as exc:
                     last_error = exc
