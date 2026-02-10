@@ -28,6 +28,23 @@
 - `docs/`: Technical documentation and architecture references
 - `scripts/`: Automation and deployment scripts
 
+## Memory UI Implementation Notes (Feb 2026)
+
+- `Import Knowledge` defaults to the `mb_playbook` tag across frontend, API schema defaults, and Celery fallback handling.
+- Import jobs now support explicit status polling via `GET /api/v1/memory/import/zendesk-tagged/{task_id}` so queued jobs have visible completion/failure states.
+- Import task results now include `processed_tickets`, `imported_memory_ids`, and per-ticket failure metadata for deterministic UI refresh/focus after completion.
+- Memory UI now polls queued import tasks, surfaces completion/failure toasts, invalidates memory/graph/stats caches on completion, and focuses the latest imported memory in table view.
+- Table UX is click-first on memory content (admin edit modal / non-admin read-only modal), with the eye action removed.
+- Edited-memory retrieval uses hybrid ranking explainability fields (`is_edited`, `edited_boost`, `hybrid_score`) with additive response compatibility.
+- Feedback confidence now uses deterministic step sizing for thumbs feedback: each `thumbs_up` applies `+5%` and each `thumbs_down` applies `-5%` (clamped to `0-100%`), aligned in both frontend optimistic state and backend persistence.
+- Feedback UI reflection is hardened: table actions now coerce malformed confidence/count payloads safely, avoid click propagation side effects, and keep the selected detail view confidence in sync immediately after each feedback response.
+- Imported-memory image resize persistence is hardened by storing image `width`/`height` as explicit TipTap image attributes during markdown parse/render, preventing resized inline images from reverting after reopen.
+- `mb_playbook` edit view now highlights `Problem`, `Impact`, and `Environment` headings with stronger color + underline styling for faster scanability.
+- Root-cause fix for failed edits in local/dev mode: memory updates now skip invalid placeholder reviewer IDs (for example `00000000-0000-0000-0000-000000000000`) and only set `reviewed_by` when the reviewer exists in `auth.users`, preventing FK failures that previously blocked image-resize persistence.
+- `mb_playbook` emphasis now supports both markdown headings and label-style paragraph lines (`Problem:`, `Impact:`, `Environment:`), since imported content can use either format.
+- `mb_playbook` edit highlighting now includes a content-shape fallback (when metadata tags/source are missing) and stronger CSS specificity, so section emphasis remains visible after metadata-only edits.
+- Inline image resize interaction now has guarded pointer lifecycle cleanup (`pointerup`/`pointercancel`/window `blur` + capture release) to prevent stuck drag listeners that could freeze modal interactions after resizing.
+
 ## Build, Test, and Development Commands
 
 ### Tooling Requirements

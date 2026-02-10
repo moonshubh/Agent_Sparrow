@@ -1238,30 +1238,64 @@ def _build_memory_system_message(
     sections: list[str] = []
 
     def _as_float(value: Any) -> Optional[float]:
+        if isinstance(value, bool):
+            return None
         if isinstance(value, (int, float)):
             return float(value)
+        if isinstance(value, str):
+            candidate = value.strip()
+            if not candidate:
+                return None
+            try:
+                return float(candidate)
+            except ValueError:
+                return None
         return None
 
-    def _composite_score(item: dict[str, Any]) -> float:
+    def _as_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "y"}:
+                return True
+            if lowered in {"false", "0", "no", "n"}:
+                return False
+        return None
+
+    def _fallback_hybrid_score(item: dict[str, Any]) -> float:
         similarity = _as_float(item.get("score"))
         confidence = _as_float(item.get("confidence_score"))
         if confidence is None:
             confidence = _as_float((item.get("metadata") or {}).get("confidence_score"))
+        edited_boost = _as_float(item.get("edited_boost"))
+        if edited_boost is None:
+            is_edited = _as_bool(item.get("is_edited"))
+            edited_boost = 0.05 if is_edited else 0.0
+
         if similarity is None and confidence is None:
-            return 0.0
+            return edited_boost
         if similarity is None:
-            return confidence or 0.0
+            return (confidence or 0.0) + edited_boost
         if confidence is None:
-            return similarity
-        return similarity * confidence
+            return similarity + edited_boost
+        return (similarity * confidence) + edited_boost
 
     if memory_ui_memories:
         memory_ui_lines: list[str] = []
-        sorted_items = sorted(
-            memory_ui_memories,
-            key=_composite_score,
-            reverse=True,
+        sorted_items = list(memory_ui_memories)
+        has_server_hybrid = any(
+            _as_float(item.get("hybrid_score")) is not None for item in sorted_items
         )
+        if not has_server_hybrid:
+            sorted_items = sorted(
+                sorted_items,
+                key=_fallback_hybrid_score,
+                reverse=True,
+            )
+
         for item in sorted_items:
             text = (item.get("memory") or "").strip()
             if not text:
@@ -1272,9 +1306,26 @@ def _build_memory_system_message(
                 confidence = _as_float(
                     (item.get("metadata") or {}).get("confidence_score")
                 )
-            composite = None
-            if similarity is not None and confidence is not None:
-                composite = similarity * confidence
+            is_edited = _as_bool(item.get("is_edited"))
+            edited_boost = _as_float(item.get("edited_boost"))
+            hybrid = _as_float(item.get("hybrid_score"))
+
+            if edited_boost is None and is_edited is not None:
+                edited_boost = 0.05 if is_edited else 0.0
+
+            if hybrid is None:
+                if similarity is not None and confidence is not None:
+                    hybrid = similarity * confidence
+                elif similarity is not None:
+                    hybrid = similarity
+                elif confidence is not None:
+                    hybrid = confidence
+                else:
+                    hybrid = None
+
+                if hybrid is not None:
+                    hybrid += edited_boost or 0.0
+
             review_status = item.get("review_status")
             if not isinstance(review_status, str) or not review_status.strip():
                 review_status = (item.get("metadata") or {}).get("review_status")
@@ -1284,8 +1335,12 @@ def _build_memory_system_message(
                 details.append(f"similarity={similarity:.2f}")
             if confidence is not None:
                 details.append(f"confidence={confidence:.2f}")
-            if composite is not None:
-                details.append(f"composite={composite:.2f}")
+            if is_edited is not None:
+                details.append(f"edited={'true' if is_edited else 'false'}")
+            if edited_boost is not None:
+                details.append(f"edited_boost={edited_boost:.2f}")
+            if hybrid is not None:
+                details.append(f"hybrid={hybrid:.2f}")
             if isinstance(review_status, str) and review_status.strip():
                 details.append(f"review_status={review_status}")
 
@@ -1405,6 +1460,9 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
                     "memory": item.get("content"),
                     "score": item.get("similarity"),
                     "confidence_score": item.get("confidence_score"),
+                    "is_edited": item.get("is_edited"),
+                    "edited_boost": item.get("edited_boost"),
+                    "hybrid_score": item.get("hybrid_score"),
                     "review_status": item.get("review_status"),
                     "metadata": item.get("metadata") or {},
                     "source": "memory_ui",

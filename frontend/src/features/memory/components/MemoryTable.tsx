@@ -7,7 +7,6 @@ import {
   ChevronUp,
   ThumbsUp,
   ThumbsDown,
-  Eye,
   Trash2,
   Pencil,
 } from "lucide-react";
@@ -42,6 +41,7 @@ interface MemoryTableProps {
   focusMemoryId?: string | null;
   onClearFocus?: () => void;
   isAdmin?: boolean;
+  onMemoryUpdated?: (memoryId?: string) => void;
 }
 
 function toMemorySortField(sortBy: MemoryFilters["sortBy"]): keyof Memory {
@@ -116,12 +116,16 @@ export default function MemoryTable({
   focusMemoryId,
   onClearFocus,
   isAdmin = false,
+  onMemoryUpdated,
 }: MemoryTableProps) {
   const [localSortField, setLocalSortField] =
     useState<keyof Memory>("created_at");
   const [localSortOrder, setLocalSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
+  const [expandedPreviewById, setExpandedPreviewById] = useState<
+    Record<string, boolean>
+  >({});
   const [listPage, setListPage] = useState(0);
   const pageSize = 20;
 
@@ -267,9 +271,36 @@ export default function MemoryTable({
   // Feedback handler
   const handleFeedback = useCallback(
     async (memoryId: string, type: FeedbackType) => {
-      await submitFeedback.mutateAsync({
+      const response = await submitFeedback.mutateAsync({
         memoryId,
         request: { feedback_type: type },
+      });
+
+      const parsed = Number(response.new_confidence_score);
+      const fallbackDelta =
+        type === "thumbs_up" ? 0.05 : type === "thumbs_down" ? -0.05 : 0;
+
+      setSelectedMemory((prev) => {
+        if (!prev || prev.id !== memoryId) return prev;
+        const safeCurrent = Number.isFinite(Number(prev.confidence_score))
+          ? Number(prev.confidence_score)
+          : 0.5;
+        const nextConfidence = Number.isFinite(parsed)
+          ? parsed
+          : Math.min(1, Math.max(0, safeCurrent + fallbackDelta));
+
+        return {
+          ...prev,
+          confidence_score: nextConfidence,
+          feedback_positive:
+            type === "thumbs_up"
+              ? Number(prev.feedback_positive || 0) + 1
+              : prev.feedback_positive,
+          feedback_negative:
+            type === "thumbs_down"
+              ? Number(prev.feedback_negative || 0) + 1
+              : prev.feedback_negative,
+        };
       });
     },
     [submitFeedback],
@@ -283,6 +314,38 @@ export default function MemoryTable({
       }
     },
     [deleteMemory],
+  );
+
+  const openMemoryFromContent = useCallback(
+    (memory: Memory) => {
+      onClearFocus?.();
+      if (canEdit) {
+        setEditingMemory(memory);
+        setSelectedMemory(null);
+        return;
+      }
+      setSelectedMemory(memory);
+    },
+    [canEdit, onClearFocus],
+  );
+
+  const getContentFallback = useCallback((content: string) => {
+    const plain = (content || "")
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/[#>*_~\-[\]()]|\|/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return plain;
+  }, []);
+
+  const hasExpandablePreview = useCallback(
+    (memory: Memory) => {
+      const fallback = getContentFallback(memory.content);
+      const lineCount = (memory.content.match(/\n/g) || []).length + 1;
+      return fallback.length > 220 || lineCount > 3;
+    },
+    [getContentFallback],
   );
 
   // Format date
@@ -393,30 +456,79 @@ export default function MemoryTable({
                       </span>
                     </td>
                     <td className="memory-td-content">
-                      {isEdited ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div className="memory-content-tooltip-target">
-                              <div className="memory-content-header">
-                                <span className="memory-edited-badge">
-                                  Edited
-                                </span>
-                              </div>
-                              <p className="memory-content-text">
-                                {memory.content}
-                              </p>
-                            </div>
-                          </TooltipTrigger>
-                          <TooltipContent
-                            className="memory-tooltip-content"
-                            side="top"
-                          >
-                            {editedLabel}
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <p className="memory-content-text">{memory.content}</p>
-                      )}
+                      {(() => {
+                        const fallbackText = getContentFallback(memory.content);
+                        const isExpanded = Boolean(expandedPreviewById[memory.id]);
+                        const canExpand = hasExpandablePreview(memory);
+
+                        return (
+                          <div className="memory-content-cell">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  className={`memory-content-click-target ${isEdited ? "is-edited" : ""}`}
+                                  onClick={() => openMemoryFromContent(memory)}
+                                  title={
+                                    canEdit
+                                      ? "Open editor"
+                                      : "Open memory details"
+                                  }
+                                >
+                                  {isEdited && (
+                                    <div className="memory-content-header">
+                                      <span className="memory-edited-badge">
+                                        Edited
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {isExpanded ? (
+                                    <div className="memory-content-rich-preview">
+                                      <MemoryTipTapEditor
+                                        content={normalizeLegacyMemoryContent(
+                                          memory.content,
+                                        )}
+                                        readOnly
+                                        className="memory-content-inline-tiptap"
+                                      />
+                                    </div>
+                                  ) : (
+                                    <p className="memory-content-text">
+                                      {fallbackText ||
+                                        "No content preview available"}
+                                    </p>
+                                  )}
+                                </button>
+                              </TooltipTrigger>
+                              {isEdited ? (
+                                <TooltipContent
+                                  className="memory-tooltip-content"
+                                  side="top"
+                                >
+                                  {editedLabel}
+                                </TooltipContent>
+                              ) : null}
+                            </Tooltip>
+
+                            {canExpand ? (
+                              <button
+                                type="button"
+                                className="memory-content-expand-btn"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setExpandedPreviewById((prev) => ({
+                                    ...prev,
+                                    [memory.id]: !prev[memory.id],
+                                  }));
+                                }}
+                              >
+                                {isExpanded ? "Show less" : "Show more"}
+                              </button>
+                            ) : null}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="memory-td-confidence">
                       <ConfidenceBadge score={memory.confidence_score} />
@@ -440,10 +552,12 @@ export default function MemoryTable({
                           <TooltipTrigger asChild>
                             <button
                               className="memory-action-icon memory-action-success"
-                              onClick={() =>
-                                handleFeedback(memory.id, "thumbs_up")
-                              }
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleFeedback(memory.id, "thumbs_up");
+                              }}
                               aria-label="Mark as helpful"
+                              title="Increase confidence by 5%"
                               disabled={submitFeedback.isPending}
                             >
                               <ThumbsUp size={14} />
@@ -453,7 +567,9 @@ export default function MemoryTable({
                             className="memory-tooltip-content"
                             side="top"
                           >
-                            👍 {memory.feedback_positive} · 👎{" "}
+                            Weightage:{" "}
+                            {Math.round(memory.confidence_score * 100)}% · 👍{" "}
+                            {memory.feedback_positive} · 👎{" "}
                             {memory.feedback_negative}
                           </TooltipContent>
                         </Tooltip>
@@ -462,10 +578,12 @@ export default function MemoryTable({
                           <TooltipTrigger asChild>
                             <button
                               className="memory-action-icon memory-action-danger"
-                              onClick={() =>
-                                handleFeedback(memory.id, "thumbs_down")
-                              }
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleFeedback(memory.id, "thumbs_down");
+                              }}
                               aria-label="Mark as not helpful"
+                              title="Decrease confidence by 5%"
                               disabled={submitFeedback.isPending}
                             >
                               <ThumbsDown size={14} />
@@ -475,21 +593,12 @@ export default function MemoryTable({
                             className="memory-tooltip-content"
                             side="top"
                           >
-                            👍 {memory.feedback_positive} · 👎{" "}
+                            Weightage:{" "}
+                            {Math.round(memory.confidence_score * 100)}% · 👍{" "}
+                            {memory.feedback_positive} · 👎{" "}
                             {memory.feedback_negative}
                           </TooltipContent>
                         </Tooltip>
-
-                        <button
-                          className="memory-action-icon"
-                          onClick={() => {
-                            onClearFocus?.();
-                            setSelectedMemory(memory);
-                          }}
-                          title="View details"
-                        >
-                          <Eye size={14} />
-                        </button>
                         {canEdit && (
                           <button
                             className="memory-action-icon memory-action-danger"
@@ -684,7 +793,10 @@ export default function MemoryTable({
           <MemoryForm
             memory={editingMemory}
             onClose={() => setEditingMemory(null)}
-            onSuccess={() => setEditingMemory(null)}
+            onSuccess={(memoryId) => {
+              setEditingMemory(null);
+              onMemoryUpdated?.(memoryId);
+            }}
           />
         )}
       </AnimatePresence>

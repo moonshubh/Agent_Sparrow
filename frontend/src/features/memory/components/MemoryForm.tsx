@@ -23,14 +23,14 @@ import { useAddMemory, useUpdateMemory } from "../hooks";
 import type { Memory, SourceType } from "../types";
 import { SourceBadge } from "./SourceBadge";
 import { useAuth } from "@/shared/contexts/AuthContext";
-import { ADMIN_EDITOR_EMAILS } from "../lib/memoryFlags";
 import { normalizeLegacyMemoryContent } from "../lib/legacyMemoryFormatting";
+import { normalizeMarkdownImageSizing } from "../lib/memoryImageMarkdown";
 import { toast } from "sonner";
 import type { Editor } from "@tiptap/core";
 
 interface MemoryFormProps {
   onClose: () => void;
-  onSuccess?: () => void;
+  onSuccess?: (memoryId?: string) => void;
   memory?: Memory;
 }
 
@@ -43,6 +43,10 @@ const springConfig = {
 
 const isPlainMetadata = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const PLAYBOOK_SECTION_PATTERN =
+  /^\s*(?:#{1,6}\s*)?(?:\*\*)?(problem|impact|environment)(?:\*\*)?\s*(?::|-)?\s*/im;
+const PLAYBOOK_KEY_HEADINGS = ["Problem", "Impact", "Environment"];
 
 const getUserDisplayName = (user: User | null): string | null => {
   if (!user) return null;
@@ -94,6 +98,19 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
     () => (user?.email ? user.email.toLowerCase() : null),
     [user],
   );
+  const isMbPlaybookImportedMemory = useMemo(() => {
+    if (memory?.metadata && isPlainMetadata(memory.metadata)) {
+      const source = String(memory.metadata.source ?? "").toLowerCase();
+      if (source === "zendesk_mb_playbook") return true;
+      const tags = Array.isArray(memory.metadata.tags)
+        ? memory.metadata.tags.map((tag) => String(tag).toLowerCase())
+        : [];
+      if (tags.includes("mb_playbook")) return true;
+    }
+
+    // Fallback for imported memories where metadata may be partially edited.
+    return PLAYBOOK_SECTION_PATTERN.test(initialContent);
+  }, [initialContent, memory?.metadata]);
 
   const handleBold = useCallback(() => {
     editor?.chain().focus().toggleBold().run();
@@ -163,7 +180,11 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
       setMetadataError(null);
 
       const editorContent = editor?.getMarkdown() ?? content;
-      const trimmedContent = editorContent.trim();
+      const normalizedImageContent = normalizeMarkdownImageSizing(editorContent, {
+        editorDoc: editor?.getJSON() ?? null,
+        fallbackMarkdown: memory?.content,
+      });
+      const trimmedContent = normalizedImageContent.trim();
 
       if (!trimmedContent) {
         setError("Content is required");
@@ -191,26 +212,22 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
           }
         }
 
-        const metadataBase = isPlainMetadata(parsedMetadata)
-          ? parsedMetadata
-          : {};
-        const isAllowedEditor = editorEmail
-          ? ADMIN_EDITOR_EMAILS.has(editorEmail)
-          : false;
+        const metadataBase = isPlainMetadata(parsedMetadata) ? parsedMetadata : {};
+        const editorIdentity = editorName || editorEmail || user?.id || null;
         const metadataWithEditor =
-          isEditMode && isAllowedEditor
+          isEditMode && editorIdentity
             ? {
                 ...metadataBase,
-                edited_by: editorName || editorEmail,
-                edited_by_email: editorEmail,
-                edited_by_name: editorName || editorEmail,
-                updated_by_email: editorEmail,
-                updated_by: editorName || editorEmail,
+                edited_by: editorIdentity,
+                edited_by_email: editorEmail || undefined,
+                edited_by_name: editorName || editorEmail || undefined,
+                updated_by_email: editorEmail || undefined,
+                updated_by: editorIdentity,
               }
             : parsedMetadata;
 
         if (isEditMode && memory) {
-          await updateMemory.mutateAsync({
+          const updated = await updateMemory.mutateAsync({
             memoryId: memory.id,
             request: {
               content: trimmedContent,
@@ -218,16 +235,16 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
             },
           });
           toast.success("Memory updated");
+          onSuccess?.(updated?.id || memory.id);
         } else {
-          await addMemory.mutateAsync({
+          const created = await addMemory.mutateAsync({
             content: trimmedContent,
             source_type: sourceType,
             metadata: parsedMetadata,
           });
           toast.success("Memory saved");
+          onSuccess?.(created?.id);
         }
-
-        onSuccess?.();
         onClose();
       } catch (err: unknown) {
         const defaultMessage = isEditMode
@@ -247,6 +264,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
       memory,
       editorName,
       editorEmail,
+      user?.id,
       onSuccess,
       onClose,
     ],
@@ -412,6 +430,12 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
                     content={content}
                     onChange={setContent}
                     onEditorReady={setEditor}
+                    className={
+                      isMbPlaybookImportedMemory
+                        ? "memory-edit-mb-playbook"
+                        : undefined
+                    }
+                    keyHeadingHighlights={PLAYBOOK_KEY_HEADINGS}
                     placeholder="Enter the memory content... Example: To resolve sync issues with Gmail, clear the OAuth cache by going to Settings > Accounts > Gmail > Reconnect."
                   />
                 </div>

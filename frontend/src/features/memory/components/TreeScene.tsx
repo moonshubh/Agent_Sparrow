@@ -537,6 +537,7 @@ export function TreeScene({
                     hovered={hovered}
                     selected={selected}
                     reviewed={reviewedEntityIdSet?.has(node.id) ?? false}
+                    editedInfluenced={Boolean(node.data.node.hasEditedMemory)}
                     dimmed={dimmed}
                     ghosted={ghosted}
                     lod={lod}

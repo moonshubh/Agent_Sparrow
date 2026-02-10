@@ -220,7 +220,7 @@ class ZendeskClient:
         self,
         ticket_id: int | str,
         body: str,
-        add_tag: Optional[str] = None,
+        add_tag: Optional[str | List[str] | tuple[str, ...] | set[str]] = None,
         use_html: bool = False,
         uploads: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
@@ -250,7 +250,12 @@ class ZendeskClient:
         else:
             comment["body"] = body or ""
         ticket: Dict[str, Any] = {"comment": comment}
-        if add_tag:
+        tags_to_add: List[str] = []
+        if isinstance(add_tag, str) and add_tag.strip():
+            tags_to_add = [add_tag.strip()]
+        elif isinstance(add_tag, (list, tuple, set)):
+            tags_to_add = [str(t).strip() for t in add_tag if str(t).strip()]
+        if tags_to_add:
             # Best-effort tag add. Some Zendesk accounts ignore `additional_tags` on update,
             # so we merge into the explicit `tags` list when we can.
             try:
@@ -262,14 +267,15 @@ class ZendeskClient:
                     else []
                 )
                 merged = list(existing_tags)
-                if add_tag not in merged:
-                    merged.append(add_tag)
+                for tag in tags_to_add:
+                    if tag not in merged:
+                        merged.append(tag)
                 if merged:
                     ticket["tags"] = merged
             except ZendeskRateLimitError:
                 raise
             except Exception:
-                ticket["additional_tags"] = [add_tag]
+                ticket["additional_tags"] = tags_to_add
 
         payload = {"ticket": ticket}
         if self.dry_run:

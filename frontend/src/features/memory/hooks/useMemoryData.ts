@@ -304,48 +304,143 @@ export function useSubmitFeedback() {
       memoryId: string;
       request: SubmitFeedbackRequest;
     }) => memoryAPI.submitFeedback(memoryId, request),
-    onSuccess: (response, { memoryId, request }) => {
-      const applyFeedback = (memory: Memory): Memory => {
+    onMutate: async ({ memoryId, request }) => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: memoryKeys.detail(memoryId) }),
+        queryClient.cancelQueries({ queryKey: memoryKeys.lists() }),
+        queryClient.cancelQueries({ queryKey: memoryKeys.searches() }),
+      ]);
+
+      const previousDetail = queryClient.getQueryData<Memory | null>(
+        memoryKeys.detail(memoryId),
+      );
+      const previousLists = queryClient.getQueriesData<ListMemoriesResponse>({
+        queryKey: memoryKeys.lists(),
+        type: "all",
+      });
+      const previousSearches = queryClient.getQueriesData<Memory[]>({
+        queryKey: memoryKeys.searches(),
+        type: "all",
+      });
+
+      const coerceConfidence = (value: number | null | undefined): number => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : 0.5;
+      };
+
+      const clampConfidence = (value: number): number =>
+        Math.min(1, Math.max(0, value));
+
+      const applyFeedbackCounts = (memory: Memory): Memory => {
         const next = { ...memory };
         const type = request.feedback_type;
+        next.feedback_positive = Number(next.feedback_positive) || 0;
+        next.feedback_negative = Number(next.feedback_negative) || 0;
+        next.resolution_success_count = Number(next.resolution_success_count) || 0;
+        next.resolution_failure_count = Number(next.resolution_failure_count) || 0;
+
         if (type === "thumbs_up") next.feedback_positive += 1;
         if (type === "thumbs_down") next.feedback_negative += 1;
         if (type === "resolution_success") next.resolution_success_count += 1;
         if (type === "resolution_failure") next.resolution_failure_count += 1;
-        if (typeof response.new_confidence_score === "number") {
-          next.confidence_score = response.new_confidence_score;
+
+        // Deterministic UX: reflect expected confidence movement immediately.
+        const currentConfidence = coerceConfidence(next.confidence_score);
+        if (type === "thumbs_up") {
+          next.confidence_score = clampConfidence(currentConfidence + 0.05);
+        } else if (type === "thumbs_down") {
+          next.confidence_score = clampConfidence(currentConfidence - 0.05);
+        } else {
+          next.confidence_score = clampConfidence(currentConfidence);
         }
+
         return next;
       };
 
-      // Detail cache
       queryClient.setQueryData(
         memoryKeys.detail(memoryId),
         (prev: Memory | undefined | null) =>
-          prev ? applyFeedback(prev) : prev,
+          prev ? applyFeedbackCounts(prev) : prev,
       );
 
-      // Lists (paginated)
       queryClient.setQueriesData(
         { queryKey: memoryKeys.lists(), type: "all" },
         (prev: ListMemoriesResponse | undefined) => {
           if (!prev) return prev;
-          const items = prev.items.map((m) =>
-            m.id === memoryId ? applyFeedback(m) : m,
-          );
-          return { ...prev, items };
+          return {
+            ...prev,
+            items: prev.items.map((m) =>
+              m.id === memoryId ? applyFeedbackCounts(m) : m,
+            ),
+          };
         },
       );
 
-      // Searches
       queryClient.setQueriesData(
         { queryKey: memoryKeys.searches(), type: "all" },
         (prev: Memory[] | undefined) => {
           if (!prev) return prev;
-          return prev.map((m) => (m.id === memoryId ? applyFeedback(m) : m));
+          return prev.map((m) => (m.id === memoryId ? applyFeedbackCounts(m) : m));
         },
       );
 
+      return { previousDetail, previousLists, previousSearches };
+    },
+    onError: (_err, { memoryId }, context) => {
+      queryClient.setQueryData(memoryKeys.detail(memoryId), context?.previousDetail);
+      context?.previousLists?.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
+      context?.previousSearches?.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
+    },
+    onSuccess: (response, { memoryId, request }) => {
+      const parsedConfidence = Number(response.new_confidence_score);
+      const fallbackDelta =
+        request.feedback_type === "thumbs_up"
+          ? 0.05
+          : request.feedback_type === "thumbs_down"
+            ? -0.05
+            : 0;
+
+      const applyConfidence = (memory: Memory): Memory => {
+        const current = Number(memory.confidence_score);
+        const safeCurrent = Number.isFinite(current) ? current : 0.5;
+        const nextConfidence = Number.isFinite(parsedConfidence)
+          ? parsedConfidence
+          : Math.min(1, Math.max(0, safeCurrent + fallbackDelta));
+        return {
+          ...memory,
+          confidence_score: nextConfidence,
+        };
+      };
+
+      queryClient.setQueryData(
+        memoryKeys.detail(memoryId),
+        (prev: Memory | undefined | null) => (prev ? applyConfidence(prev) : prev),
+      );
+
+      queryClient.setQueriesData(
+        { queryKey: memoryKeys.lists(), type: "all" },
+        (prev: ListMemoriesResponse | undefined) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            items: prev.items.map((m) => (m.id === memoryId ? applyConfidence(m) : m)),
+          };
+        },
+      );
+
+      queryClient.setQueriesData(
+        { queryKey: memoryKeys.searches(), type: "all" },
+        (prev: Memory[] | undefined) => {
+          if (!prev) return prev;
+          return prev.map((m) => (m.id === memoryId ? applyConfidence(m) : m));
+        },
+      );
+    },
+    onSettled: (_response, _error, { memoryId }) => {
       queryClient.invalidateQueries({ queryKey: memoryKeys.detail(memoryId) });
       queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
       queryClient.invalidateQueries({ queryKey: memoryKeys.searches() });

@@ -68,6 +68,7 @@ export function MemoryImageView({
 
   const sizeRef = useRef(size);
   const dragRef = useRef<DragState | null>(null);
+  const cleanupDragRef = useRef<(() => void) | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
@@ -107,16 +108,55 @@ export function MemoryImageView({
     };
   }, [baseSrc]);
 
+  const stopResizing = useCallback(
+    (commit: boolean, currentBaseSrc: string) => {
+      if (cleanupDragRef.current) {
+        cleanupDragRef.current();
+        cleanupDragRef.current = null;
+      }
+      const drag = dragRef.current;
+      dragRef.current = null;
+      setIsResizing(false);
+
+      if (!commit || !drag) return;
+
+      const { width, height } = sizeRef.current;
+      if (!width || !height) return;
+      updateAttributes({
+        width: Math.round(width),
+        height: Math.round(height),
+        src: withSizeFragment(currentBaseSrc, width, height),
+      });
+    },
+    [updateAttributes],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (cleanupDragRef.current) {
+        cleanupDragRef.current();
+        cleanupDragRef.current = null;
+      }
+      dragRef.current = null;
+    };
+  }, []);
+
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>, handle: ResizeHandle) => {
       if (!editor?.isEditable) return;
       event.preventDefault();
       event.stopPropagation();
 
+      if (cleanupDragRef.current) {
+        cleanupDragRef.current();
+        cleanupDragRef.current = null;
+      }
+
       const image = imageRef.current;
       const frame = frameRef.current;
       if (!image || !frame) return;
 
+      const dragPointerId = event.pointerId;
       const rect = image.getBoundingClientRect();
       const frameRect = frame.getBoundingClientRect();
       dragRef.current = {
@@ -133,8 +173,15 @@ export function MemoryImageView({
       sizeRef.current = startingSize;
       setSize(startingSize);
 
+      const dragHandle = event.currentTarget;
+      try {
+        dragHandle.setPointerCapture?.(dragPointerId);
+      } catch {
+        // Pointer capture may fail in some browsers/environments; fallback listeners still work.
+      }
+
       const handleMove = (moveEvent: PointerEvent) => {
-        if (!dragRef.current) return;
+        if (!dragRef.current || moveEvent.pointerId !== dragPointerId) return;
         moveEvent.preventDefault();
         const { startX, startY, startWidth, startHeight, maxWidth, handle } =
           dragRef.current;
@@ -168,24 +215,45 @@ export function MemoryImageView({
         setSize(nextSize);
       };
 
-      const handleUp = () => {
-        window.removeEventListener("pointermove", handleMove);
-        window.removeEventListener("pointerup", handleUp);
-        setIsResizing(false);
-
-        const { width, height } = sizeRef.current;
-        if (!width || !height) return;
-        updateAttributes({
-          width: Math.round(width),
-          height: Math.round(height),
-          src: withSizeFragment(baseSrc, width, height),
-        });
+      const releaseCapture = () => {
+        try {
+          dragHandle.releasePointerCapture?.(dragPointerId);
+        } catch {
+          // Ignore release errors if capture was never established.
+        }
       };
 
-      window.addEventListener("pointermove", handleMove);
+      const handleUp = (upEvent: PointerEvent) => {
+        if (upEvent.pointerId !== dragPointerId) return;
+        releaseCapture();
+        stopResizing(true, baseSrc);
+      };
+
+      const handleCancel = (cancelEvent: PointerEvent) => {
+        if (cancelEvent.pointerId !== dragPointerId) return;
+        releaseCapture();
+        stopResizing(true, baseSrc);
+      };
+
+      const handleBlur = () => {
+        releaseCapture();
+        stopResizing(true, baseSrc);
+      };
+
+      cleanupDragRef.current = () => {
+        releaseCapture();
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener("pointercancel", handleCancel);
+        window.removeEventListener("blur", handleBlur);
+      };
+
+      window.addEventListener("pointermove", handleMove, { passive: false });
       window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleCancel);
+      window.addEventListener("blur", handleBlur);
     },
-    [baseSrc, editor, updateAttributes],
+    [baseSrc, editor, stopResizing],
   );
 
   const showHandles = Boolean(

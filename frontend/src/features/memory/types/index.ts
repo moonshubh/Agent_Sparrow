@@ -153,6 +153,8 @@ export interface GraphNode {
   // Visual properties
   color?: string;
   size?: number;
+  hasEditedMemory?: boolean;
+  editedMemoryCount?: number;
 }
 
 export interface GraphLink {
@@ -164,6 +166,7 @@ export interface GraphLink {
   occurrenceCount: number;
   acknowledgedAt?: string | null;
   lastModifiedAt?: string | null;
+  hasEditedProvenance?: boolean;
 }
 
 export interface GraphData {
@@ -437,6 +440,29 @@ export interface ImportZendeskTaggedResponse {
   queued: boolean;
   task_id?: string | null;
   message?: string;
+  status_url?: string | null;
+}
+
+export interface ImportZendeskTaggedTaskResult {
+  imported: number;
+  skipped: number;
+  failed: number;
+  tag: string;
+  processed_tickets?: number;
+  imported_memory_ids?: string[];
+  failed_ticket_ids?: string[];
+  failure_reasons?: Record<string, string>;
+}
+
+export interface ImportZendeskTaggedTaskStatusResponse {
+  task_id: string;
+  status: string;
+  ready: boolean;
+  successful: boolean;
+  failed: boolean;
+  message?: string | null;
+  error?: string | null;
+  result?: ImportZendeskTaggedTaskResult | null;
 }
 
 export interface MergeRelationshipsResponse {

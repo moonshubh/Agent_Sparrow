@@ -18,6 +18,11 @@ from app.db.supabase.client import get_supabase_client
 from .client import ZendeskClient, ZendeskRateLimitError
 from .exclusions import compute_ticket_exclusion
 from .spam_guard import evaluate_spam_guard
+from .redaction import (
+    contains_order_reference_token,
+    sanitize_order_references,
+    sanitize_zendesk_ticket_text,
+)
 from app.core.user_context import UserContext, user_context_scope
 from app.agents.unified.agent_sparrow import (
     WEB_SEARCH_TOOL_NAMES,
@@ -42,7 +47,6 @@ from app.integrations.zendesk.attachments import (
     summarize_attachments,
     convert_to_unified_attachments,
 )
-from app.security.pii_redactor import redact_pii
 from pydantic import SecretStr
 
 logger = logging.getLogger(__name__)
@@ -955,12 +959,14 @@ async def _zendesk_run_internal_retrieval_preflight(
 
         supa = get_supabase_client()
         resp = await supa._exec(
-            lambda: supa.client.table("feedme_text_chunks")
-            .select("conversation_id,chunk_index,content")
-            .eq("conversation_id", conv_int)
-            .in_("chunk_index", wanted_indices)
-            .order("chunk_index")
-            .execute()
+            lambda: (
+                supa.client.table("feedme_text_chunks")
+                .select("conversation_id,chunk_index,content")
+                .eq("conversation_id", conv_int)
+                .in_("chunk_index", wanted_indices)
+                .order("chunk_index")
+                .execute()
+            )
         )
         chunks = getattr(resp, "data", None) or []
         if not isinstance(chunks, list) or not chunks:
@@ -1476,7 +1482,9 @@ def _filter_messages_for_playbook_learning(messages: list[Any]) -> list[Any]:
             if isinstance(content, str) and content.strip():
                 filtered.append(
                     HumanMessage(
-                        content=_truncate(redact_pii(content), MAX_HUMAN_CHARS)
+                        content=_truncate(
+                            sanitize_zendesk_ticket_text(content), MAX_HUMAN_CHARS
+                        )
                     )
                 )
             continue
@@ -1485,14 +1493,18 @@ def _filter_messages_for_playbook_learning(messages: list[Any]) -> list[Any]:
             content = getattr(msg, "content", "")
             if isinstance(content, str) and content.strip():
                 filtered.append(
-                    AIMessage(content=_truncate(redact_pii(content), MAX_AI_CHARS))
+                    AIMessage(
+                        content=_truncate(
+                            sanitize_zendesk_ticket_text(content), MAX_AI_CHARS
+                        )
+                    )
                 )
             continue
 
         if isinstance(msg, ToolMessage):
             content = getattr(msg, "content", "")
             if isinstance(content, str) and content.strip():
-                safe = _truncate(redact_pii(content), MAX_TOOL_CHARS)
+                safe = _truncate(sanitize_zendesk_ticket_text(content), MAX_TOOL_CHARS)
                 filtered.append({"role": "tool", "content": safe})
             continue
 
@@ -1506,21 +1518,27 @@ def _filter_messages_for_playbook_learning(messages: list[Any]) -> list[Any]:
                 filtered.append(
                     {
                         "role": "user",
-                        "content": _truncate(redact_pii(content), MAX_HUMAN_CHARS),
+                        "content": _truncate(
+                            sanitize_zendesk_ticket_text(content), MAX_HUMAN_CHARS
+                        ),
                     }
                 )
             elif role in {"ai", "assistant"}:
                 filtered.append(
                     {
                         "role": "assistant",
-                        "content": _truncate(redact_pii(content), MAX_AI_CHARS),
+                        "content": _truncate(
+                            sanitize_zendesk_ticket_text(content), MAX_AI_CHARS
+                        ),
                     }
                 )
             elif role == "tool":
                 filtered.append(
                     {
                         "role": "tool",
-                        "content": _truncate(redact_pii(content), MAX_TOOL_CHARS),
+                        "content": _truncate(
+                            sanitize_zendesk_ticket_text(content), MAX_TOOL_CHARS
+                        ),
                     }
                 )
     return filtered
@@ -1570,9 +1588,9 @@ def _queue_post_resolution_learning(
             )
             solution_summary = _summarize_solution_for_pattern_store(run.reply)
 
-            # Extra safety: redact any stray PII in summaries.
-            problem_summary = redact_pii(problem_summary)
-            solution_summary = redact_pii(solution_summary)
+            # Extra safety: sanitize PII/order refs in learning summaries.
+            problem_summary = sanitize_zendesk_ticket_text(problem_summary)
+            solution_summary = sanitize_zendesk_ticket_text(solution_summary)
 
             _fire_and_forget(
                 store.store_resolution(
@@ -1882,12 +1900,14 @@ async def _cleanup_zendesk_session_workspaces(retention_days: int = 7) -> int:
     while True:
         try:
             response = await supa._exec(
-                lambda: supa.client.table("store")
-                .select("prefix,key,value,created_at,updated_at")
-                .eq("key", "zendesk_meta.json")
-                .like("prefix", "workspace:session:%:scratch")
-                .range(offset, offset + page_size - 1)
-                .execute()
+                lambda: (
+                    supa.client.table("store")
+                    .select("prefix,key,value,created_at,updated_at")
+                    .eq("key", "zendesk_meta.json")
+                    .like("prefix", "workspace:session:%:scratch")
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
             )
         except Exception as exc:
             logger.debug("zendesk_workspace_list_failed error=%s", str(exc)[:180])
@@ -2206,6 +2226,7 @@ def _sanitize_suggested_reply_text(text: str) -> str:
 
     # Final cleanup pass in case meta slipped after greeting insertion.
     cleaned = _strip_meta_lines(cleaned)
+    cleaned = sanitize_order_references(cleaned)
 
     return cleaned.strip()
 
@@ -2234,6 +2255,8 @@ def _quality_gate_issues(
     issues: List[str] = []
     if "!" in flat:
         issues.append("contains_exclamation")
+    if contains_order_reference_token(flat):
+        issues.append("contains_order_reference_token")
 
     # Block any chain-of-thought / planning leakage.
     for ln in lines[:140]:
@@ -2334,6 +2357,25 @@ def _quality_gate_issues(
         issues.append("contains_prompt_leakage")
 
     return issues
+
+
+def _apply_quality_gate_with_order_retry(
+    note_text: str,
+    *,
+    use_html: bool,
+    has_log_attachments: bool = False,
+) -> tuple[str, List[str]]:
+    """Apply quality gate with one deterministic order-reference retry pass."""
+    candidate = sanitize_order_references(str(note_text or ""))
+    issues = _quality_gate_issues(
+        candidate, use_html=use_html, has_log_attachments=has_log_attachments
+    )
+    if "contains_order_reference_token" in issues:
+        candidate = sanitize_order_references(candidate)
+        issues = _quality_gate_issues(
+            candidate, use_html=use_html, has_log_attachments=has_log_attachments
+        )
+    return candidate, issues
 
 
 def _format_zendesk_internal_note_html(
@@ -3281,21 +3323,25 @@ async def _fetch_zendesk_macro_by_title(title: str) -> Dict[str, Any] | None:
     supa = get_supabase_client()
     try:
         resp = await supa._exec(
-            lambda: supa.client.table("zendesk_macros")
-            .select("zendesk_id,title,comment_value,updated_at")
-            .eq("title", wanted)
-            .limit(1)
-            .execute()
+            lambda: (
+                supa.client.table("zendesk_macros")
+                .select("zendesk_id,title,comment_value,updated_at")
+                .eq("title", wanted)
+                .limit(1)
+                .execute()
+            )
         )
         rows = getattr(resp, "data", None) or []
         if not rows:
             # Best-effort fallback for minor title drift.
             resp = await supa._exec(
-                lambda: supa.client.table("zendesk_macros")
-                .select("zendesk_id,title,comment_value,updated_at")
-                .ilike("title", wanted)
-                .limit(1)
-                .execute()
+                lambda: (
+                    supa.client.table("zendesk_macros")
+                    .select("zendesk_id,title,comment_value,updated_at")
+                    .ilike("title", wanted)
+                    .limit(1)
+                    .execute()
+                )
             )
             rows = getattr(resp, "data", None) or []
         if not rows:
@@ -3386,7 +3432,7 @@ def _build_web_search_query(
     *, subject: str | None, description: str | None, fallback: str
 ) -> str:
     raw = "\n\n".join([p for p in [subject, description] if p]) or fallback
-    redacted = redact_pii(raw) or raw
+    redacted = sanitize_zendesk_ticket_text(raw) or raw
     # Remove any attachment summary blocks (often too noisy for search).
     redacted = re.split(r"(?im)^attachments\s+summary\s+for\s+agent\s*:\s*$", redacted)[
         0
@@ -3689,11 +3735,13 @@ async def _run_daily_maintenance(
     try:
         supa = get_supabase_client()
         resp = await supa._exec(
-            lambda: supa.client.table("feature_flags")
-            .select("value")
-            .eq("key", "zendesk_cleanup")
-            .maybe_single()
-            .execute()
+            lambda: (
+                supa.client.table("feature_flags")
+                .select("value")
+                .eq("key", "zendesk_cleanup")
+                .maybe_single()
+                .execute()
+            )
         )
         raw = getattr(resp, "data", None) or {}
         state = raw.get("value") if isinstance(raw, dict) else {}
@@ -3709,10 +3757,12 @@ async def _run_daily_maintenance(
             ).isoformat()
             try:
                 await supa._exec(
-                    lambda: supa.client.table("zendesk_webhook_events")
-                    .delete()
-                    .lt("seen_at", cutoff)
-                    .execute()
+                    lambda: (
+                        supa.client.table("zendesk_webhook_events")
+                        .delete()
+                        .lt("seen_at", cutoff)
+                        .execute()
+                    )
                 )
             except Exception as cleanup_exc:
                 logger.debug("webhook cleanup failed: %s", cleanup_exc)
@@ -3729,11 +3779,13 @@ async def _run_daily_maintenance(
                 ).isoformat()
                 try:
                     await supa._exec(
-                        lambda: supa.client.table("zendesk_pending_tickets")
-                        .delete()
-                        .in_("status", ["processed", "failed"])
-                        .lt("created_at", cutoff_queue)
-                        .execute()
+                        lambda: (
+                            supa.client.table("zendesk_pending_tickets")
+                            .delete()
+                            .in_("status", ["processed", "failed"])
+                            .lt("created_at", cutoff_queue)
+                            .execute()
+                        )
                     )
                 except Exception as retention_exc:
                     logger.debug("queue retention cleanup failed: %s", retention_exc)
@@ -3753,9 +3805,11 @@ async def _run_daily_maintenance(
 
         if updated:
             await supa._exec(
-                lambda: supa.client.table("feature_flags")
-                .upsert({"key": "zendesk_cleanup", "value": state})
-                .execute()
+                lambda: (
+                    supa.client.table("feature_flags")
+                    .upsert({"key": "zendesk_cleanup", "value": state})
+                    .execute()
+                )
             )
     except Exception as e:
         logger.debug("daily maintenance failed: %s", e)
@@ -3788,11 +3842,13 @@ async def _requeue_stale_processing(max_age_minutes: int = 30) -> int:
     # Stale rows that have a timestamp
     try:
         res = await supa._exec(
-            lambda: supa.client.table("zendesk_pending_tickets")
-            .update(payload)
-            .eq("status", "processing")
-            .lt("last_attempt_at", cutoff)
-            .execute()
+            lambda: (
+                supa.client.table("zendesk_pending_tickets")
+                .update(payload)
+                .eq("status", "processing")
+                .lt("last_attempt_at", cutoff)
+                .execute()
+            )
         )
         updated += len(getattr(res, "data", []) or [])
     except Exception:
@@ -3801,12 +3857,14 @@ async def _requeue_stale_processing(max_age_minutes: int = 30) -> int:
     # Backward-compat: processing rows with NULL last_attempt_at (older deployments)
     try:
         res2 = await supa._exec(
-            lambda: supa.client.table("zendesk_pending_tickets")
-            .update(payload)
-            .eq("status", "processing")
-            .is_("last_attempt_at", "null")
-            .lt("created_at", cutoff)
-            .execute()
+            lambda: (
+                supa.client.table("zendesk_pending_tickets")
+                .update(payload)
+                .eq("status", "processing")
+                .is_("last_attempt_at", "null")
+                .lt("created_at", cutoff)
+                .execute()
+            )
         )
         updated += len(getattr(res2, "data", []) or [])
     except Exception:
@@ -3832,11 +3890,13 @@ async def _get_feature_state() -> Dict[str, Any]:
     try:
         supa = get_supabase_client()
         resp = await supa._exec(
-            lambda: supa.client.table("feature_flags")
-            .select("value")
-            .eq("key", "zendesk_enabled")
-            .maybe_single()
-            .execute()
+            lambda: (
+                supa.client.table("feature_flags")
+                .select("value")
+                .eq("key", "zendesk_enabled")
+                .maybe_single()
+                .execute()
+            )
         )
         data = getattr(resp, "data", None)
         if data and isinstance(data.get("value"), dict):
@@ -3846,11 +3906,13 @@ async def _get_feature_state() -> Dict[str, Any]:
                 dry_run = bool(val.get("dry_run", dry_run))
         # Also track scheduler state under key 'zendesk_scheduler'
         resp2 = await supa._exec(
-            lambda: supa.client.table("feature_flags")
-            .select("value")
-            .eq("key", "zendesk_scheduler")
-            .maybe_single()
-            .execute()
+            lambda: (
+                supa.client.table("feature_flags")
+                .select("value")
+                .eq("key", "zendesk_scheduler")
+                .maybe_single()
+                .execute()
+            )
         )
         data2 = getattr(resp2, "data", None)
         if data2 and isinstance(data2.get("value"), dict):
@@ -3870,14 +3932,16 @@ async def _set_last_run(ts: datetime) -> None:
     try:
         supa = get_supabase_client()
         await supa._exec(
-            lambda: supa.client.table("feature_flags")
-            .upsert(
-                {
-                    "key": "zendesk_scheduler",
-                    "value": {"last_run_at": ts.replace(microsecond=0).isoformat()},
-                }
+            lambda: (
+                supa.client.table("feature_flags")
+                .upsert(
+                    {
+                        "key": "zendesk_scheduler",
+                        "value": {"last_run_at": ts.replace(microsecond=0).isoformat()},
+                    }
+                )
+                .execute()
             )
-            .execute()
         )
     except Exception as e:
         logger.debug("failed to persist scheduler ts: %s", e)
@@ -3888,24 +3952,28 @@ async def _get_month_usage() -> Dict[str, Any]:
     mk = datetime.now(timezone.utc).strftime("%Y-%m")
     desired_budget = 0
     resp = await supa._exec(
-        lambda: supa.client.table("zendesk_usage")
-        .select("month_key,calls_used,budget")
-        .eq("month_key", mk)
-        .maybe_single()
-        .execute()
+        lambda: (
+            supa.client.table("zendesk_usage")
+            .select("month_key,calls_used,budget")
+            .eq("month_key", mk)
+            .maybe_single()
+            .execute()
+        )
     )
     data = getattr(resp, "data", None)
     if not data:
         await supa._exec(
-            lambda: supa.client.table("zendesk_usage")
-            .insert(
-                {
-                    "month_key": mk,
-                    "calls_used": 0,
-                    "budget": desired_budget,
-                }
+            lambda: (
+                supa.client.table("zendesk_usage")
+                .insert(
+                    {
+                        "month_key": mk,
+                        "calls_used": 0,
+                        "budget": desired_budget,
+                    }
+                )
+                .execute()
             )
-            .execute()
         )
         return {"month_key": mk, "calls_used": 0, "budget": desired_budget}
 
@@ -3923,15 +3991,17 @@ async def _get_month_usage() -> Dict[str, Any]:
     if int(data.get("budget", 0) or 0) != 0:
         try:
             await supa._exec(
-                lambda: supa.client.table("zendesk_usage")
-                .update(
-                    {
-                        "budget": 0,
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }
+                lambda: (
+                    supa.client.table("zendesk_usage")
+                    .update(
+                        {
+                            "budget": 0,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    .eq("month_key", mk)
+                    .execute()
                 )
-                .eq("month_key", mk)
-                .execute()
             )
         except Exception:
             pass
@@ -3945,23 +4015,27 @@ async def _inc_usage(n: int) -> None:
     supa = get_supabase_client()
     mk = datetime.now(timezone.utc).strftime("%Y-%m")
     resp = await supa._exec(
-        lambda: supa.client.table("zendesk_usage")
-        .select("calls_used")
-        .eq("month_key", mk)
-        .maybe_single()
-        .execute()
+        lambda: (
+            supa.client.table("zendesk_usage")
+            .select("calls_used")
+            .eq("month_key", mk)
+            .maybe_single()
+            .execute()
+        )
     )
     cur = (getattr(resp, "data", None) or {}).get("calls_used", 0)
     await supa._exec(
-        lambda: supa.client.table("zendesk_usage")
-        .update(
-            {
-                "calls_used": int(cur) + int(n),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
+        lambda: (
+            supa.client.table("zendesk_usage")
+            .update(
+                {
+                    "calls_used": int(cur) + int(n),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            .eq("month_key", mk)
+            .execute()
         )
-        .eq("month_key", mk)
-        .execute()
     )
 
 
@@ -3969,11 +4043,13 @@ async def _get_daily_usage() -> Dict[str, Any]:
     supa = get_supabase_client()
     today = date.today().isoformat()
     resp = await supa._exec(
-        lambda: supa.client.table("zendesk_daily_usage")
-        .select("usage_date, gemini_calls_used, gemini_daily_limit")
-        .eq("usage_date", today)
-        .maybe_single()
-        .execute()
+        lambda: (
+            supa.client.table("zendesk_daily_usage")
+            .select("usage_date, gemini_calls_used, gemini_daily_limit")
+            .eq("usage_date", today)
+            .maybe_single()
+            .execute()
+        )
     )
     row = getattr(resp, "data", None)
     if not row:
@@ -3994,23 +4070,27 @@ async def _inc_daily_usage(n: int) -> None:
     supa = get_supabase_client()
     today = date.today().isoformat()
     resp = await supa._exec(
-        lambda: supa.client.table("zendesk_daily_usage")
-        .select("gemini_calls_used")
-        .eq("usage_date", today)
-        .maybe_single()
-        .execute()
+        lambda: (
+            supa.client.table("zendesk_daily_usage")
+            .select("gemini_calls_used")
+            .eq("usage_date", today)
+            .maybe_single()
+            .execute()
+        )
     )
     used = (getattr(resp, "data", None) or {}).get("gemini_calls_used", 0)
     await supa._exec(
-        lambda: supa.client.table("zendesk_daily_usage")
-        .update(
-            {
-                "gemini_calls_used": int(used) + int(n),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
+        lambda: (
+            supa.client.table("zendesk_daily_usage")
+            .update(
+                {
+                    "gemini_calls_used": int(used) + int(n),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            .eq("usage_date", today)
+            .execute()
         )
-        .eq("usage_date", today)
-        .execute()
     )
 
 
@@ -4028,21 +4108,9 @@ async def _generate_reply(
     quality check on the final response, and an attachment fetch (logs/images) for
     additional context.
     """
-    # Basic PII redaction (align with webhook redaction)
-    _EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]{1,})@([A-Za-z0-9.-]{1,})")
-    _PHONE_RE = re.compile(
-        r"(?<!\d)(\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?){2}\d{4}(?!\d)"
-    )
     has_log_attachments = False
     attachment_type_counts: dict[str, int] | None = None
     log_attachment_hint = ""
-
-    def _redact_pii(text: str | None) -> str | None:
-        if not text or not isinstance(text, str):
-            return text
-        t = _EMAIL_RE.sub(lambda m: f"{m.group(1)[:2]}***@{m.group(2)}", text)
-        t = _PHONE_RE.sub("[redacted-phone]", t)
-        return t
 
     def _normalize_result_to_text(
         result_payload: Dict[str, Any] | None, state_obj: GraphState | None
@@ -4374,7 +4442,7 @@ async def _generate_reply(
         user_query_raw
     )
     user_query_raw = scrubbed_query or ""
-    user_query = _redact_pii(user_query_raw) or user_query_raw
+    user_query = sanitize_zendesk_ticket_text(user_query_raw) or user_query_raw
 
     ticket_is_unclear = _ticket_seems_unclear(
         subject=str(subject) if subject is not None else None,
@@ -5089,6 +5157,7 @@ async def _generate_reply(
                         "Rewrite the content into a customer-ready Mailbird support reply.\n\n"
                         "Output rules (must follow exactly):\n"
                         "- Output ONLY the customer reply (no headings, no analysis, no tool results, no IDs).\n"
+                        '- NEVER quote order IDs/order references; use generic phrasing such as "the order reference you shared".\n'
                         "- Do NOT include any text like 'Assistant:', 'Tool results', 'KB ID', 'Macro ID', or 'Final output:'.\n"
                         "- Do NOT mention internal tooling, retrieval, or web scraping.\n"
                         "- Do NOT use exclamation marks.\n"
@@ -5209,6 +5278,7 @@ async def _generate_reply(
                         "Rewrite the content into a customer-ready Mailbird support reply.\n\n"
                         "Output rules (must follow exactly):\n"
                         "- Output ONLY the customer reply (no headings, no analysis, no tool results, no IDs).\n"
+                        '- NEVER quote order IDs/order references; use generic phrasing such as "the order reference you shared".\n'
                         "- Do NOT include any text like 'Assistant:', 'Tool results', 'KB ID', 'Macro ID', or 'Final output:'.\n"
                         "- Do NOT mention internal tooling, retrieval, or web scraping.\n"
                         "- Do NOT use exclamation marks.\n"
@@ -5316,6 +5386,7 @@ async def _generate_reply(
                     "- Do NOT include placeholders like 'Pending'.\n"
                     "- Do NOT include hidden chain-of-thought or planning.\n"
                     "- Output ONLY the Suggested Reply (no Issue Summary / Root Cause / Resources / Follow-up sections).\n"
+                    '- NEVER quote order IDs/order references; use generic phrasing such as "the order reference you shared".\n'
                     "- Keep it customer-ready (public-facing tone), but do not mention internal tooling, macro IDs, or KB IDs.\n"
                     "- Do NOT use exclamation marks.\n"
                     "- Do NOT address the customer by name.\n"
@@ -5504,6 +5575,7 @@ async def _generate_reply(
     reply_text = _normalize_result_to_text(result, state) or (
         "Thank you for reaching out. We’re reviewing your request and will follow up shortly."
     )
+    reply_text = sanitize_order_references(reply_text)
     return ZendeskReplyResult(
         reply=reply_text,
         session_id=session_id,
@@ -5536,16 +5608,18 @@ async def _process_window(
         pass
     # Pull due tickets (pending or retry where next_attempt_at <= now)
     resp = await supa._exec(
-        lambda: supa.client.table("zendesk_pending_tickets")
-        .select(
-            "id,ticket_id,subject,description,created_at,retry_count,next_attempt_at"
+        lambda: (
+            supa.client.table("zendesk_pending_tickets")
+            .select(
+                "id,ticket_id,subject,description,created_at,retry_count,next_attempt_at"
+            )
+            .in_("status", ["pending", "retry"])
+            .lt("created_at", window_end.isoformat())
+            .order("created_at")
+            .order("id")
+            .limit(500)
+            .execute()
         )
-        .in_("status", ["pending", "retry"])
-        .lt("created_at", window_end.isoformat())
-        .order("created_at")
-        .order("id")
-        .limit(500)
-        .execute()
     )
     rows = resp.data or []
     # Filter to due rows only
@@ -5650,25 +5724,29 @@ async def _process_window(
             now_iso = datetime.now(timezone.utc).isoformat()
             # Update without select (supabase-py may not support select() on update builders)
             await supa._exec(
-                lambda: supa.client.table("zendesk_pending_tickets")
-                .update(
-                    {
-                        "status": "processing",
-                        "status_details": {"processing_started_at": now_iso},
-                        "last_attempt_at": now_iso,
-                    }
+                lambda: (
+                    supa.client.table("zendesk_pending_tickets")
+                    .update(
+                        {
+                            "status": "processing",
+                            "status_details": {"processing_started_at": now_iso},
+                            "last_attempt_at": now_iso,
+                        }
+                    )
+                    .eq("id", row["id"])
+                    .in_("status", ["pending", "retry"])  # only claim if still eligible
+                    .execute()
                 )
-                .eq("id", row["id"])
-                .in_("status", ["pending", "retry"])  # only claim if still eligible
-                .execute()
             )
             # Verify claim by re-reading the row
             verify = await supa._exec(
-                lambda: supa.client.table("zendesk_pending_tickets")
-                .select("id,status")
-                .eq("id", row["id"])  # the same row
-                .maybe_single()
-                .execute()
+                lambda: (
+                    supa.client.table("zendesk_pending_tickets")
+                    .select("id,status")
+                    .eq("id", row["id"])  # the same row
+                    .maybe_single()
+                    .execute()
+                )
             )
             v = getattr(verify, "data", None) or {}
             if v.get("status") != "processing":
@@ -5692,21 +5770,23 @@ async def _process_window(
             )
             if exclusion.excluded:
                 await supa._exec(
-                    lambda: supa.client.table("zendesk_pending_tickets")
-                    .update(
-                        {
-                            "status": "processed",
-                            "processed_at": datetime.now(timezone.utc).isoformat(),
-                            "status_details": {
-                                "processing_started_at": now_iso,
-                                "skipped": True,
-                                "skip_reason": exclusion.reason,
-                                **(exclusion.details or {}),
-                            },
-                        }
+                    lambda: (
+                        supa.client.table("zendesk_pending_tickets")
+                        .update(
+                            {
+                                "status": "processed",
+                                "processed_at": datetime.now(timezone.utc).isoformat(),
+                                "status_details": {
+                                    "processing_started_at": now_iso,
+                                    "skipped": True,
+                                    "skip_reason": exclusion.reason,
+                                    **(exclusion.details or {}),
+                                },
+                            }
+                        )
+                        .eq("id", row["id"])
+                        .execute()
                     )
-                    .eq("id", row["id"])
-                    .execute()
                 )
                 log_internal_note_result(
                     posted=False,
@@ -5714,7 +5794,7 @@ async def _process_window(
                 )
                 continue
 
-            # Spam guard: skip obvious spam bursts to avoid LLM processing costs.
+            # Spam guard: skip suspected spam before LLM processing.
             comments = None
             try:
                 via = ticket.get("via") if isinstance(ticket, dict) else {}
@@ -5735,6 +5815,20 @@ async def _process_window(
                 comments=comments,
             )
             if spam_decision and spam_decision.skip:
+                spam_tags = [spam_decision.tag]
+                if (
+                    spam_decision.reason_tag
+                    and spam_decision.reason_tag not in spam_tags
+                ):
+                    spam_tags.append(spam_decision.reason_tag)
+                logger.info(
+                    "zendesk_spam_guard_decision ticket_id=%s reason=%s score=%s reason_tag=%s signals=%s",
+                    tid,
+                    spam_decision.reason,
+                    (spam_decision.details or {}).get("spam_score"),
+                    spam_decision.reason_tag,
+                    (spam_decision.details or {}).get("spam_signals"),
+                )
                 spam_note_posted = False
                 spam_error: str | None = None
                 try:
@@ -5742,7 +5836,7 @@ async def _process_window(
                         zc.add_internal_note,
                         tid,
                         spam_decision.note,
-                        add_tag=spam_decision.tag,
+                        add_tag=spam_tags,
                         use_html=False,
                     )
                     spam_note_posted = not dry_run
@@ -5765,21 +5859,23 @@ async def _process_window(
                     error=spam_error,
                 )
                 await supa._exec(
-                    lambda: supa.client.table("zendesk_pending_tickets")
-                    .update(
-                        {
-                            "status": "processed",
-                            "processed_at": datetime.now(timezone.utc).isoformat(),
-                            "status_details": {
-                                "processing_started_at": now_iso,
-                                "skipped": True,
-                                "skip_reason": spam_decision.reason,
-                                **(spam_decision.details or {}),
-                            },
-                        }
+                    lambda: (
+                        supa.client.table("zendesk_pending_tickets")
+                        .update(
+                            {
+                                "status": "processed",
+                                "processed_at": datetime.now(timezone.utc).isoformat(),
+                                "status_details": {
+                                    "processing_started_at": now_iso,
+                                    "skipped": True,
+                                    "skip_reason": spam_decision.reason,
+                                    **(spam_decision.details or {}),
+                                },
+                            }
+                        )
+                        .eq("id", row["id"])
+                        .execute()
                     )
-                    .eq("id", row["id"])
-                    .execute()
                 )
                 continue
 
@@ -5814,7 +5910,7 @@ async def _process_window(
                     provider=provider,
                     model=model,
                 )
-            reply = run.reply
+            reply = sanitize_order_references(run.reply)
             use_html = bool(getattr(settings, "zendesk_use_html", True))
             has_log_attachments = False
             try:
@@ -5827,8 +5923,10 @@ async def _process_window(
                     has_log_attachments = int(attachments_report.get("logs") or 0) > 0
             except Exception:
                 has_log_attachments = False
-            gate_issues = _quality_gate_issues(
-                reply, use_html=use_html, has_log_attachments=has_log_attachments
+            reply, gate_issues = _apply_quality_gate_with_order_retry(
+                reply,
+                use_html=use_html,
+                has_log_attachments=has_log_attachments,
             )
             if gate_issues:
                 raise RuntimeError(f"quality_gate_failed: {','.join(gate_issues)}")
@@ -5877,16 +5975,18 @@ async def _process_window(
                     context_payload = {"error": "context_report_serialization_failed"}
             status_details["context_report"] = context_payload
             await supa._exec(
-                lambda: supa.client.table("zendesk_pending_tickets")
-                .update(
-                    {
-                        "status": "processed",
-                        "processed_at": completed_at,
-                        "status_details": status_details,
-                    }
+                lambda: (
+                    supa.client.table("zendesk_pending_tickets")
+                    .update(
+                        {
+                            "status": "processed",
+                            "processed_at": completed_at,
+                            "status_details": status_details,
+                        }
+                    )
+                    .eq("id", row["id"])
+                    .execute()
                 )
-                .eq("id", row["id"])
-                .execute()
             )
             if not dry_run:
                 try:
@@ -5928,17 +6028,19 @@ async def _process_window(
                 datetime.now(timezone.utc) + timedelta(seconds=retry_after)
             ).isoformat()
             await supa._exec(
-                lambda: supa.client.table("zendesk_pending_tickets")
-                .update(
-                    {
-                        "status": "retry",
-                        "last_error": last_error,
-                        "last_attempt_at": datetime.now(timezone.utc).isoformat(),
-                        "next_attempt_at": next_at,
-                    }
+                lambda: (
+                    supa.client.table("zendesk_pending_tickets")
+                    .update(
+                        {
+                            "status": "retry",
+                            "last_error": last_error,
+                            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+                            "next_attempt_at": next_at,
+                        }
+                    )
+                    .eq("id", row["id"])
+                    .execute()
                 )
-                .eq("id", row["id"])
-                .execute()
             )
             failures += 1
             rpm_exhausted = True
@@ -5957,22 +6059,22 @@ async def _process_window(
                 error="scheduler_timeout",
             )
             rc = (row.get("retry_count") or 0) + 1
-            next_at = (
-                datetime.now(timezone.utc) + timedelta(minutes=5)
-            ).isoformat()
+            next_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
             await supa._exec(
-                lambda: supa.client.table("zendesk_pending_tickets")
-                .update(
-                    {
-                        "status": "retry",
-                        "retry_count": rc,
-                        "last_error": "scheduler_timeout",
-                        "last_attempt_at": datetime.now(timezone.utc).isoformat(),
-                        "next_attempt_at": next_at,
-                    }
+                lambda: (
+                    supa.client.table("zendesk_pending_tickets")
+                    .update(
+                        {
+                            "status": "retry",
+                            "retry_count": rc,
+                            "last_error": "scheduler_timeout",
+                            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+                            "next_attempt_at": next_at,
+                        }
+                    )
+                    .eq("id", row["id"])
+                    .execute()
                 )
-                .eq("id", row["id"])
-                .execute()
             )
             failures += 1
         except Exception as e:
@@ -5990,16 +6092,20 @@ async def _process_window(
                 or "Zendesk update failed: 403" in err
             ):
                 await supa._exec(
-                    lambda: supa.client.table("zendesk_pending_tickets")
-                    .update(
-                        {
-                            "status": "pending",
-                            "last_error": "zendesk_auth_failed",
-                            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
-                        }
+                    lambda: (
+                        supa.client.table("zendesk_pending_tickets")
+                        .update(
+                            {
+                                "status": "pending",
+                                "last_error": "zendesk_auth_failed",
+                                "last_attempt_at": datetime.now(
+                                    timezone.utc
+                                ).isoformat(),
+                            }
+                        )
+                        .eq("id", row["id"])
+                        .execute()
                     )
-                    .eq("id", row["id"])
-                    .execute()
                 )
                 failures += 1
                 break
@@ -6008,18 +6114,22 @@ async def _process_window(
             if "Zendesk update failed: 404" in err:
                 rc = (row.get("retry_count") or 0) + 1
                 await supa._exec(
-                    lambda: supa.client.table("zendesk_pending_tickets")
-                    .update(
-                        {
-                            "status": "failed",
-                            "retry_count": rc,
-                            "last_error": "zendesk_ticket_not_found",
-                            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
-                            "next_attempt_at": None,
-                        }
+                    lambda: (
+                        supa.client.table("zendesk_pending_tickets")
+                        .update(
+                            {
+                                "status": "failed",
+                                "retry_count": rc,
+                                "last_error": "zendesk_ticket_not_found",
+                                "last_attempt_at": datetime.now(
+                                    timezone.utc
+                                ).isoformat(),
+                                "next_attempt_at": None,
+                            }
+                        )
+                        .eq("id", row["id"])
+                        .execute()
                     )
-                    .eq("id", row["id"])
-                    .execute()
                 )
                 failures += 1
                 continue
@@ -6035,18 +6145,20 @@ async def _process_window(
                     datetime.now(timezone.utc) + timedelta(minutes=delay_min)
                 ).isoformat()
             await supa._exec(
-                lambda: supa.client.table("zendesk_pending_tickets")
-                .update(
-                    {
-                        "status": new_status,
-                        "retry_count": rc,
-                        "last_error": err_short,
-                        "last_attempt_at": datetime.now(timezone.utc).isoformat(),
-                        "next_attempt_at": next_at,
-                    }
+                lambda: (
+                    supa.client.table("zendesk_pending_tickets")
+                    .update(
+                        {
+                            "status": new_status,
+                            "retry_count": rc,
+                            "last_error": err_short,
+                            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+                            "next_attempt_at": next_at,
+                        }
+                    )
+                    .eq("id", row["id"])
+                    .execute()
                 )
-                .eq("id", row["id"])
-                .execute()
             )
             failures += 1
 
@@ -6098,17 +6210,19 @@ async def start_background_scheduler() -> None:
             try:
                 supa = get_supabase_client()
                 await supa._exec(
-                    lambda: supa.client.table("feature_flags")
-                    .upsert(
-                        {
-                            "key": "zendesk_scheduler",
-                            "value": {
-                                "last_run_at": now.isoformat(),
-                                "last_success_at": now.isoformat(),
-                            },
-                        }
+                    lambda: (
+                        supa.client.table("feature_flags")
+                        .upsert(
+                            {
+                                "key": "zendesk_scheduler",
+                                "value": {
+                                    "last_run_at": now.isoformat(),
+                                    "last_success_at": now.isoformat(),
+                                },
+                            }
+                        )
+                        .execute()
                     )
-                    .execute()
                 )
             except Exception:
                 pass
@@ -6129,23 +6243,27 @@ async def start_background_scheduler() -> None:
                 supa = get_supabase_client()
                 # Merge with existing scheduler value to preserve other fields
                 cur = await supa._exec(
-                    lambda: supa.client.table("feature_flags")
-                    .select("value")
-                    .eq("key", "zendesk_scheduler")
-                    .maybe_single()
-                    .execute()
+                    lambda: (
+                        supa.client.table("feature_flags")
+                        .select("value")
+                        .eq("key", "zendesk_scheduler")
+                        .maybe_single()
+                        .execute()
+                    )
                 )
                 cur_val = (getattr(cur, "data", None) or {}).get("value") or {}
                 cur_val["last_error"] = str(e)[:400]
                 await supa._exec(
-                    lambda: supa.client.table("feature_flags")
-                    .upsert(
-                        {
-                            "key": "zendesk_scheduler",
-                            "value": cur_val,
-                        }
+                    lambda: (
+                        supa.client.table("feature_flags")
+                        .upsert(
+                            {
+                                "key": "zendesk_scheduler",
+                                "value": cur_val,
+                            }
+                        )
+                        .execute()
                     )
-                    .execute()
                 )
             except Exception:
                 pass

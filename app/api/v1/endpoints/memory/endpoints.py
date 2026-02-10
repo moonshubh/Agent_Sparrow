@@ -63,12 +63,15 @@ from .schemas import (
     MemoryRecord,
     MemoryListResponse,
     MemoryEntityRecord,
+    GraphDataResponse,
     MemoryRelationshipRecord,
     DuplicateCandidateRecord,
     ImportMemorySourcesRequest,
     ImportMemorySourcesResponse,
     ImportZendeskTaggedRequest,
     ImportZendeskTaggedResponse,
+    ImportZendeskTaggedTaskResult,
+    ImportZendeskTaggedTaskStatusResponse,
     MergeRelationshipsRequest,
     MergeRelationshipsResponse,
     SplitRelationshipCommitRequest,
@@ -263,6 +266,69 @@ def _escape_like_pattern(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+GRAPH_ENTITY_COLORS: Dict[str, str] = {
+    "product": "#0078D4",
+    "feature": "#10B981",
+    "issue": "#EF4444",
+    "solution": "#22C55E",
+    "platform": "#F59E0B",
+    "version": "#38BDF8",
+    "customer": "#14B8A6",
+    "error": "#F43F5E",
+}
+
+
+def _metadata_text(metadata: Any, key: str) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    value = metadata.get(key)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
+def _memory_has_editor_identity(memory_row: Dict[str, Any]) -> bool:
+    reviewed_by = memory_row.get("reviewed_by")
+    if isinstance(reviewed_by, str) and reviewed_by.strip():
+        return True
+
+    metadata = memory_row.get("metadata")
+    editor_keys = (
+        "edited_by_email",
+        "updated_by_email",
+        "editor_email",
+        "edited_by",
+        "updated_by",
+        "edited_by_name",
+        "updated_by_name",
+    )
+    return any(_metadata_text(metadata, key) for key in editor_keys)
+
+
+def _is_memory_edited(memory_row: Dict[str, Any]) -> bool:
+    created_at = memory_row.get("created_at")
+    updated_at = memory_row.get("updated_at")
+
+    def _coerce_datetime(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
+
+    created_dt = _coerce_datetime(created_at)
+    updated_dt = _coerce_datetime(updated_at)
+    if created_dt is None or updated_dt is None:
+        return False
+
+    if updated_dt <= created_dt:
+        return False
+    return _memory_has_editor_identity(memory_row)
+
+
 @router.get(
     "/list",
     response_model=MemoryListResponse,
@@ -422,6 +488,151 @@ async def list_relationships(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list memory relationships",
+        )
+
+
+@router.get(
+    "/graph",
+    response_model=GraphDataResponse,
+    summary="Get graph data",
+    description=(
+        "Returns graph-ready nodes/links for Memory UI including edited-memory "
+        "influence metadata for trust/explainability."
+    ),
+)
+async def get_graph_data(
+    current_user: Annotated[TokenPayload, Depends(get_current_user)],
+    service: MemoryUIService = Depends(get_memory_ui_service),
+    limit_entities: int = Query(default=500, ge=1, le=2000),
+    limit_relationships: int = Query(default=2000, ge=1, le=10000),
+    entity_types: List[str] | None = Query(default=None),
+) -> GraphDataResponse:
+    supabase = service._get_supabase()
+
+    try:
+        entities_query = (
+            supabase.client.table("memory_entities")
+            .select("*")
+            .order("occurrence_count", desc=True)
+            .limit(int(limit_entities))
+        )
+        if entity_types:
+            entities_query = entities_query.in_("entity_type", entity_types)
+
+        entities_resp = await supabase._exec(lambda: entities_query.execute())
+        entities = list(entities_resp.data or [])
+        entity_ids = {str(row.get("id")) for row in entities if row.get("id")}
+
+        if not entity_ids:
+            return GraphDataResponse(nodes=[], links=[])
+
+        relationships_resp = await supabase._exec(
+            lambda: supabase.client.table("memory_relationships")
+            .select("*")
+            .order("occurrence_count", desc=True)
+            .limit(int(limit_relationships))
+            .execute()
+        )
+        relationships_raw = list(relationships_resp.data or [])
+        relationships = [
+            row
+            for row in relationships_raw
+            if str(row.get("source_entity_id")) in entity_ids
+            and str(row.get("target_entity_id")) in entity_ids
+        ]
+
+        memory_ids = {
+            str(source_memory_id)
+            for row in relationships
+            if (source_memory_id := row.get("source_memory_id"))
+        }
+        memory_rows: list[dict[str, Any]] = []
+        if memory_ids:
+            memories_resp = await supabase._exec(
+                lambda: supabase.client.table("memories")
+                .select("id,metadata,reviewed_by,created_at,updated_at")
+                .in_("id", list(memory_ids))
+                .execute()
+            )
+            memory_rows = list(memories_resp.data or [])
+
+        edited_by_memory_id: Dict[str, bool] = {
+            str(row.get("id")): _is_memory_edited(row) for row in memory_rows if row.get("id")
+        }
+
+        edited_memory_ids_by_entity: Dict[str, set[str]] = {
+            entity_id: set() for entity_id in entity_ids
+        }
+        has_edited_provenance_by_link: Dict[str, bool] = {}
+
+        for rel in relationships:
+            rel_id = str(rel.get("id"))
+            src = str(rel.get("source_entity_id"))
+            tgt = str(rel.get("target_entity_id"))
+            source_memory_id_raw = rel.get("source_memory_id")
+            source_memory_id = (
+                str(source_memory_id_raw) if source_memory_id_raw else None
+            )
+            edited = bool(source_memory_id and edited_by_memory_id.get(source_memory_id))
+            has_edited_provenance_by_link[rel_id] = edited
+
+            if edited and source_memory_id:
+                edited_memory_ids_by_entity.setdefault(src, set()).add(source_memory_id)
+                edited_memory_ids_by_entity.setdefault(tgt, set()).add(source_memory_id)
+
+        nodes_payload = []
+        for entity in entities:
+            entity_id = str(entity.get("id"))
+            occurrence = int(entity.get("occurrence_count") or 0)
+            entity_type = str(entity.get("entity_type") or "").lower()
+            edited_memory_count = len(edited_memory_ids_by_entity.get(entity_id, set()))
+            nodes_payload.append(
+                {
+                    "id": entity.get("id"),
+                    "entityType": entity.get("entity_type"),
+                    "entityName": entity.get("entity_name"),
+                    "displayLabel": entity.get("display_label")
+                    or str(entity.get("entity_name") or "")[:50],
+                    "occurrenceCount": occurrence,
+                    "metadata": entity.get("metadata") or {},
+                    "firstSeenAt": entity.get("first_seen_at"),
+                    "lastSeenAt": entity.get("last_seen_at"),
+                    "acknowledgedAt": entity.get("acknowledged_at"),
+                    "lastModifiedAt": entity.get("last_modified_at"),
+                    "createdAt": entity.get("created_at"),
+                    "updatedAt": entity.get("updated_at"),
+                    "color": GRAPH_ENTITY_COLORS.get(entity_type, "#6B7280"),
+                    "size": max(4, min(20, occurrence * 2)),
+                    "hasEditedMemory": edited_memory_count > 0,
+                    "editedMemoryCount": edited_memory_count,
+                }
+            )
+
+        links_payload = []
+        for rel in relationships:
+            rel_id = str(rel.get("id"))
+            links_payload.append(
+                {
+                    "id": rel.get("id"),
+                    "source": rel.get("source_entity_id"),
+                    "target": rel.get("target_entity_id"),
+                    "relationshipType": rel.get("relationship_type"),
+                    "weight": rel.get("weight"),
+                    "occurrenceCount": rel.get("occurrence_count"),
+                    "acknowledgedAt": rel.get("acknowledged_at"),
+                    "lastModifiedAt": rel.get("last_modified_at"),
+                    "hasEditedProvenance": has_edited_provenance_by_link.get(
+                        rel_id, False
+                    ),
+                }
+            )
+
+        return GraphDataResponse(nodes=nodes_payload, links=links_payload)
+    except Exception as exc:
+        logger.exception("Error building graph data: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load graph data",
         )
 
 
@@ -3488,11 +3699,24 @@ async def update_memory(
             else existing.get("metadata", {})
         )
 
+        reviewer_id: UUID | None = None
+        if admin_user.sub:
+            try:
+                parsed_reviewer = UUID(admin_user.sub)
+                if parsed_reviewer.int != 0:
+                    reviewer_id = parsed_reviewer
+            except Exception:
+                logger.warning(
+                    "Skipping reviewed_by assignment for memory %s due to invalid admin user id: %s",
+                    memory_id,
+                    admin_user.sub,
+                )
+
         result = await service.update_memory(
             memory_id=memory_id,
             content=content,
             metadata=metadata,
-            reviewer_id=UUID(admin_user.sub) if admin_user.sub else None,
+            reviewer_id=reviewer_id,
         )
 
         updated_at = result.get("updated_at")
@@ -4184,7 +4408,7 @@ async def import_memory_sources(
     response_model=ImportZendeskTaggedResponse,
     summary="Queue Zendesk tagged ticket import (Admin only)",
     description=(
-        "Queue a background job to ingest solved/closed Zendesk tickets tagged for md_playbook "
+        "Queue a background job to ingest solved/closed Zendesk tickets tagged for mb_playbook "
         "learning into the Memory UI."
     ),
     responses={
@@ -4208,16 +4432,91 @@ async def import_zendesk_tagged(
         from app.feedme.tasks import import_zendesk_tagged as import_task
 
         task = import_task.delay(tag=request.tag, limit=request.limit)
+        task_id = getattr(task, "id", None)
         return ImportZendeskTaggedResponse(
             queued=True,
-            task_id=getattr(task, "id", None),
+            task_id=task_id,
             message="Zendesk import queued",
+            status_url=(
+                f"/api/v1/memory/import/zendesk-tagged/{task_id}" if task_id else None
+            ),
         )
     except Exception as exc:
         logger.exception("Failed to queue Zendesk import")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to queue Zendesk import",
+        ) from exc
+
+
+@router.get(
+    "/import/zendesk-tagged/{task_id}",
+    response_model=ImportZendeskTaggedTaskStatusResponse,
+    summary="Get Zendesk tagged import task status (Admin only)",
+    description="Poll the status and result payload for a queued Zendesk tagged import task.",
+    responses={
+        200: {"description": "Task status returned"},
+        401: {"description": "Authentication required"},
+        403: {"description": "Admin access required"},
+        500: {"description": "Internal server error"},
+    },
+)
+async def get_import_zendesk_tagged_status(
+    task_id: str,
+    _admin_user: Annotated[TokenPayload, Depends(require_admin)],
+) -> ImportZendeskTaggedTaskStatusResponse:
+    try:
+        from app.feedme.tasks import get_task_status
+
+        payload = get_task_status(task_id)
+        status_value = str(payload.get("status") or "UNKNOWN").upper()
+        ready = bool(payload.get("ready"))
+        successful = bool(payload.get("successful"))
+        failed = bool(payload.get("failed"))
+
+        parsed_result: ImportZendeskTaggedTaskResult | None = None
+        raw_result = payload.get("result")
+        if isinstance(raw_result, dict):
+            try:
+                parsed_result = ImportZendeskTaggedTaskResult.model_validate(raw_result)
+            except Exception:
+                parsed_result = None
+
+        error: str | None = None
+        raw_error = payload.get("error")
+        if raw_error:
+            error = str(raw_error)
+        if failed and not error:
+            info = payload.get("info")
+            if info:
+                error = str(info)
+            elif raw_result is not None and not isinstance(raw_result, dict):
+                error = str(raw_result)
+
+        if status_value in {"PENDING", "RECEIVED", "STARTED"}:
+            message = "Import is running."
+        elif status_value in {"SUCCESS"}:
+            message = "Import completed."
+        elif status_value in {"FAILURE", "REVOKED"}:
+            message = "Import failed."
+        else:
+            message = "Import status updated."
+
+        return ImportZendeskTaggedTaskStatusResponse(
+            task_id=task_id,
+            status=status_value,
+            ready=ready,
+            successful=successful,
+            failed=failed,
+            message=message,
+            error=error,
+            result=parsed_result,
+        )
+    except Exception as exc:
+        logger.exception("Failed to fetch Zendesk import task status for %s", task_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch Zendesk import task status",
         ) from exc
 
 

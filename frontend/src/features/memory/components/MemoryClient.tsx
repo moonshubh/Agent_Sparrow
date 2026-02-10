@@ -1,6 +1,13 @@
 "use client";
 
-import React, { useMemo, useState, useCallback, Suspense } from "react";
+import React, {
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  Suspense,
+} from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -25,11 +32,13 @@ import {
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useMemoryMe,
   useMemoryStats,
   useDuplicateCandidates,
   useImportZendeskTagged,
+  memoryKeys,
 } from "../hooks";
 import { MemorySearch } from "./MemorySearch";
 import { MemoryForm } from "./MemoryForm";
@@ -39,6 +48,7 @@ import {
   type EntityType,
   type MemoryFilters,
 } from "../types";
+import { memoryAPI } from "../lib/api";
 import "../styles/memory.css";
 
 // Lazy load heavy components
@@ -78,7 +88,13 @@ const sidebarSpring = {
   damping: 40,
 };
 
+const GRAPH_SYNC_TIMEOUT_MS = 60_000;
+const GRAPH_SYNC_POLL_MS = 3_000;
+const IMPORT_TASK_POLL_MS = 4_000;
+const IMPORT_TASK_TIMEOUT_MS = 10 * 60_000;
+
 export default function MemoryClient() {
+  const queryClient = useQueryClient();
   // View state
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [filters, setFilters] = useState<MemoryFilters>(defaultFilters);
@@ -94,6 +110,21 @@ export default function MemoryClient() {
     relationshipId: string;
     tab?: "edit" | "ai" | "evidence";
   } | null>(null);
+  const [graphSyncState, setGraphSyncState] = useState<{
+    status: "idle" | "syncing" | "success" | "error";
+    message: string;
+    memoryId: string | null;
+  }>({
+    status: "idle",
+    message: "",
+    memoryId: null,
+  });
+  const [activeImportTask, setActiveImportTask] = useState<{
+    taskId: string;
+    tag: string;
+    startedAtMs: number;
+  } | null>(null);
+  const graphSyncRunRef = useRef(0);
 
   // Data hooks
   const meQuery = useMemoryMe();
@@ -160,10 +191,213 @@ export default function MemoryClient() {
     [],
   );
 
+  const monitorGraphSync = useCallback(
+    async (memoryId: string) => {
+      if (!memoryId) return;
+
+      const runId = Date.now();
+      graphSyncRunRef.current = runId;
+      setGraphSyncState({
+        status: "syncing",
+        message: "Graph updating...",
+        memoryId,
+      });
+
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < GRAPH_SYNC_TIMEOUT_MS) {
+        try {
+          const memory = await memoryAPI.getMemoryById(memoryId);
+          const metadata =
+            memory && typeof memory.metadata === "object"
+              ? (memory.metadata as Record<string, unknown>)
+              : {};
+          const entitiesExtracted = metadata["entities_extracted"] === true;
+          const extractedAtRaw = metadata["entities_extracted_at"];
+          const extractedAt =
+            typeof extractedAtRaw === "string" ? extractedAtRaw : null;
+          const updatedAtMs = memory?.updated_at
+            ? Date.parse(memory.updated_at)
+            : Number.NaN;
+          const extractedAtMs = extractedAt
+            ? Date.parse(extractedAt)
+            : Number.NaN;
+          const isFreshExtraction =
+            entitiesExtracted &&
+            (!Number.isFinite(updatedAtMs) ||
+              !Number.isFinite(extractedAtMs) ||
+              extractedAtMs >= updatedAtMs);
+
+          if (isFreshExtraction) {
+            if (graphSyncRunRef.current !== runId) return;
+
+            setGraphSyncState({
+              status: "success",
+              message: "Graph updated",
+              memoryId,
+            });
+            refetchStats();
+            setGraphKey((prev) => prev + 1);
+            toast.success("Graph relationships refreshed from latest memory edit");
+
+            window.setTimeout(() => {
+              if (graphSyncRunRef.current !== runId) return;
+              setGraphSyncState({
+                status: "idle",
+                message: "",
+                memoryId: null,
+              });
+            }, 2500);
+            return;
+          }
+        } catch (err: unknown) {
+          if (graphSyncRunRef.current !== runId) return;
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Unable to check graph sync status";
+          setGraphSyncState({
+            status: "error",
+            message,
+            memoryId,
+          });
+          toast.warning("Graph update check failed. You can refresh manually.");
+          return;
+        }
+
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, GRAPH_SYNC_POLL_MS);
+        });
+      }
+
+      if (graphSyncRunRef.current !== runId) return;
+      setGraphSyncState({
+        status: "error",
+        message: "Graph update timed out. Manual refresh is available.",
+        memoryId,
+      });
+      toast.warning("Graph update timed out. Existing graph was kept.");
+    },
+    [refetchStats],
+  );
+
+  const handleMemoryUpdated = useCallback(
+    (memoryId?: string) => {
+      refetchStats();
+      if (!memoryId) return;
+      void monitorGraphSync(memoryId);
+    },
+    [monitorGraphSync, refetchStats],
+  );
+
+  useEffect(() => {
+    if (!activeImportTask) return;
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+
+    const finishPolling = () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      if (!cancelled) {
+        setActiveImportTask(null);
+      }
+    };
+
+    const scheduleNextPoll = () => {
+      if (cancelled) return;
+      timeoutId = window.setTimeout(() => {
+        void pollTaskStatus();
+      }, IMPORT_TASK_POLL_MS);
+    };
+
+    const pollTaskStatus = async () => {
+      if (cancelled) return;
+
+      if (Date.now() - activeImportTask.startedAtMs > IMPORT_TASK_TIMEOUT_MS) {
+        toast.warning(
+          "Import is taking longer than expected. You can keep using Memory UI while it finishes.",
+        );
+        finishPolling();
+        return;
+      }
+
+      try {
+        const status = await memoryAPI.getZendeskTaggedImportStatus(
+          activeImportTask.taskId,
+        );
+
+        if (!status.ready) {
+          scheduleNextPoll();
+          return;
+        }
+
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: memoryKeys.lists() }),
+          queryClient.invalidateQueries({ queryKey: memoryKeys.searches() }),
+          queryClient.invalidateQueries({ queryKey: memoryKeys.stats() }),
+          queryClient.invalidateQueries({ queryKey: memoryKeys.graphBase() }),
+          queryClient.invalidateQueries({ queryKey: memoryKeys.duplicatesBase() }),
+        ]);
+        refetchStats();
+        setGraphKey((prev) => prev + 1);
+
+        const imported = status.result?.imported ?? 0;
+        const skipped = status.result?.skipped ?? 0;
+        const failed = status.result?.failed ?? 0;
+        const processed = status.result?.processed_tickets ?? imported + skipped + failed;
+        const importedIds = status.result?.imported_memory_ids ?? [];
+
+        if (importedIds.length > 0) {
+          setFocusedMemoryId(importedIds[0]);
+          setViewMode("table");
+        }
+
+        if (status.successful) {
+          if (failed > 0) {
+            toast.warning(
+              `Import finished with issues (${imported} imported, ${failed} failed, ${processed} processed).`,
+            );
+          } else {
+            toast.success(
+              `Import complete (${imported} imported, ${processed} processed).`,
+            );
+          }
+        } else {
+          const errorMessage =
+            status.error ||
+            status.message ||
+            "Zendesk import failed before completion.";
+          toast.error(errorMessage);
+        }
+
+        finishPolling();
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Failed to check import status";
+        toast.warning(`${message}. Import may still be running.`);
+        finishPolling();
+      }
+    };
+
+    void pollTaskStatus();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [activeImportTask, queryClient, refetchStats]);
+
   const handleImportSources = useCallback(async () => {
     try {
+      const importTag = "mb_playbook";
       const result = await importZendesk.mutateAsync({
-        tag: "md_playbook",
+        tag: importTag,
         limit: 200,
       });
 
@@ -171,8 +405,21 @@ export default function MemoryClient() {
         toast.error(result.message || "Import could not be queued");
         return;
       }
-      const taskLabel = result.task_id ? ` (task ${result.task_id})` : "";
-      toast.success(result.message || `Import queued${taskLabel}`);
+      const serverMessage = result.message?.trim() || "Import queued";
+      const details = [
+        `tag: ${importTag}`,
+        result.task_id ? `task: ${result.task_id}` : null,
+      ]
+        .filter(Boolean)
+        .join(" • ");
+      toast.success(`${serverMessage} (${details})`);
+      if (result.task_id) {
+        setActiveImportTask({
+          taskId: result.task_id,
+          tag: importTag,
+          startedAtMs: Date.now(),
+        });
+      }
       refetchStats();
       setGraphKey((prev) => prev + 1);
     } catch (err: unknown) {
@@ -570,6 +817,27 @@ export default function MemoryClient() {
             </div>
 
             <div className="memory-header-right">
+              {graphSyncState.status !== "idle" && (
+                <div
+                  className={`memory-sync-pill memory-sync-pill--${graphSyncState.status}`}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span>{graphSyncState.message}</span>
+                  {graphSyncState.status === "error" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        refetchStats();
+                        setGraphKey((prev) => prev + 1);
+                      }}
+                    >
+                      Refresh
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Search */}
               <div className="memory-search-wrapper">
                 <Search size={16} className="memory-search-icon" />
@@ -670,6 +938,7 @@ export default function MemoryClient() {
                         onPendingRelationshipOpenHandled={() =>
                           setPendingRelationshipOpen(null)
                         }
+                        onMemoryUpdated={handleMemoryUpdated}
                       />
                     </GraphErrorBoundary>
                   )}
@@ -683,6 +952,7 @@ export default function MemoryClient() {
                       focusMemoryId={focusedMemoryId}
                       onClearFocus={() => setFocusedMemoryId(null)}
                       isAdmin={isAdmin}
+                      onMemoryUpdated={handleMemoryUpdated}
                     />
                   )}
                   {viewMode === "duplicates" && <DuplicateReview />}
@@ -719,9 +989,9 @@ export default function MemoryClient() {
         {showAddForm && isAdmin && (
           <MemoryForm
             onClose={() => setShowAddForm(false)}
-            onSuccess={() => {
+            onSuccess={(memoryId) => {
               setShowAddForm(false);
-              refetchStats();
+              handleMemoryUpdated(memoryId);
             }}
           />
         )}

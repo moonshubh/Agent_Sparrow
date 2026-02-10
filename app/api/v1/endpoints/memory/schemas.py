@@ -843,6 +843,9 @@ class MemoryRecord(BaseModel):
     content: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
     source_type: str
+    review_status: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
     confidence_score: float
     retrieval_count: int
     last_retrieved_at: Optional[datetime] = None
@@ -885,6 +888,48 @@ class MemoryEntityRecord(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class GraphNodeRecord(BaseModel):
+    """Read model for graph node payloads (frontend-friendly field names)."""
+
+    id: UUID
+    entityType: EntityType
+    entityName: str
+    displayLabel: str
+    occurrenceCount: int
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    firstSeenAt: Optional[datetime] = None
+    lastSeenAt: Optional[datetime] = None
+    acknowledgedAt: Optional[datetime] = None
+    lastModifiedAt: Optional[datetime] = None
+    createdAt: Optional[datetime] = None
+    updatedAt: Optional[datetime] = None
+    color: Optional[str] = None
+    size: Optional[float] = None
+    hasEditedMemory: bool = False
+    editedMemoryCount: int = 0
+
+
+class GraphLinkRecord(BaseModel):
+    """Read model for graph link payloads (frontend-friendly field names)."""
+
+    id: UUID
+    source: UUID
+    target: UUID
+    relationshipType: RelationshipType
+    weight: float
+    occurrenceCount: int
+    acknowledgedAt: Optional[datetime] = None
+    lastModifiedAt: Optional[datetime] = None
+    hasEditedProvenance: bool = False
+
+
+class GraphDataResponse(BaseModel):
+    """Graph payload with enriched edit provenance metadata."""
+
+    nodes: List[GraphNodeRecord] = Field(default_factory=list)
+    links: List[GraphLinkRecord] = Field(default_factory=list)
 
 
 class MemoryRelationshipRecord(BaseModel):
@@ -1202,7 +1247,7 @@ class ImportZendeskTaggedRequest(BaseModel):
     """Admin request to queue Zendesk ticket ingestion for Memory UI."""
 
     tag: str = Field(
-        default="md_playbook",
+        default="mb_playbook",
         description="Zendesk tag to filter tickets for ingestion.",
     )
     limit: int = Field(
@@ -1219,3 +1264,33 @@ class ImportZendeskTaggedResponse(BaseModel):
     queued: bool = Field(default=True)
     task_id: Optional[str] = Field(default=None)
     message: str = Field(default="Zendesk import queued")
+    status_url: Optional[str] = Field(
+        default=None,
+        description="Optional endpoint path to poll the queued import task status.",
+    )
+
+
+class ImportZendeskTaggedTaskResult(BaseModel):
+    """Normalized result payload for a completed Zendesk import task."""
+
+    imported: int = Field(default=0, ge=0)
+    skipped: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    tag: str = Field(default="mb_playbook")
+    processed_tickets: int = Field(default=0, ge=0)
+    imported_memory_ids: List[str] = Field(default_factory=list)
+    failed_ticket_ids: List[str] = Field(default_factory=list)
+    failure_reasons: Dict[str, str] = Field(default_factory=dict)
+
+
+class ImportZendeskTaggedTaskStatusResponse(BaseModel):
+    """Task status payload for queued Zendesk tagged imports."""
+
+    task_id: str
+    status: str = Field(default="PENDING")
+    ready: bool = Field(default=False)
+    successful: bool = Field(default=False)
+    failed: bool = Field(default=False)
+    message: Optional[str] = Field(default=None)
+    error: Optional[str] = Field(default=None)
+    result: Optional[ImportZendeskTaggedTaskResult] = Field(default=None)

@@ -28,6 +28,7 @@ from app.security.pii_redactor import redact_pii, redact_pii_from_dict
 logger = get_logger(__name__)
 
 COUNT_EXACT: CountMethod = CountMethod.exact
+ZERO_UUID = UUID("00000000-0000-0000-0000-000000000000")
 
 
 class MemoryUIService:
@@ -259,9 +260,36 @@ class MemoryUIService:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        if reviewer_id:
-            update_payload["reviewed_by"] = str(reviewer_id)
-            update_payload["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+        if reviewer_id and reviewer_id != ZERO_UUID:
+            reviewer_id_str = str(reviewer_id)
+            reviewer_exists = False
+            try:
+                reviewer_lookup = await supabase._exec(
+                    lambda: supabase.client.schema("auth")
+                    .table("users")
+                    .select("id")
+                    .eq("id", reviewer_id_str)
+                    .maybe_single()
+                    .execute()
+                )
+                reviewer_exists = bool(reviewer_lookup and reviewer_lookup.data)
+            except Exception as exc:
+                logger.warning(
+                    "Reviewer lookup failed for %s while updating memory %s; skipping reviewed_by update: %s",
+                    reviewer_id_str,
+                    memory_id_str,
+                    exc,
+                )
+
+            if reviewer_exists:
+                update_payload["reviewed_by"] = reviewer_id_str
+                update_payload["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+            else:
+                logger.warning(
+                    "Skipping reviewed_by update for memory %s because reviewer %s does not exist in auth.users",
+                    memory_id_str,
+                    reviewer_id_str,
+                )
 
         # Regenerate embedding if content changed
         if content != existing_content:
@@ -563,7 +591,7 @@ class MemoryUIService:
                 .execute()
             )
 
-            if response.data:
+            if response and response.data:
                 logger.debug("Retrieved memory %s", memory_id_str)
                 return response.data
 

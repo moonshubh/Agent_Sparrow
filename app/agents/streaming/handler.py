@@ -121,6 +121,12 @@ MARKDOWN_DATA_URI_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern for markdown images: ![alt](url "optional title")
+MARKDOWN_IMAGE_PATTERN = re.compile(
+    r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)\s]+)(?:\s+\"(?P<title>[^\"]*)\")?\)",
+    re.IGNORECASE,
+)
+
 # Maximum error string length to prevent oversized SSE payloads
 MAX_ERROR_MESSAGE_LENGTH = 2000
 
@@ -2416,6 +2422,71 @@ class StreamEventHandler:
         import json
         from app.agents.unified.image_store import rewrite_base64_images_in_text
 
+        def _normalize_article_images(
+            raw_images: Any,
+            markdown_content: str,
+        ) -> list[dict[str, str]]:
+            normalized: list[dict[str, str]] = []
+            seen_urls: set[str] = set()
+
+            def _is_http_url(value: str) -> bool:
+                try:
+                    parsed = httpx.URL(value)
+                    return parsed.scheme.lower() in {"http", "https"}
+                except Exception:
+                    return False
+
+            def _coerce(value: Any) -> str:
+                if isinstance(value, str):
+                    return value.strip()
+                return ""
+
+            def _append(url_value: str, alt_value: str, page_url_value: str = "") -> None:
+                url = _coerce(url_value)
+                if not url or not _is_http_url(url):
+                    return
+                if url in seen_urls:
+                    return
+                seen_urls.add(url)
+                image: dict[str, str] = {
+                    "url": url,
+                    "alt": _coerce(alt_value) or "Image",
+                }
+                page_url = _coerce(page_url_value)
+                if _is_http_url(page_url):
+                    image["page_url"] = page_url
+                normalized.append(image)
+
+            if isinstance(raw_images, list):
+                for raw_image in raw_images:
+                    if not isinstance(raw_image, dict):
+                        continue
+                    _append(
+                        raw_image.get("url")
+                        or raw_image.get("image_url")
+                        or raw_image.get("imageUrl")
+                        or raw_image.get("src"),
+                        raw_image.get("alt")
+                        or raw_image.get("alt_text")
+                        or raw_image.get("title")
+                        or raw_image.get("caption")
+                        or "Image",
+                        raw_image.get("page_url")
+                        or raw_image.get("pageUrl")
+                        or raw_image.get("source_url")
+                        or raw_image.get("source"),
+                    )
+
+            if isinstance(markdown_content, str) and markdown_content.strip():
+                for match in MARKDOWN_IMAGE_PATTERN.finditer(markdown_content):
+                    alt = (match.group("alt") or "").strip()
+                    url = (match.group("url") or "").strip()
+                    title = (match.group("title") or "").strip()
+                    page_url = title if _is_http_url(title) else ""
+                    _append(url, alt or "Image", page_url)
+
+            return normalized
+
         # Extract content from ToolMessage if needed
         raw_output = output
         if isinstance(output, ToolMessage):
@@ -2446,7 +2517,7 @@ class StreamEventHandler:
         # Check if we have the raw content to emit
         title = raw_output.get("title", "Article")
         content = raw_output.get("content", "")
-        images = raw_output.get("images")
+        images_raw = raw_output.get("images")
 
         # Phase V: rewrite any base64 data-URI images into stored URLs.
         if isinstance(content, str) and "data:image" in content.lower():
@@ -2456,9 +2527,9 @@ class StreamEventHandler:
             if replaced:
                 logger.info("article_artifact_rewrote_base64_images", replaced=replaced)
 
-        if isinstance(images, list):
+        if isinstance(images_raw, list):
             sanitized_images = []
-            for img in images:
+            for img in images_raw:
                 if not isinstance(img, dict):
                     sanitized_images.append(img)
                     continue
@@ -2472,21 +2543,34 @@ class StreamEventHandler:
                     sanitized_images.append(next_img)
                     continue
                 sanitized_images.append(img)
-            images = sanitized_images
+            images_raw = sanitized_images
+
+        normalized_images = _normalize_article_images(images_raw, content)
 
         # Emit if we have content OR images (not just content)
         # This ensures image-only articles are properly displayed
-        if content or images:
+        if content or normalized_images:
             self.emitter.emit_article_artifact(
                 content=content or "",
                 title=title,
-                images=images,
+                images=normalized_images,
             )
+
+            # Emit individual image artifacts as a reliability fallback:
+            # even if article markdown rendering is missed client-side, users can still
+            # view/download images from the artifact panel.
+            for index, image in enumerate(normalized_images[:5], start=1):
+                self.emitter.emit_image_artifact(
+                    image_url=image.get("url"),
+                    title=f"{title} - Visual {index}",
+                    prompt=image.get("alt"),
+                    page_url=image.get("page_url"),
+                )
             logger.info(
-                "article_artifact_emitted: title=%s, content_length=%d, images=%d",
+                "article_artifact_emitted: title={}, content_length={}, images={}",
                 title,
                 len(content or ""),
-                len(images or []),
+                len(normalized_images),
             )
         else:
             logger.warning("article_artifact_skipped: no content or images")

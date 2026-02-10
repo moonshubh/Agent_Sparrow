@@ -76,6 +76,7 @@ interface MemoryGraphProps {
     tab?: "edit" | "ai" | "evidence";
   } | null;
   onPendingRelationshipOpenHandled?: () => void;
+  onMemoryUpdated?: (memoryId?: string) => void;
 }
 
 export default function MemoryGraph({
@@ -89,6 +90,7 @@ export default function MemoryGraph({
   onInspectMemoryFromRelationship,
   pendingRelationshipOpen,
   onPendingRelationshipOpenHandled,
+  onMemoryUpdated,
 }: MemoryGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const htmlPortalRef = useRef<HTMLDivElement>(
@@ -290,6 +292,7 @@ export default function MemoryGraph({
 
     return acknowledgedMs >= modifiedMs;
   }, [resolvedSelectedNode]);
+  const editedInfluenceCount = resolvedSelectedNode?.editedMemoryCount ?? 0;
 
   const relatedMemoriesQuery = useEntityRelatedMemories(
     resolvedSelectedNode?.id ?? "",
@@ -648,7 +651,11 @@ export default function MemoryGraph({
                 },
                 {
                   dot: "memory-graph-mode-legend__dot--reviewed",
-                  label: "Reviewed / edited",
+                  label: "Reviewed",
+                },
+                {
+                  dot: "memory-graph-mode-legend__dot--edited",
+                  label: "Edited-memory influence",
                 },
               ]
             : [
@@ -666,7 +673,11 @@ export default function MemoryGraph({
                 },
                 {
                   dot: "memory-graph-mode-legend__dot--reviewed",
-                  label: "Reviewed / edited",
+                  label: "Reviewed",
+                },
+                {
+                  dot: "memory-graph-mode-legend__dot--edited",
+                  label: "Edited-memory influence",
                 },
               ];
 
@@ -1192,6 +1203,12 @@ export default function MemoryGraph({
                   </div>
                 </div>
 
+                {editedInfluenceCount > 0 ? (
+                  <div className="node-detail-edited-chip">
+                    Edited memory influence: {editedInfluenceCount}
+                  </div>
+                ) : null}
+
                 {/* Action button */}
                 <motion.button
                   className="node-detail-action"
@@ -1327,7 +1344,10 @@ export default function MemoryGraph({
           <MemoryForm
             memory={editingMemory}
             onClose={() => setEditingMemory(null)}
-            onSuccess={() => setEditingMemory(null)}
+            onSuccess={(memoryId) => {
+              setEditingMemory(null);
+              onMemoryUpdated?.(memoryId);
+            }}
           />
         )}
       </AnimatePresence>
