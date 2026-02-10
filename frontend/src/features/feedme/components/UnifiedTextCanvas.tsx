@@ -83,6 +83,32 @@ const styleNamesInHtml = (html: string): string => {
   return output;
 };
 
+const decodeHtmlEntities = (value: string): string => {
+  if (!value || typeof window === "undefined") {
+    return value;
+  }
+  const textarea = document.createElement("textarea");
+  let decoded = value;
+  for (let i = 0; i < 2; i += 1) {
+    textarea.innerHTML = decoded;
+    const next = textarea.value;
+    if (next === decoded) {
+      break;
+    }
+    decoded = next;
+  }
+  return decoded;
+};
+
+const normalizeExtractedText = (value: string): string => {
+  if (!value) return "";
+  let output = decodeHtmlEntities(value);
+  output = output.replace(/`?<pre><code>/gi, "```text\n");
+  output = output.replace(/<\/code><\/pre>`?/gi, "\n```");
+  output = output.replace(/\u2018|\u2019/g, "'");
+  return output.trim();
+};
+
 const formatMetricLabel = (key: string): string =>
   key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
@@ -160,8 +186,12 @@ export function UnifiedTextCanvas({
   fullPageMode = false,
   showProcessingSummary = true,
 }: UnifiedTextCanvasProps) {
+  const normalizedExtractedText = useMemo(
+    () => normalizeExtractedText(extractedText),
+    [extractedText],
+  );
   const [isEditing, setIsEditing] = useState(false);
-  const [editedText, setEditedText] = useState(extractedText);
+  const [editedText, setEditedText] = useState(normalizedExtractedText);
   const [isLoading, setIsLoading] = useState(false);
   const [textStats, setTextStats] = useState<TextStatistics | null>(null);
   // Use the actual DOMPurify type from the library
@@ -527,14 +557,27 @@ export function UnifiedTextCanvas({
     [purify],
   );
 
+  const normalizedExtractedTextMarkdown = useMemo(
+    () =>
+      isLikelyHtml(normalizedExtractedText)
+        ? htmlToMarkdown(normalizedExtractedText)
+        : normalizedExtractedText,
+    [normalizedExtractedText, htmlToMarkdown],
+  );
+
   // Handle auto-save - defined early for editor dependency
   const [isSaving, setIsSaving] = useState(false);
   const saveAbortControllerRef = useRef<AbortController | null>(null);
+  const previousEditingRef = useRef(false);
+  const readScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const editScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingScrollRestoreRef = useRef<number | null>(null);
+  const pendingEditActivationRef = useRef(false);
 
   const handleAutoSave = useCallback(
     async (html: string) => {
       const markdown = htmlToMarkdown(html);
-      if (markdown === extractedText) return;
+      if (markdown === normalizedExtractedTextMarkdown) return;
 
       // Cancel any pending save request
       if (saveAbortControllerRef.current) {
@@ -572,7 +615,13 @@ export function UnifiedTextCanvas({
         }
       }
     },
-    [extractedText, htmlToMarkdown, onTextUpdate, conversationId, metadata],
+    [
+      normalizedExtractedTextMarkdown,
+      htmlToMarkdown,
+      onTextUpdate,
+      conversationId,
+      metadata,
+    ],
   );
 
   // Initialize Tiptap editor (stores HTML)
@@ -662,26 +711,35 @@ export function UnifiedTextCanvas({
 
   // Update text statistics when text changes (compute from plain text)
   useEffect(() => {
-    if (!extractedText) {
+    if (!normalizedExtractedText) {
       setTextStats(null);
       return;
     }
-    const html = isLikelyHtml(extractedText)
-      ? extractedText
-      : markdownToHtml(extractedText);
+    const html = isLikelyHtml(normalizedExtractedText)
+      ? normalizedExtractedText
+      : markdownToHtml(normalizedExtractedText);
     const plain = htmlToPlain(html);
     setTextStats(calculateTextStats(plain));
-  }, [extractedText, calculateTextStats, htmlToPlain, markdownToHtml]);
+  }, [normalizedExtractedText, calculateTextStats, htmlToPlain, markdownToHtml]);
 
   // Initialize/refresh editor content preserving formatting
   useEffect(() => {
     if (!editor) return;
-    const html = isLikelyHtml(extractedText)
-      ? extractedText
-      : markdownToHtml(extractedText);
-    setEditedText(html);
-    editor.commands.setContent(html || "<p></p>");
-  }, [extractedText, editor, markdownToHtml]);
+    const html = isLikelyHtml(normalizedExtractedText)
+      ? normalizedExtractedText
+      : markdownToHtml(normalizedExtractedText);
+    const nextContent = html || "<p></p>";
+
+    // Do not clobber active edits/caret while the user is typing.
+    if (isEditing) {
+      return;
+    }
+
+    setEditedText(nextContent);
+    if (editor.getHTML() !== nextContent) {
+      editor.commands.setContent(nextContent, { emitUpdate: false });
+    }
+  }, [normalizedExtractedText, editor, markdownToHtml, isEditing]);
 
   // Folder selection is handled in the sidebar; nothing to load here
 
@@ -700,6 +758,8 @@ export function UnifiedTextCanvas({
         toolbarElement &&
         !toolbarElement.contains(target)
       ) {
+        pendingScrollRestoreRef.current =
+          editScrollContainerRef.current?.scrollTop ?? null;
         setIsEditing(false);
       }
     };
@@ -720,6 +780,55 @@ export function UnifiedTextCanvas({
       clearTimeout(timeoutId);
     };
   }, [editedText, isEditing, handleAutoSave]);
+
+  // Flush unsaved edits when leaving edit mode (click-away/close).
+  useEffect(() => {
+    if (previousEditingRef.current && !isEditing && editedText) {
+      void handleAutoSave(editedText);
+    }
+    previousEditingRef.current = isEditing;
+  }, [isEditing, editedText, handleAutoSave]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    if (!pendingEditActivationRef.current) return;
+
+    const desiredScrollTop = pendingScrollRestoreRef.current;
+    const rafId = window.requestAnimationFrame(() => {
+      const editContainer = editScrollContainerRef.current;
+      if (editContainer && typeof desiredScrollTop === "number") {
+        editContainer.scrollTop = desiredScrollTop;
+      }
+
+      if (editor) {
+        editor.commands.setTextSelection(1);
+        editor.commands.focus("start", { scrollIntoView: false });
+      }
+
+      if (editContainer && typeof desiredScrollTop === "number") {
+        editContainer.scrollTop = desiredScrollTop;
+      }
+      pendingEditActivationRef.current = false;
+    });
+
+    return () => window.cancelAnimationFrame(rafId);
+  }, [isEditing, editor]);
+
+  useEffect(() => {
+    if (isEditing) return;
+    const desiredScrollTop = pendingScrollRestoreRef.current;
+    if (typeof desiredScrollTop !== "number") return;
+
+    const rafId = window.requestAnimationFrame(() => {
+      const readContainer = readScrollContainerRef.current;
+      if (readContainer) {
+        readContainer.scrollTop = desiredScrollTop;
+      }
+      pendingScrollRestoreRef.current = null;
+    });
+
+    return () => window.cancelAnimationFrame(rafId);
+  }, [isEditing]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -761,7 +870,17 @@ export function UnifiedTextCanvas({
       ).detail;
       if (!detail) return;
       if (detail.conversationId === conversationId) {
-        setIsEditing(detail.action === "start");
+        if (detail.action === "start") {
+          pendingScrollRestoreRef.current =
+            readScrollContainerRef.current?.scrollTop ?? 0;
+          pendingEditActivationRef.current = true;
+          setIsEditing(true);
+          return;
+        }
+
+        pendingScrollRestoreRef.current =
+          editScrollContainerRef.current?.scrollTop ?? 0;
+        setIsEditing(false);
       }
     };
     document.addEventListener("feedme:toggle-edit", onToggle);
@@ -931,6 +1050,7 @@ export function UnifiedTextCanvas({
                 </div>
               </div>
               <div
+                ref={editScrollContainerRef}
                 className={cn(
                   "font-sans text-foreground rounded-md border border-border/40 bg-[hsl(var(--brand-surface)/0.95)]",
                   fullPageMode
@@ -969,6 +1089,7 @@ export function UnifiedTextCanvas({
             </div>
           ) : (
             <div
+              ref={readScrollContainerRef}
               className={cn(
                 "prose max-w-none font-sans text-sm leading-relaxed dark:prose-invert rounded-md border border-border/40 text-foreground bg-[hsl(var(--brand-surface)/0.95)]",
                 fullPageMode
@@ -979,9 +1100,9 @@ export function UnifiedTextCanvas({
               )}
               dangerouslySetInnerHTML={{
                 __html: sanitizeHtml(
-                  isLikelyHtml(extractedText)
-                    ? styleNamesInHtml(extractedText)
-                    : markdownToHtml(extractedText),
+                  isLikelyHtml(normalizedExtractedText)
+                    ? styleNamesInHtml(normalizedExtractedText)
+                    : markdownToHtml(normalizedExtractedText),
                 ),
               }}
             />
@@ -1016,7 +1137,7 @@ export function UnifiedTextCanvas({
               {isEditing && (
                 <Button
                   onClick={() => handleApprovalAction("edit_and_approve")}
-                  disabled={isLoading || editedText === extractedText}
+                  disabled={isLoading || editedText === normalizedExtractedText}
                   className="text-blue-700 bg-blue-50 border-blue-300 hover:bg-blue-100"
                 >
                   <Edit3 className="h-4 w-4 mr-1" />

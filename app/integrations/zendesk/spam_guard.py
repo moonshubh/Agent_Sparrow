@@ -49,14 +49,14 @@ EXPLICIT_TEXT_PATTERN = re.compile(
     r"xxx|"
     r"blowjob|"
     r"onlyfans|"
-    r"explicit|"
+    r"\bexplicit\b|"
     r"fuck|"
     r"boob(?:s)?|"
     r"dick|"
     r"cock|"
     r"grann(?:y|ies)|"
     r"craigslist|"
-    r"dating"
+    r"\bdating\b"
     r")",
     flags=re.IGNORECASE,
 )

@@ -63,23 +63,9 @@ const DEFAULT_SPRING: SpringOptions = {
 };
 
 const PANEL_STYLES =
-  "relative flex items-end gap-10 rounded-full ring-1 ring-white/5 border border-white/8 bg-[linear-gradient(140deg,rgba(21,30,46,0.22),rgba(21,30,46,0.12))] px-8 py-3 shadow-[0_18px_60px_rgba(15,23,42,0.35)] backdrop-blur-xl";
+  "relative flex items-end gap-10 rounded-full border border-white/12 bg-[rgba(16,22,34,0.82)] px-8 py-3 shadow-none";
 
 const INNER_STYLES = "flex items-end gap-10";
-
-const GlassGlow = () => (
-  <div
-    aria-hidden="true"
-    className="pointer-events-none absolute inset-0 rounded-full bg-[radial-gradient(120%_140%_at_30%_0%,rgba(255,255,255,0.18),rgba(255,255,255,0.06)40%,transparent_70%)] opacity-60"
-  />
-);
-
-const PanelOutline = () => (
-  <div
-    aria-hidden="true"
-    className="pointer-events-none absolute inset-[0.75px] rounded-full border border-white/10"
-  />
-);
 
 function DockRoot({
   children,
@@ -133,8 +119,6 @@ function DockRoot({
         aria-label="FeedMe quick actions"
       >
         <div className={cn(PANEL_STYLES, panelClassName)}>
-          <GlassGlow />
-          <PanelOutline />
           <div
             className={cn(
               INNER_STYLES,

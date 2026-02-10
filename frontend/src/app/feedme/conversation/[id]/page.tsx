@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -16,7 +16,6 @@ import { Input } from "@/shared/ui/input";
 import UnifiedTextCanvas from "@/features/feedme/components/UnifiedTextCanvas";
 import ConversationSidebar from "@/features/feedme/components/ConversationSidebar";
 import { ErrorBoundary } from "@/features/feedme/components/ErrorBoundary";
-import PlatformTagSelector from "@/features/feedme/components/PlatformTagSelector";
 import { feedMeApi } from "@/features/feedme/services/feedme-api";
 import { useUIStore } from "@/state/stores/ui-store";
 import { cn } from "@/shared/lib/utils";
@@ -37,10 +36,15 @@ export default function FeedMeConversationPage() {
   const [loading, setLoading] = useState(true);
   const [savingFolder, setSavingFolder] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
+  const [noteStatus, setNoteStatus] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle",
+  );
   const [markingReady, setMarkingReady] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [isRenamingTitle, setIsRenamingTitle] = useState(false);
+  const [isFeedMeAdmin, setIsFeedMeAdmin] = useState(true);
+  const latestTextSaveSeqRef = useRef(0);
 
   // Prefer primary ai_note; gracefully fall back to legacy ai_comment when absent
   const aiNote = useMemo(
@@ -99,6 +103,21 @@ export default function FeedMeConversationPage() {
     fetchConversation().catch(() => {});
   }, [fetchConversation]);
 
+  useEffect(() => {
+    let active = true;
+    feedMeApi
+      .getFeedMeSettings()
+      .then(() => {
+        if (active) setIsFeedMeAdmin(true);
+      })
+      .catch(() => {
+        if (active) setIsFeedMeAdmin(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // Simple navigation - no need for useCallback
   const handleBack = () => router.push("/feedme");
 
@@ -106,18 +125,53 @@ export default function FeedMeConversationPage() {
   const handleTextUpdate = useCallback(
     async (text: string) => {
       if (!conversation) return;
+      if (!isFeedMeAdmin) {
+        showToast({
+          type: "warning",
+          title: "Admin role required",
+          message: "Only FeedMe admins can edit conversation content.",
+          duration: 4000,
+        });
+        return;
+      }
+      const previousText = conversation.extracted_text || "";
+      const saveSeq = latestTextSaveSeqRef.current + 1;
+      latestTextSaveSeqRef.current = saveSeq;
+      setConversation((prev) =>
+        prev
+          ? {
+              ...prev,
+              extracted_text: text,
+            }
+          : prev,
+      );
       try {
-        await feedMeApi.updateConversation(conversation.id, {
+        const updated = await feedMeApi.updateConversation(conversation.id, {
           extracted_text: text,
         });
-        showToast({
-          type: "success",
-          title: "Canvas saved",
-          message: "Draft updated successfully",
-          duration: 3000,
-        });
-        await fetchConversation();
+        if (latestTextSaveSeqRef.current !== saveSeq) {
+          return;
+        }
+        setConversation((prev) =>
+          prev
+            ? {
+                ...prev,
+                extracted_text: updated.extracted_text || text,
+                updated_at: updated.updated_at || prev.updated_at,
+              }
+            : prev,
+        );
       } catch (error) {
+        if (latestTextSaveSeqRef.current === saveSeq) {
+          setConversation((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  extracted_text: previousText,
+                }
+              : prev,
+          );
+        }
         console.error("Failed to update text", error);
         showToast({
           type: "error",
@@ -128,12 +182,21 @@ export default function FeedMeConversationPage() {
         throw error; // Re-throw to let the UnifiedTextCanvas know the save failed
       }
     },
-    [conversation, showToast, fetchConversation],
+    [conversation, showToast, isFeedMeAdmin],
   );
 
   const handleFolderChange = useCallback(
     async (folderId: number | null) => {
       if (!conversation) return;
+      if (!isFeedMeAdmin) {
+        showToast({
+          type: "warning",
+          title: "Admin role required",
+          message: "Only FeedMe admins can move conversations.",
+          duration: 4000,
+        });
+        return;
+      }
       try {
         setSavingFolder(true);
         // Directly assign to folder
@@ -169,28 +232,46 @@ export default function FeedMeConversationPage() {
         setSavingFolder(false);
       }
     },
-    [conversation, showToast],
+    [conversation, showToast, isFeedMeAdmin],
   );
 
   const handleSaveAiNote = useCallback(
     async (note: string) => {
       if (!conversation) return;
+      if (!isFeedMeAdmin) {
+        showToast({
+          type: "warning",
+          title: "Admin role required",
+          message: "Only FeedMe admins can edit AI notes.",
+          duration: 4000,
+        });
+        return;
+      }
       try {
+        setNoteStatus("saving");
         setSavingNote(true);
         const metadata = { ...(conversation.metadata || {}), ai_note: note };
-        await feedMeApi.updateConversation(conversation.id, { metadata });
-        setConversation((prev) => (prev ? { ...prev, metadata } : prev));
+        const updated = await feedMeApi.updateConversation(conversation.id, {
+          metadata,
+        });
+        setConversation((prev) =>
+          prev ? { ...prev, ...updated, metadata: updated.metadata || metadata } : prev,
+        );
+        setNoteStatus("saved");
         showToast({
           type: "success",
           title: "Note saved",
           message: "AI note updated.",
           duration: 3000,
         });
+      } catch (error) {
+        setNoteStatus("error");
+        throw error;
       } finally {
         setSavingNote(false);
       }
     },
-    [conversation, showToast],
+    [conversation, showToast, isFeedMeAdmin],
   );
 
   const startTitleEdit = useCallback(() => {
@@ -207,6 +288,15 @@ export default function FeedMeConversationPage() {
 
   const commitTitleEdit = useCallback(async () => {
     if (!conversation) return;
+    if (!isFeedMeAdmin) {
+      showToast({
+        type: "warning",
+        title: "Admin role required",
+        message: "Only FeedMe admins can rename conversations.",
+        duration: 4000,
+      });
+      return;
+    }
     const trimmed = titleDraft.trim();
     if (!trimmed || trimmed === conversation.title) {
       cancelTitleEdit();
@@ -239,56 +329,198 @@ export default function FeedMeConversationPage() {
     } finally {
       cancelTitleEdit();
     }
-  }, [conversation, titleDraft, cancelTitleEdit, showToast]);
+  }, [conversation, titleDraft, cancelTitleEdit, showToast, isFeedMeAdmin]);
 
   const handleMarkReady = useCallback(async () => {
     if (!conversation) return;
-
-    // Check if folder is assigned
-    if (!conversation.folder_id) {
+    if (!isFeedMeAdmin) {
       showToast({
         type: "warning",
-        title: "Assign folder first",
-        message: "Select a folder before marking ready.",
+        title: "Admin role required",
+        message: "Only FeedMe admins can mark conversations ready for KB.",
         duration: 4000,
+      });
+      return;
+    }
+    const osCategory = conversation.os_category || "uncategorized";
+    if (osCategory === "uncategorized") {
+      showToast({
+        type: "warning",
+        title: "OS category required",
+        message: "Select Windows, macOS, or Both before marking ready.",
+        duration: 4500,
       });
       return;
     }
 
     try {
       setMarkingReady(true);
-
-      // Update metadata: mark as ready for knowledge base
-      const metadata = {
-        ...(conversation.metadata || {}),
-        review_status: "ready",
-        approval_status: "approved",
-      };
-      await feedMeApi.updateConversation(conversation.id, { metadata });
+      await feedMeApi.markConversationReady(conversation.id, {
+        confirm_move: false,
+      });
 
       showToast({
         type: "success",
         title: "Conversation marked ready",
-        message: "Conversation flagged for knowledge base.",
+        message: "Conversation moved to the configured KB folder.",
         duration: 4000,
       });
       await fetchConversation();
     } catch (error) {
+      const detail = error instanceof Error ? error.message : "";
+      const kbFolderMissing =
+        detail.includes("KB folder is not configured") ||
+        detail.includes("Update FeedMe settings first");
+      if (kbFolderMissing) {
+        const currentFolderId = conversation.folder_id;
+        if (typeof currentFolderId !== "number") {
+          showToast({
+            type: "warning",
+            title: "KB folder not configured",
+            message:
+              "Assign this conversation to a folder first, then retry mark-ready.",
+            duration: 5000,
+          });
+          return;
+        }
+
+        const proceed = window.confirm(
+          "KB folder is not configured. Use this conversation's current folder as the KB folder and continue?",
+        );
+        if (!proceed) {
+          return;
+        }
+
+        try {
+          await feedMeApi.updateFeedMeSettings({
+            kb_ready_folder_id: currentFolderId,
+          });
+          await feedMeApi.markConversationReady(conversation.id, {
+            confirm_move: false,
+            reason: "Auto-configured KB folder from current folder during mark-ready",
+          });
+          showToast({
+            type: "success",
+            title: "KB folder configured",
+            message: "Conversation marked ready and KB folder was set automatically.",
+            duration: 4500,
+          });
+          await fetchConversation();
+          return;
+        } catch (configError) {
+          console.error("Failed to auto-configure KB folder", configError);
+          showToast({
+            type: "error",
+            title: "KB setup failed",
+            message:
+              configError instanceof Error ? configError.message : "Please try again.",
+            duration: 5000,
+          });
+          return;
+        }
+      }
+
+      const needsConfirm =
+        detail.includes("confirm_move") || detail.includes("non-KB folder");
+      if (needsConfirm) {
+        const proceed = window.confirm(
+          "This conversation is currently in a non-KB folder. Move it to the configured KB folder now?",
+        );
+        if (proceed) {
+          try {
+            await feedMeApi.markConversationReady(conversation.id, {
+              confirm_move: true,
+            });
+            showToast({
+              type: "success",
+              title: "Conversation marked ready",
+              message: "Conversation moved to the KB folder.",
+              duration: 4000,
+            });
+            await fetchConversation();
+            return;
+          } catch (confirmError) {
+            console.error("Failed to mark ready after confirmation", confirmError);
+          }
+        }
+      }
       console.error("Failed to mark ready", error);
       showToast({
         type: "error",
-        title: "Failed to update conversation",
-        message: "Please try again.",
+        title: "Failed to mark ready",
+        message: detail || "Please try again.",
         duration: 5000,
       });
     } finally {
       setMarkingReady(false);
     }
-  }, [conversation, showToast, fetchConversation]);
+  }, [conversation, showToast, fetchConversation, isFeedMeAdmin]);
+
+  const handleRegenerateNote = useCallback(async () => {
+    if (!conversation) return;
+    if (!isFeedMeAdmin) {
+      showToast({
+        type: "warning",
+        title: "Admin role required",
+        message: "Only FeedMe admins can regenerate AI notes.",
+        duration: 4000,
+      });
+      return;
+    }
+
+    try {
+      setNoteStatus("saving");
+      const result = await feedMeApi.regenerateAiNote(conversation.id);
+      if (result.generation_status === "completed") {
+        setNoteStatus("saved");
+        showToast({
+          type: "success",
+          title: "AI note regenerated",
+          message: "Latest AI note was regenerated successfully.",
+          duration: 3500,
+        });
+      } else {
+        setNoteStatus("error");
+        showToast({
+          type: "error",
+          title: "Regeneration failed",
+          message: "The AI note could not be regenerated.",
+          duration: 4500,
+        });
+      }
+      await fetchConversation();
+    } catch (error) {
+      setNoteStatus("error");
+      showToast({
+        type: "error",
+        title: "Regeneration failed",
+        message: error instanceof Error ? error.message : "Please try again.",
+        duration: 5000,
+      });
+    }
+  }, [conversation, fetchConversation, isFeedMeAdmin, showToast]);
 
   const handleTagUpdate = useCallback(
     async (tags: string[]) => {
       if (!conversation) return;
+      if (!isFeedMeAdmin) {
+        showToast({
+          type: "warning",
+          title: "Admin role required",
+          message: "Only FeedMe admins can set OS category.",
+          duration: 4000,
+        });
+        return;
+      }
+
+      const osTag = tags.find((tag) =>
+        ["windows", "macos", "both"].includes(tag.toLowerCase()),
+      );
+      const osCategory = (osTag?.toLowerCase() || "uncategorized") as
+        | "windows"
+        | "macos"
+        | "both"
+        | "uncategorized";
 
       try {
         const metadata = {
@@ -296,8 +528,13 @@ export default function FeedMeConversationPage() {
           tags: tags, // Single source of truth - no redundant platform_tag
         };
 
-        await feedMeApi.updateConversation(conversation.id, { metadata });
-        setConversation((prev) => (prev ? { ...prev, metadata } : prev));
+        await feedMeApi.updateConversation(conversation.id, {
+          metadata,
+          os_category: osCategory,
+        });
+        setConversation((prev) =>
+          prev ? { ...prev, metadata, os_category: osCategory } : prev,
+        );
 
         // Extract platform tag for toast message (with correct casing)
         const platformTag = tags.find(
@@ -328,7 +565,18 @@ export default function FeedMeConversationPage() {
         throw error;
       }
     },
-    [conversation, showToast],
+    [conversation, showToast, isFeedMeAdmin],
+  );
+
+  const handlePlatformChange = useCallback(
+    async (platform: PlatformTag) => {
+      const currentTags = conversation?.metadata?.tags || [];
+      const nonPlatformTags = currentTags.filter(
+        (tag) => !["windows", "macos", "both"].includes(tag.toLowerCase()),
+      );
+      await handleTagUpdate([...nonPlatformTags, platform]);
+    },
+    [conversation?.metadata?.tags, handleTagUpdate],
   );
 
   if (!conversationId) {
@@ -360,7 +608,8 @@ export default function FeedMeConversationPage() {
     );
   }
 
-  const canEdit = conversation.processing_status === "completed";
+  const canEdit =
+    conversation.processing_status === "completed" && isFeedMeAdmin;
 
   // Simple event dispatch - no need for useCallback
   const triggerEdit = () => {
@@ -458,14 +707,6 @@ export default function FeedMeConversationPage() {
                     <Pencil className="mr-2 h-4 w-4" /> Edit
                   </Button>
                 )}
-                {canEdit && (
-                  <PlatformTagSelector
-                    conversationId={conversation.id}
-                    currentTags={conversation.metadata?.tags || []}
-                    onTagUpdate={handleTagUpdate}
-                    disabled={conversation.processing_status !== "completed"}
-                  />
-                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -499,7 +740,11 @@ export default function FeedMeConversationPage() {
                       extraction_confidence:
                         conversation.metadata?.extraction_confidence,
                     }}
-                    approvalStatus={conversation.approval_status || "pending"}
+                    approvalStatus={
+                      conversation.approval_status === "awaiting_review"
+                        ? "pending"
+                        : (conversation.approval_status ?? "pending")
+                    }
                     folderId={conversation.folder_id ?? null}
                     onTextUpdate={handleTextUpdate}
                     readOnly={false}
@@ -523,9 +768,21 @@ export default function FeedMeConversationPage() {
               <ConversationSidebar
                 folderId={conversation.folder_id}
                 aiNote={aiNote}
+                platform={
+                  conversation.os_category && conversation.os_category !== "uncategorized"
+                    ? conversation.os_category
+                    : undefined
+                }
+                noteUpdatedAt={
+                  (conversation.metadata?.ai_note_updated_at as string | undefined) ||
+                  conversation.updated_at
+                }
+                noteStatus={noteStatus}
+                adminActionsEnabled={isFeedMeAdmin}
                 onFolderChange={handleFolderChange}
                 onSaveNote={handleSaveAiNote}
-                onRegenerateNote={undefined}
+                onPlatformChange={handlePlatformChange}
+                onRegenerateNote={handleRegenerateNote}
                 onMarkReady={handleMarkReady}
                 isSavingFolder={savingFolder}
                 isSavingNote={savingNote}

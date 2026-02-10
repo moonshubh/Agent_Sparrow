@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -17,9 +17,13 @@ import {
   X,
   Maximize2,
   Trash2,
+  RefreshCw,
 } from "lucide-react";
 import { Input } from "@/shared/ui/input";
-import { feedMeApi } from "@/features/feedme/services/feedme-api";
+import {
+  feedMeApi,
+  isSupersededRequestError,
+} from "@/features/feedme/services/feedme-api";
 import { useRouter } from "next/navigation";
 import {
   AlertDialog,
@@ -169,6 +173,8 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
     null,
   );
   const [isDeleting, setIsDeleting] = useState(false);
+  const inFlightFetchRef = useRef<Promise<void> | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
   const showToast = useUIStore((state) => state.actions.showToast);
 
@@ -228,91 +234,104 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
     [],
   );
 
-  const fetchUnassignedConversations = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await feedMeApi.listConversations(
-        1,
-        100,
-        undefined,
-        undefined,
-        undefined,
-        null,
-      );
-      const enriched = transformConversations(
-        response.conversations as ApiConversation[],
-      );
-      setConversations(enriched);
-    } catch (err) {
-      console.error("Failed to fetch unassigned conversations:", err);
-      setError("Failed to load unassigned conversations");
-    } finally {
-      setLoading(false);
-    }
-  }, [transformConversations]);
+  const fetchUnassignedConversations = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (inFlightFetchRef.current) {
+        return inFlightFetchRef.current;
+      }
+
+      const silent = options?.silent ?? false;
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
+
+      const fetchPromise = (async () => {
+        try {
+          const response = await feedMeApi.listConversations(
+            1,
+            100,
+            undefined,
+            undefined,
+            undefined,
+            0,
+          );
+          const enriched = transformConversations(
+            response.conversations as ApiConversation[],
+          );
+          setConversations(enriched);
+        } catch (err) {
+          if (isSupersededRequestError(err)) {
+            return;
+          }
+          console.error("Failed to fetch unassigned conversations:", err);
+          if (!silent) {
+            setError("Failed to load unassigned conversations");
+          }
+        } finally {
+          if (!silent) {
+            setLoading(false);
+          }
+        }
+      })();
+
+      inFlightFetchRef.current = fetchPromise;
+      try {
+        await fetchPromise;
+      } finally {
+        if (inFlightFetchRef.current === fetchPromise) {
+          inFlightFetchRef.current = null;
+        }
+      }
+    },
+    [transformConversations],
+  );
 
   useEffect(() => {
     if (!isOpen) {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      return;
+    }
+    void fetchUnassignedConversations();
+  }, [isOpen, fetchUnassignedConversations]);
+
+  useEffect(() => {
+    const hasActiveProcessing = conversations.some(
+      (conversation) =>
+        conversation.processing_status === "pending" ||
+        conversation.processing_status === "processing",
+    );
+
+    if (!isOpen || !hasActiveProcessing) {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
       return;
     }
 
-    const abortController = new AbortController();
-    let intervalId: NodeJS.Timeout | null = null;
+    let cancelled = false;
 
-    const run = async () => {
-      try {
-        const response = await feedMeApi.listConversations(
-          1,
-          100,
-          undefined,
-          undefined,
-          undefined,
-          null,
-        );
-        if (abortController.signal.aborted) {
-          return;
-        }
-
-        const enriched = transformConversations(
-          response.conversations as ApiConversation[],
-        );
-        setConversations(enriched);
-        setError(null);
-
-        const needsPolling = enriched.some(
-          (conv) =>
-            conv.processing_status === "processing" ||
-            conv.processing_status === "pending",
-        );
-
-        if (needsPolling && !intervalId) {
-          intervalId = setInterval(run, 5000);
-        } else if (!needsPolling && intervalId) {
-          clearInterval(intervalId);
-          intervalId = null;
-        }
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") {
-          return;
-        }
-        console.error("Failed to fetch unassigned conversations:", err);
-        setError("Failed to load unassigned conversations");
-      } finally {
-        setLoading(false);
-      }
+    const poll = async () => {
+      if (cancelled) return;
+      await fetchUnassignedConversations({ silent: true });
+      if (cancelled) return;
+      pollTimerRef.current = setTimeout(poll, 2500);
     };
 
-    setLoading(true);
-    run();
+    pollTimerRef.current = setTimeout(poll, 2500);
 
     return () => {
-      abortController.abort();
-      if (intervalId) {
-        clearInterval(intervalId);
+      cancelled = true;
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
       }
     };
-  }, [isOpen, transformConversations]);
+  }, [isOpen, conversations, fetchUnassignedConversations]);
 
   const getStatusIcon = (status: string, progress?: number) => {
     switch (status) {
@@ -461,13 +480,41 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-[900px] w-[900px] p-0 overflow-hidden">
+      <DialogContent
+        hideClose
+        className="w-[900px] max-w-[900px] overflow-hidden p-0"
+      >
         <DialogErrorBoundary
           fallbackTitle="Failed to load unassigned conversations"
           onReset={fetchUnassignedConversations}
         >
-          <DialogHeader className="px-6 pt-6 pb-3">
-            <DialogTitle>Unassigned</DialogTitle>
+          <DialogHeader className="flex flex-row items-center justify-between space-y-0 px-6 pb-4 pt-5">
+            <DialogTitle className="text-xl font-semibold">
+              Unassigned
+            </DialogTitle>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void fetchUnassignedConversations();
+                  }}
+                  disabled={loading}
+                >
+                <RefreshCw
+                  className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`}
+                />
+                Refresh
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onClose}
+                aria-label="Close unassigned conversations"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </DialogHeader>
           <Separator />
 
@@ -482,7 +529,9 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={fetchUnassignedConversations}
+                  onClick={() => {
+                    void fetchUnassignedConversations();
+                  }}
                   className="mt-4"
                 >
                   Retry
@@ -506,16 +555,20 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
                   return (
                     <div
                       key={conv.id}
-                      className="group relative flex h-full cursor-pointer flex-col overflow-hidden rounded-[1.75rem] border border-border/50 bg-background/70 p-5 shadow-[0_30px_80px_rgba(15,23,42,0.22)] transition-all duration-300 hover:-translate-y-1 hover:border-accent/40 hover:bg-background/90"
+                      className="group relative flex h-full cursor-pointer flex-col rounded-[1.5rem] p-1.5 transition-all duration-300 hover:-translate-y-1"
                       onClick={() => {
                         if (editingId === conv.id) return;
                         handleConversationClick(conv.id);
                       }}
                     >
                       <GlowingEffect
-                        spread={260}
-                        proximity={180}
-                        inactiveZone={0.1}
+                        blur={0}
+                        borderWidth={3}
+                        spread={80}
+                        glow={true}
+                        disabled={false}
+                        proximity={64}
+                        inactiveZone={0.01}
                       />
 
                       <button
@@ -529,7 +582,7 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
 
-                      <div className="flex flex-col h-full pr-8">
+                      <div className="relative flex h-full flex-col overflow-hidden rounded-[1.25rem] bg-card/95 p-5 pr-8 shadow-none">
                         {/* Header with icon and title */}
                         <div className="flex items-start gap-3 mb-4">
                           <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/20 text-black shadow-sm backdrop-blur dark:border-white/20 dark:bg-white/10 dark:text-white">

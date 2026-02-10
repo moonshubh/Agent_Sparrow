@@ -333,7 +333,7 @@ def _search_with_feedme(
     # Perform async search (run in thread pool if needed)
     try:
         # Use asyncio if available, otherwise fallback
-        return run_coro_blocking(
+        raw_results = run_coro_blocking(
             connector.retrieve_knowledge(
                 query=feedme_query,
                 max_results=max_results,
@@ -341,6 +341,13 @@ def _search_with_feedme(
             ),
             timeout=30,
         )
+        # Connector retrieval can return mixed sources; this helper must only
+        # return FeedMe entries so source-scoped searches behave deterministically.
+        return [
+            result
+            for result in (raw_results or [])
+            if isinstance(result, dict) and result.get("source") == "feedme"
+        ]
 
     except Exception as e:
         logger.error(f"Error in FeedMe search execution: {e}")

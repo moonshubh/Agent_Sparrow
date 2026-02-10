@@ -9,10 +9,6 @@ import { create } from "zustand";
 import { devtools, subscribeWithSelector } from "zustand/middleware";
 import {
   listFolders,
-  createFolder as apiCreateFolder,
-  updateFolder as apiUpdateFolder,
-  deleteFolder as apiDeleteFolder,
-  assignConversationsToFolder as apiAssignConversationsToFolder,
   feedMeApi,
   type FeedMeFolder,
   type FolderListResponse,
@@ -615,15 +611,24 @@ export const useFoldersStore = create<FoldersStore>()(
               `Assigned ${conversationIds.length} conversations to folder ${folderId}`,
             );
 
-            // Show Supabase sync status
-            useUIStore.getState().actions.showToast({
-              type: "success",
-              title: "Conversations Assigned",
-              message:
-                response.message ||
-                `${conversationIds.length} conversation(s) assigned`,
-              duration: 3000,
-            });
+            // Show assignment status with partial-failure handling
+            if (response.partial_success) {
+              useUIStore.getState().actions.showToast({
+                type: "warning",
+                title: "Partial assignment completed",
+                message: `Assigned ${response.assigned_count} of ${response.requested_count} conversation(s).`,
+                duration: 4500,
+              });
+            } else {
+              useUIStore.getState().actions.showToast({
+                type: "success",
+                title: "Conversations Assigned",
+                message:
+                  response.message ||
+                  `${conversationIds.length} conversation(s) assigned`,
+                duration: 3000,
+              });
+            }
           } catch (error) {
             console.error("Failed to assign conversations to folder:", error);
             throw error;

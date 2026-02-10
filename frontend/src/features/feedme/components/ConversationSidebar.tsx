@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useDebouncedCallback } from "@/shared/lib/utils/debounce";
 import { Card } from "@/shared/ui/card";
 import { Separator } from "@/shared/ui/separator";
@@ -27,6 +27,9 @@ interface ConversationSidebarProps {
   folderId?: number | null;
   aiNote?: string;
   platform?: PlatformType;
+  noteUpdatedAt?: string;
+  noteStatus?: "idle" | "saving" | "saved" | "error";
+  adminActionsEnabled?: boolean;
   onFolderChange: (folderId: number | null) => Promise<void>;
   onSaveNote: (note: string) => Promise<void>;
   onPlatformChange?: (platform: PlatformType) => Promise<void>;
@@ -42,6 +45,9 @@ export function ConversationSidebar({
   folderId,
   aiNote,
   platform,
+  noteUpdatedAt,
+  noteStatus = "idle",
+  adminActionsEnabled = true,
   onFolderChange,
   onSaveNote,
   onPlatformChange,
@@ -62,6 +68,9 @@ export function ConversationSidebar({
   );
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isNoteFocused, setIsNoteFocused] = useState(false);
+  const [hasIncomingNoteConflict, setHasIncomingNoteConflict] = useState(false);
+  const prevAiNoteRef = useRef(aiNote || "");
+  const noteDraftRef = useRef(noteDraft);
 
   useEffect(() => {
     loadFolders().catch(() => {});
@@ -80,8 +89,25 @@ export function ConversationSidebar({
   }, [platform]);
 
   useEffect(() => {
+    noteDraftRef.current = noteDraft;
+  }, [noteDraft]);
+
+  useEffect(() => {
+    const currentAiNote = aiNote || "";
+    const previousAiNote = prevAiNoteRef.current;
+    prevAiNoteRef.current = currentAiNote;
+
     if (!noteTouched) {
-      setNoteDraft(aiNote || "");
+      setNoteDraft(currentAiNote);
+      setHasIncomingNoteConflict(false);
+      return;
+    }
+
+    if (
+      currentAiNote !== previousAiNote &&
+      currentAiNote !== noteDraftRef.current
+    ) {
+      setHasIncomingNoteConflict(true);
     }
   }, [aiNote, noteTouched]);
 
@@ -145,18 +171,20 @@ export function ConversationSidebar({
       try {
         await onSaveNote(noteText.trim());
         setNoteTouched(false);
+        setHasIncomingNoteConflict(false);
       } catch (error) {
         console.error("Failed to auto-save note:", error);
         // Keep noteTouched as true so user knows save failed
       }
     },
-    2000, // 2 second debounce
+    1500, // 1.5 second debounce per product requirement
   );
 
   const handleSaveNote = useCallback(async () => {
     try {
       await onSaveNote(noteDraft.trim());
       setNoteTouched(false);
+      setHasIncomingNoteConflict(false);
     } catch (error) {
       console.error("Failed to save note:", error);
       // Keep noteTouched as true so user knows save failed
@@ -272,7 +300,7 @@ export function ConversationSidebar({
           <section className="space-y-2 flex-1">
             <div className="flex items-center justify-between group">
               <Label className="text-sm font-medium">AI Notes</Label>
-              {onRegenerateNote && (
+              {onRegenerateNote && adminActionsEnabled && (
                 <Button
                   size="icon"
                   variant="ghost"
@@ -321,9 +349,27 @@ export function ConversationSidebar({
                 Auto-saving...
               </p>
             )}
+            {!noteTouched && noteStatus === "saved" && noteUpdatedAt && (
+              <p className="text-xs text-muted-foreground">
+                Saved {new Date(noteUpdatedAt).toLocaleString()}
+              </p>
+            )}
+            {noteStatus === "saving" && (
+              <p className="text-xs text-muted-foreground">Saving changes…</p>
+            )}
+            {noteStatus === "error" && (
+              <p className="text-xs text-destructive">
+                Save failed. Retry by editing or blurring again.
+              </p>
+            )}
+            {hasIncomingNoteConflict && (
+              <p className="text-xs text-amber-600">
+                Newer server update detected. Saving now will apply last-write-wins.
+              </p>
+            )}
           </section>
 
-          {onMarkReady && (
+          {onMarkReady && adminActionsEnabled && (
             <>
               <Separator />
               <section className="space-y-2">
@@ -336,9 +382,7 @@ export function ConversationSidebar({
                   size="sm"
                   className="w-full"
                   onClick={onMarkReady}
-                  disabled={
-                    isMarkingReady || isSavingFolder || folderValue === "root"
-                  }
+                  disabled={isMarkingReady || isSavingFolder}
                 >
                   {isMarkingReady && (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -346,6 +390,14 @@ export function ConversationSidebar({
                   Mark Ready for Knowledge Base
                 </Button>
               </section>
+            </>
+          )}
+          {!adminActionsEnabled && (
+            <>
+              <Separator />
+              <p className="text-xs text-muted-foreground">
+                Admin role required for regenerate and mark-ready actions.
+              </p>
             </>
           )}
         </div>

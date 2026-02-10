@@ -2441,7 +2441,9 @@ class StreamEventHandler:
                     return value.strip()
                 return ""
 
-            def _append(url_value: str, alt_value: str, page_url_value: str = "") -> None:
+            def _append(
+                url_value: str, alt_value: str, page_url_value: str = ""
+            ) -> None:
                 url = _coerce(url_value)
                 if not url or not _is_http_url(url):
                     return

@@ -264,6 +264,7 @@ const FoldersDialog = React.memo(function FoldersDialog({
                         )}
                         <FolderBits
                           color={folderColor}
+                          open={isExpanded}
                           className="folder-icon transition-transform duration-200 group-hover:scale-105"
                           size={1.08}
                         />
@@ -362,10 +363,44 @@ const FoldersDialog = React.memo(function FoldersDialog({
         <ConfirmDelete
           open={!!deleteTarget}
           name={deleteTarget?.name || ""}
+          conversationCount={
+            deleteTarget?.conversationCount ?? deleteTarget?.conversation_count ?? 0
+          }
           onCancel={() => setDeleteTarget(null)}
           onConfirm={async () => {
-            if (deleteTarget) await actions.deleteFolder(deleteTarget.id);
-            setDeleteTarget(null);
+            if (!deleteTarget) return;
+            const conversationCount =
+              deleteTarget.conversationCount ??
+              deleteTarget.conversation_count ??
+              0;
+            if (conversationCount > 0) {
+              showToast({
+                type: "warning",
+                title: "Folder must be empty",
+                message:
+                  "To delete a folder, it needs to be completely empty. Move conversations out first.",
+                duration: 5000,
+              });
+              return;
+            }
+            try {
+              await actions.deleteFolder(deleteTarget.id);
+              setDeleteTarget(null);
+            } catch (error) {
+              const rawMessage =
+                error instanceof Error ? error.message : "Unable to delete folder right now.";
+              const isNonEmptyWarning =
+                rawMessage.toLowerCase().includes("contains") ||
+                rawMessage.toLowerCase().includes("move conversations out");
+              showToast({
+                type: isNonEmptyWarning ? "warning" : "error",
+                title: isNonEmptyWarning ? "Folder must be empty" : "Delete failed",
+                message: isNonEmptyWarning
+                  ? "To delete a folder, it needs to be completely empty. Move conversations out first."
+                  : rawMessage,
+                duration: 5000,
+              });
+            }
           }}
         />
 
@@ -469,6 +504,7 @@ const CreateOrEditFolder = React.memo(function CreateOrEditFolder({
 interface ConfirmDeleteProps {
   open: boolean;
   name: string;
+  conversationCount: number;
   onCancel: () => void;
   onConfirm: () => Promise<void>;
 }
@@ -476,9 +512,11 @@ interface ConfirmDeleteProps {
 const ConfirmDelete = React.memo(function ConfirmDelete({
   open,
   name,
+  conversationCount,
   onCancel,
   onConfirm,
 }: ConfirmDeleteProps) {
+  const hasConversations = conversationCount > 0;
   return (
     <Dialog open={open} onOpenChange={onCancel}>
       <DialogContent className="sm:max-w-[420px]">
@@ -486,12 +524,23 @@ const ConfirmDelete = React.memo(function ConfirmDelete({
           <DialogTitle>Delete Folder</DialogTitle>
           <DialogDescription>This action cannot be undone.</DialogDescription>
         </DialogHeader>
-        <p>Are you sure you want to delete “{name}”?</p>
+        <p>
+          Delete folder “{name}” with {conversationCount} conversation(s)?
+        </p>
+        {hasConversations && (
+          <p className="rounded-md border border-amber-300/60 bg-amber-500/10 px-3 py-2 text-sm text-amber-800">
+            To delete this folder, it must be completely empty first.
+          </p>
+        )}
         <DialogFooter>
           <Button variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
-          <Button variant="destructive" onClick={onConfirm}>
+          <Button
+            variant="destructive"
+            onClick={onConfirm}
+            disabled={hasConversations}
+          >
             Delete
           </Button>
         </DialogFooter>

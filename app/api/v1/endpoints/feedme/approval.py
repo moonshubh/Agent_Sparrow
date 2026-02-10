@@ -7,8 +7,9 @@ Approval workflow operations for conversations and examples.
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.core.security import TokenPayload
 from app.core.settings import settings
 from app.feedme.schemas import (
     FeedMeConversation,
@@ -18,7 +19,12 @@ from app.feedme.schemas import (
     ApprovalWorkflowStats,
 )
 
-from .helpers import get_feedme_supabase_client, supabase_client
+from .helpers import (
+    get_feedme_supabase_client,
+    record_feedme_action_audit,
+    supabase_client,
+)
+from .auth import require_feedme_admin
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +34,11 @@ router = APIRouter(tags=["FeedMe"])
 @router.post(
     "/conversations/{conversation_id}/approve", response_model=ApprovalResponse
 )
-async def approve_conversation(conversation_id: int, approval_request: ApprovalRequest):
+async def approve_conversation(
+    conversation_id: int,
+    approval_request: ApprovalRequest,
+    current_user: TokenPayload = Depends(require_feedme_admin),
+):
     """
     Approve a conversation for publication.
 
@@ -52,10 +62,11 @@ async def approve_conversation(conversation_id: int, approval_request: ApprovalR
                 detail=f"Conversation is in '{current_status}' status and cannot be approved",
             )
 
+        approver = current_user.sub or approval_request.approved_by
         approval_time = datetime.now(timezone.utc).isoformat()
         update_data = {
             "approval_status": "approved",
-            "approved_by": approval_request.approved_by,
+            "approved_by": approver,
             "approved_at": approval_time,
             "reviewer_notes": approval_request.approval_notes,
             "updated_at": approval_time,
@@ -70,11 +81,18 @@ async def approve_conversation(conversation_id: int, approval_request: ApprovalR
             )
 
         await supabase_client.approve_conversation_examples(
-            conversation_id=conversation_id, approved_by=approval_request.approved_by
+            conversation_id=conversation_id, approved_by=approver
+        )
+        await record_feedme_action_audit(
+            action="approve_conversation",
+            actor_id=current_user.sub,
+            conversation_id=conversation_id,
+            before_state=conversation,
+            after_state=updated_conversation,
         )
 
         logger.info(
-            f"Conversation {conversation_id} approved by {approval_request.approved_by}"
+            f"Conversation {conversation_id} approved by {approver}"
         )
 
         # Schedule PDF cleanup task after approval
@@ -100,7 +118,9 @@ async def approve_conversation(conversation_id: int, approval_request: ApprovalR
 
 @router.post("/conversations/{conversation_id}/reject", response_model=ApprovalResponse)
 async def reject_conversation(
-    conversation_id: int, rejection_request: RejectionRequest
+    conversation_id: int,
+    rejection_request: RejectionRequest,
+    current_user: TokenPayload = Depends(require_feedme_admin),
 ):
     """
     Reject a conversation.
@@ -125,10 +145,11 @@ async def reject_conversation(
                 detail=f"Conversation is in '{current_status}' status and cannot be rejected",
             )
 
+        rejector = current_user.sub or rejection_request.rejected_by
         rejection_time = datetime.now(timezone.utc).isoformat()
         update_data = {
             "approval_status": "rejected",
-            "rejected_by": rejection_request.rejected_by,
+            "rejected_by": rejector,
             "rejected_at": rejection_time,
             "reviewer_notes": rejection_request.rejection_notes,
             "updated_at": rejection_time,
@@ -150,7 +171,7 @@ async def reject_conversation(
                 .update(
                     {
                         "review_status": "rejected",
-                        "reviewed_by": rejection_request.rejected_by,
+                        "reviewed_by": rejector,
                         "reviewed_at": rejection_time,
                         "is_active": False,
                     }
@@ -168,6 +189,13 @@ async def reject_conversation(
                 raise
         logger.info(
             f"Conversation {conversation_id} rejected. Rejected {rejected_count} examples."
+        )
+        await record_feedme_action_audit(
+            action="reject_conversation",
+            actor_id=current_user.sub,
+            conversation_id=conversation_id,
+            before_state=conversation,
+            after_state=updated_conversation,
         )
 
         return ApprovalResponse(
