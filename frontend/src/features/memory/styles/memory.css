@@ -4953,6 +4953,12 @@
   font-family: var(--font-mono);
 }
 
+.add-memory-safe-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 /* Editor Section - Full Width */
 .add-memory-editor-section {
   display: flex;

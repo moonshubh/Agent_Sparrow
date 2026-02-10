@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import type { Editor } from "@tiptap/core";
 import { createMemoryExtensions } from "@/features/memory/tiptap/memoryExtensions";
@@ -13,6 +13,7 @@ interface MemoryTipTapEditorProps {
   keyHeadingHighlights?: string[];
   onChange?: (markdown: string) => void;
   onEditorReady?: (editor: Editor | null) => void;
+  syncExternalContent?: boolean;
 }
 
 export function MemoryTipTapEditor({
@@ -23,7 +24,9 @@ export function MemoryTipTapEditor({
   keyHeadingHighlights,
   onChange,
   onEditorReady,
+  syncExternalContent = true,
 }: MemoryTipTapEditorProps) {
+  const lastEmittedMarkdownRef = useRef(content);
   const extensions = useMemo(
     () =>
       createMemoryExtensions({
@@ -46,9 +49,17 @@ export function MemoryTipTapEditor({
     },
     onUpdate: ({ editor }) => {
       if (readOnly || !onChange) return;
-      onChange(editor.getMarkdown());
+      const markdown = editor.getMarkdown();
+      if (markdown === lastEmittedMarkdownRef.current) return;
+      lastEmittedMarkdownRef.current = markdown;
+      onChange(markdown);
     },
   });
+
+  useEffect(() => {
+    if (!syncExternalContent) return;
+    lastEmittedMarkdownRef.current = content;
+  }, [content, syncExternalContent]);
 
   useEffect(() => {
     if (!editor) return;
@@ -60,9 +71,11 @@ export function MemoryTipTapEditor({
 
   useEffect(() => {
     if (!editor) return;
+    if (!syncExternalContent) return;
     if (content === editor.getMarkdown()) return;
+    lastEmittedMarkdownRef.current = content;
     editor.commands.setContent(content, { contentType: "markdown" });
-  }, [content, editor]);
+  }, [content, editor, syncExternalContent]);
 
   useEffect(() => {
     if (!editor) return;

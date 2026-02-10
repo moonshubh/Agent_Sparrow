@@ -44,9 +44,22 @@ const springConfig = {
 const isPlainMetadata = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const toInitialMetadataText = (value: unknown): string => {
+  if (!isPlainMetadata(value) || Object.keys(value).length === 0) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "";
+  }
+};
+
 const PLAYBOOK_SECTION_PATTERN =
   /^\s*(?:#{1,6}\s*)?(?:\*\*)?(problem|impact|environment)(?:\*\*)?\s*(?::|-)?\s*/im;
 const PLAYBOOK_KEY_HEADINGS = ["Problem", "Impact", "Environment"];
+const INLINE_MEMORY_ASSET_IMAGE_PATTERN =
+  /!\[[^\]]*]\((?:memory-asset:\/\/|\/api\/v1\/memory\/assets\/)[^)]+\)/i;
 
 const getUserDisplayName = (user: User | null): string | null => {
   if (!user) return null;
@@ -76,10 +89,8 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const [sourceType, setSourceType] = useState<SourceType>(
     memory?.source_type ?? "manual",
   );
-  const [metadata, setMetadata] = useState(
-    memory?.metadata && Object.keys(memory.metadata).length > 0
-      ? JSON.stringify(memory.metadata, null, 2)
-      : "",
+  const [metadata, setMetadata] = useState(() =>
+    toInitialMetadataText(memory?.metadata),
   );
   const [error, setError] = useState<string | null>(null);
   const [metadataError, setMetadataError] = useState<string | null>(null);
@@ -111,6 +122,13 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
     // Fallback for imported memories where metadata may be partially edited.
     return PLAYBOOK_SECTION_PATTERN.test(initialContent);
   }, [initialContent, memory?.metadata]);
+  const hasInlineMemoryAssetImages = useMemo(
+    () => INLINE_MEMORY_ASSET_IMAGE_PATTERN.test(initialContent),
+    [initialContent],
+  );
+  const [usePlainTextSafeMode, setUsePlainTextSafeMode] = useState(
+    () => isEditMode && hasInlineMemoryAssetImages,
+  );
 
   const handleBold = useCallback(() => {
     editor?.chain().focus().toggleBold().run();
@@ -392,6 +410,22 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
               <span className="add-memory-char-count">
                 {content.length} chars
               </span>
+              {isEditMode && hasInlineMemoryAssetImages ? (
+                <button
+                  type="button"
+                  className="add-memory-meta-btn"
+                  onClick={() =>
+                    setUsePlainTextSafeMode((enabled) => !enabled)
+                  }
+                  title={
+                    usePlainTextSafeMode
+                      ? "Enable rich image editor"
+                      : "Switch to safe markdown mode"
+                  }
+                >
+                  {usePlainTextSafeMode ? "Load Rich Editor" : "Safe Mode"}
+                </button>
+              ) : null}
             </div>
             <motion.button
               className="add-memory-close"
@@ -425,20 +459,42 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
             {/* Full-width content editor */}
             <div className="add-memory-editor-section">
               <div className="add-memory-editor-split">
-                <div className="add-memory-tiptap">
-                  <MemoryTipTapEditor
-                    content={content}
-                    onChange={setContent}
-                    onEditorReady={setEditor}
-                    className={
-                      isMbPlaybookImportedMemory
-                        ? "memory-edit-mb-playbook"
-                        : undefined
-                    }
-                    keyHeadingHighlights={PLAYBOOK_KEY_HEADINGS}
-                    placeholder="Enter the memory content... Example: To resolve sync issues with Gmail, clear the OAuth cache by going to Settings > Accounts > Gmail > Reconnect."
-                  />
-                </div>
+                {usePlainTextSafeMode ? (
+                  <div className="add-memory-safe-editor">
+                    <div className="add-memory-readonly">
+                      <span>
+                        Safe mode avoids rich image rendering for this imported
+                        memory to prevent UI freezes.
+                      </span>
+                      <span className="add-memory-readonly-hint">
+                        Markdown source view
+                      </span>
+                    </div>
+                    <textarea
+                      value={content}
+                      onChange={(event) => setContent(event.target.value)}
+                      className="add-memory-textarea add-memory-code"
+                      rows={14}
+                      placeholder="Enter memory markdown..."
+                    />
+                  </div>
+                ) : (
+                  <div className="add-memory-tiptap">
+                    <MemoryTipTapEditor
+                      content={content}
+                      onChange={setContent}
+                      onEditorReady={setEditor}
+                      syncExternalContent={false}
+                      className={
+                        isMbPlaybookImportedMemory
+                          ? "memory-edit-mb-playbook"
+                          : undefined
+                      }
+                      keyHeadingHighlights={PLAYBOOK_KEY_HEADINGS}
+                      placeholder="Enter the memory content... Example: To resolve sync issues with Gmail, clear the OAuth cache by going to Settings > Accounts > Gmail > Reconnect."
+                    />
+                  </div>
+                )}
               </div>
             </div>
 

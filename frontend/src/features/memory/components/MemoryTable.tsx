@@ -791,6 +791,7 @@ export default function MemoryTable({
       <AnimatePresence>
         {editingMemory && canEdit && (
           <MemoryForm
+            key={editingMemory.id}
             memory={editingMemory}
             onClose={() => setEditingMemory(null)}
             onSuccess={(memoryId) => {
