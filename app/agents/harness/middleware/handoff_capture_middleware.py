@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
@@ -424,7 +425,10 @@ class HandoffCaptureMiddleware(AgentMiddleware):
 
         return decisions
 
-    def _extract_tool_usage_summary(self, messages: List[BaseMessage]) -> Dict[str, Any]:
+    def _extract_tool_usage_summary(
+        self,
+        messages: list[BaseMessage],
+    ) -> dict[str, Any]:
         """Extract high-level requested/executed tool usage from message history."""
         requested: set[str] = set()
         executed: set[str] = set()
@@ -453,7 +457,10 @@ class HandoffCaptureMiddleware(AgentMiddleware):
             "executed_count": len(executed),
         }
 
-    def _extract_subagent_deployments(self, messages: List[BaseMessage]) -> List[str]:
+    def _extract_subagent_deployments(
+        self,
+        messages: list[BaseMessage],
+    ) -> list[str]:
         """Extract subagent types requested via `task` tool calls."""
         deployed: set[str] = set()
 
@@ -468,7 +475,16 @@ class HandoffCaptureMiddleware(AgentMiddleware):
             for call in tool_calls:
                 if not isinstance(call, dict) or call.get("name") != "task":
                     continue
-                args = call.get("args") or call.get("arguments") or {}
+                args = call.get("args")
+                if args is None:
+                    args = call.get("arguments")
+                if args is None:
+                    args = {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        continue
                 if not isinstance(args, dict):
                     continue
                 subagent_type = args.get("subagent_type") or args.get("subagentType")
@@ -477,24 +493,32 @@ class HandoffCaptureMiddleware(AgentMiddleware):
 
         return sorted(deployed)
 
-    def _extract_memory_ids(self, scratchpad: Dict[str, Any]) -> List[str]:
+    def _extract_memory_ids(self, scratchpad: dict[str, Any]) -> list[str]:
         """Extract retrieved memory ids from scratchpad memory stats."""
-        system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
-        memory_stats = (
-            system_bucket.get("memory_stats", {}) if isinstance(system_bucket, dict) else {}
+        system_bucket = (
+            scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
         )
-        ids = memory_stats.get("retrieved_memory_ids", []) if isinstance(memory_stats, dict) else []
+        memory_stats = (
+            system_bucket.get("memory_stats", {})
+            if isinstance(system_bucket, dict)
+            else {}
+        )
+        ids = (
+            memory_stats.get("retrieved_memory_ids", [])
+            if isinstance(memory_stats, dict)
+            else []
+        )
         if not isinstance(ids, list):
             return []
         return [str(value) for value in ids if value is not None]
 
     def _extract_evidence_trail(
         self,
-        messages: List[BaseMessage],
-        scratchpad: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
+        messages: list[BaseMessage],
+        scratchpad: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         """Extract a compact trail of recent tool evidence."""
-        evidence: List[Dict[str, Any]] = []
+        evidence: list[dict[str, Any]] = []
 
         for msg in reversed(messages):
             if getattr(msg, "type", "") != "tool":
@@ -510,16 +534,18 @@ class HandoffCaptureMiddleware(AgentMiddleware):
             if len(evidence) >= 5:
                 break
 
-        system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+        system_bucket = (
+            scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+        )
         model_selection = (
             system_bucket.get("model_selection")
             if isinstance(system_bucket, dict)
             else None
         )
+        evidence = list(reversed(evidence))
         if model_selection:
             evidence.append({"model_selection": model_selection})
-
-        return list(reversed(evidence))
+        return evidence
 
     def _format_progress_notes(self, handoff: Dict[str, Any]) -> str:
         """Format handoff context into progress notes.

@@ -276,9 +276,9 @@ def _build_db_retrieval_middleware(model: BaseChatModel) -> List[Any]:
     return middleware
 
 
-def _build_draft_writer_middleware(model: BaseChatModel) -> List[Any]:
+def _build_draft_writer_middleware(model: BaseChatModel) -> list[Any]:
     """Build middleware stack for draft writer subagent."""
-    middleware: List[Any] = []
+    middleware: list[Any] = []
 
     if not MIDDLEWARE_AVAILABLE:
         return middleware
@@ -294,9 +294,9 @@ def _build_draft_writer_middleware(model: BaseChatModel) -> List[Any]:
     return middleware
 
 
-def _build_data_analyst_middleware(model: BaseChatModel) -> List[Any]:
+def _build_data_analyst_middleware(model: BaseChatModel) -> list[Any]:
     """Build middleware stack for data analyst subagent."""
-    middleware: List[Any] = []
+    middleware: list[Any] = []
 
     if not MIDDLEWARE_AVAILABLE:
         return middleware
@@ -768,8 +768,8 @@ def _explorer_subagent(
 def _draft_writer_subagent(
     *,
     zendesk: bool = False,
-    workspace_tools: Optional[List[BaseTool]] = None,
-) -> Dict[str, Any]:
+    workspace_tools: list[BaseTool] | None = None,
+) -> dict[str, Any]:
     """Create draft writer subagent specification."""
     model_name, provider, model = _get_subagent_model(
         "draft-writer",
@@ -778,7 +778,8 @@ def _draft_writer_subagent(
     )
     current_date = get_current_utc_date()
 
-    tools: List[BaseTool] = [
+    use_minimax = is_minimax_available()
+    tools: list[BaseTool] = [
         write_article_tool,
         kb_search_tool,
         feedme_search_tool,
@@ -787,12 +788,24 @@ def _draft_writer_subagent(
         *get_db_retrieval_tools(),
         *_subagent_read_tools(),
     ]
+    if use_minimax:
+        tools = [
+            minimax_web_search_tool,
+            minimax_understand_image_tool,
+            *tools,
+        ]
+        logger.info(
+            "draft_writer_subagent_minimax_tools_prioritized",
+            model=model_name,
+            minimax_tools=["minimax_web_search", "minimax_understand_image"],
+        )
 
-    subagent_spec: Dict[str, Any] = {
+    subagent_spec: dict[str, Any] = {
         "name": "draft-writer",
         "description": (
             "Draft-writing specialist for polished, structured responses and documents. "
             "Use after discovery/retrieval work is complete to produce clear final drafts."
+            + (" Has Minimax vision for analyzing images." if use_minimax else "")
         ),
         "system_prompt": f"{DRAFT_WRITER_PROMPT}\n\nCurrent date: {current_date}",
         "tools": _merge_tools(tools, workspace_tools),
@@ -809,6 +822,7 @@ def _draft_writer_subagent(
         provider=provider,
         tools=[t.name for t in subagent_spec["tools"]],
         middleware_count=len(subagent_spec["middleware"]),
+        minimax_prioritized=use_minimax,
     )
 
     return subagent_spec
@@ -817,8 +831,8 @@ def _draft_writer_subagent(
 def _data_analyst_subagent(
     *,
     zendesk: bool = False,
-    workspace_tools: Optional[List[BaseTool]] = None,
-) -> Dict[str, Any]:
+    workspace_tools: list[BaseTool] | None = None,
+) -> dict[str, Any]:
     """Create data analyst subagent specification."""
     model_name, provider, model = _get_subagent_model(
         "data-analyst",
@@ -827,7 +841,8 @@ def _data_analyst_subagent(
     )
     current_date = get_current_utc_date()
 
-    tools: List[BaseTool] = [
+    use_minimax = is_minimax_available()
+    tools: list[BaseTool] = [
         supabase_query_tool,
         kb_search_tool,
         feedme_search_tool,
@@ -836,12 +851,24 @@ def _data_analyst_subagent(
         *get_db_retrieval_tools(),
         *_subagent_read_tools(),
     ]
+    if use_minimax:
+        tools = [
+            minimax_web_search_tool,
+            minimax_understand_image_tool,
+            *tools,
+        ]
+        logger.info(
+            "data_analyst_subagent_minimax_tools_prioritized",
+            model=model_name,
+            minimax_tools=["minimax_web_search", "minimax_understand_image"],
+        )
 
-    subagent_spec: Dict[str, Any] = {
+    subagent_spec: dict[str, Any] = {
         "name": "data-analyst",
         "description": (
             "Data analysis specialist for extracting trends, anomalies, and evidence-backed "
             "insights from retrieved sources and structured tables."
+            + (" Has Minimax vision for analyzing images." if use_minimax else "")
         ),
         "system_prompt": f"{DATA_ANALYST_PROMPT}\n\nCurrent date: {current_date}",
         "tools": _merge_tools(tools, workspace_tools),
@@ -858,6 +885,7 @@ def _data_analyst_subagent(
         provider=provider,
         tools=[t.name for t in subagent_spec["tools"]],
         middleware_count=len(subagent_spec["middleware"]),
+        minimax_prioritized=use_minimax,
     )
 
     return subagent_spec

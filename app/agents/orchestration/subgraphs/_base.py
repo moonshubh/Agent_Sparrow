@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, cast
+from functools import lru_cache
+from inspect import Parameter, Signature, signature
+from typing import Any, cast
 
 from langchain.agents import create_agent
 from langchain_core.callbacks.manager import adispatch_custom_event
@@ -15,12 +18,65 @@ from app.agents.orchestration.orchestration.subagent_state import PendingTaskCal
 from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.unified.subagents import get_subagent_by_name
 
+SubgraphRunner = Callable[[GraphState, PendingTaskCall, Any, Any], Awaitable[ToolMessage]]
+
+
+@lru_cache(maxsize=1)
+def _create_agent_signature() -> Signature:
+    """Cache create_agent signature for lightweight runtime compatibility."""
+    return signature(create_agent)
+
+
+def _create_subagent_agent(
+    model_value: str | BaseChatModel,
+    *,
+    tools: list[Any],
+    system_prompt: str,
+    middleware: list[Any],
+) -> Any:
+    """Build a subagent executor across supported `create_agent` signatures."""
+    agent_signature = _create_agent_signature()
+    param_names = set(agent_signature.parameters)
+    if any(
+        param.kind is Parameter.VAR_KEYWORD
+        for param in agent_signature.parameters.values()
+    ):
+        return create_agent(
+            model=model_value,
+            tools=tools,
+            system_prompt=system_prompt,
+            middleware=middleware,
+        )
+
+    args: list[Any] = []
+    kwargs: dict[str, Any] = {}
+
+    if "model" in param_names:
+        kwargs["model"] = model_value
+    else:
+        args.append(model_value)
+
+    if "tools" in param_names:
+        kwargs["tools"] = tools
+    else:
+        args.append(tools)
+
+    if "system_prompt" in param_names:
+        kwargs["system_prompt"] = system_prompt
+    elif "prompt" in param_names and system_prompt:
+        kwargs["prompt"] = system_prompt
+
+    if "middleware" in param_names:
+        kwargs["middleware"] = middleware
+
+    return create_agent(*args, **kwargs)
+
 
 async def _emit_custom_event(
     stream_writer: Any,
     *,
     name: str,
-    data: Dict[str, Any],
+    data: dict[str, Any],
     config: Any,
 ) -> None:
     # AG-UI consumes graph events through `astream_events`; this dispatches a
@@ -72,7 +128,10 @@ def _coerce_last_message_text(result: Any) -> str:
     return str(result)
 
 
-def _build_subagent_state(parent_state: GraphState, call: PendingTaskCall) -> Dict[str, Any]:
+def _build_subagent_state(
+    parent_state: GraphState,
+    call: PendingTaskCall,
+) -> dict[str, Any]:
     forwarded_props = getattr(parent_state, "forwarded_props", {}) or {}
     scratchpad = getattr(parent_state, "scratchpad", {}) or {}
     system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
@@ -101,7 +160,7 @@ def build_subagent_runner(
     *,
     subagent_name: str,
     subgraph_name: str,
-) -> Callable[[GraphState, PendingTaskCall, Any, Any], Awaitable[ToolMessage]]:
+) -> SubgraphRunner:
     """Build a subgraph runner that executes one subagent task call."""
 
     async def _run(
@@ -156,8 +215,8 @@ def build_subagent_runner(
                         f"Subagent '{subagent_name}' has an invalid model configuration."
                     )
                 else:
-                    subagent_agent: Any = create_agent(
-                        model=model_value,
+                    subagent_agent: Any = _create_subagent_agent(
+                        model_value,
                         tools=subagent_spec.get("tools") or [],
                         system_prompt=subagent_spec.get("system_prompt") or "",
                         middleware=subagent_spec.get("middleware") or [],

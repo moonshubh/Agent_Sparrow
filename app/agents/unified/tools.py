@@ -3753,7 +3753,7 @@ async def memory_list_tool(
 
 
 class MemoryFeedbackInput(BaseModel):
-    memory_id: Optional[str] = Field(
+    memory_id: str | None = Field(
         default=None,
         description=(
             "Memory UUID to update. If omitted, the most recent retrieved memory UUID "
@@ -3769,22 +3769,22 @@ class MemoryFeedbackInput(BaseModel):
         "resolution_success",
         "resolution_failure",
     ] = Field(default="positive", description="Type of memory feedback to record.")
-    notes: Optional[str] = Field(
+    notes: str | None = Field(
         default=None, description="Optional operator notes for this feedback."
     )
-    session_id: Optional[str] = Field(
+    session_id: str | None = Field(
         default=None, description="Optional session id associated with feedback."
     )
-    ticket_id: Optional[str] = Field(
+    ticket_id: str | None = Field(
         default=None, description="Optional ticket id associated with feedback."
     )
-    user_id: Optional[str] = Field(
+    user_id: str | None = Field(
         default=None,
         description="Optional user UUID override. Falls back to state user_id.",
     )
 
 
-def _first_valid_uuid(values: list[Any]) -> Optional[uuid.UUID]:
+def _first_valid_uuid(values: list[Any]) -> uuid.UUID | None:
     for value in values:
         if value is None:
             continue
@@ -3798,15 +3798,15 @@ def _first_valid_uuid(values: list[Any]) -> Optional[uuid.UUID]:
 @tool("memory_feedback", args_schema=MemoryFeedbackInput)
 async def memory_feedback_tool(
     input: MemoryFeedbackInput | None = None,
-    memory_id: Optional[str] = None,
+    memory_id: str | None = None,
     feedback_type: str = "positive",
-    notes: Optional[str] = None,
-    session_id: Optional[str] = None,
-    ticket_id: Optional[str] = None,
-    user_id: Optional[str] = None,
+    notes: str | None = None,
+    session_id: str | None = None,
+    ticket_id: str | None = None,
+    user_id: str | None = None,
     state: Annotated[GraphState | None, InjectedState] = None,
     runtime: ToolRuntime | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Record feedback for a memory entry (coordinator-only write tool)."""
     if input is None:
         input = MemoryFeedbackInput(
@@ -3923,7 +3923,7 @@ def session_summary_tool(
     recent_message_limit: int = 3,
     state: Annotated[GraphState | None, InjectedState] = None,
     runtime: ToolRuntime | None = None,  # noqa: ARG001
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return a read-only summary of current session/thread context."""
     if input is None:
         input = SessionSummaryInput(
@@ -3948,7 +3948,7 @@ def session_summary_tool(
             if isinstance(report, dict) and report.get("read") is not True:
                 unread_reports.append(str(tool_call_id))
 
-    response: Dict[str, Any] = {
+    response: dict[str, Any] = {
         "session_id": _state_value(state, "session_id", None),
         "trace_id": _state_value(state, "trace_id", None),
         "user_id": _state_value(state, "user_id", None),
@@ -3972,13 +3972,18 @@ def session_summary_tool(
                 if isinstance(memory_stats, dict)
                 else 0
             ),
+            "query_length": (
+                memory_stats.get("query_length", 0)
+                if isinstance(memory_stats, dict)
+                else 0
+            ),
         },
         "unread_subagent_reports": sorted(unread_reports),
     }
 
     if input.include_recent_messages:
         recent_slice = messages[-int(input.recent_message_limit) :]
-        recent_messages: list[Dict[str, Any]] = []
+        recent_messages: list[dict[str, Any]] = []
         for msg in recent_slice:
             content = getattr(msg, "content", "")
             if isinstance(content, list):

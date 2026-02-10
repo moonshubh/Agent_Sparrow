@@ -36,6 +36,32 @@ def _extract_tool_calls(message: AIMessage) -> list[dict[str, Any]]:
     return []
 
 
+def _pending_non_task_tool_calls(state: GraphState) -> list[dict[str, Any]]:
+    """Return non-task tool calls from the latest AI message that are not executed."""
+    if not state.messages:
+        return []
+
+    last_message = state.messages[-1]
+    if not isinstance(last_message, AIMessage):
+        return []
+
+    scratchpad = getattr(state, "scratchpad", {}) or {}
+    system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+    executed_ids = set(system_bucket.get("_executed_tool_calls") or [])
+
+    pending: list[dict[str, Any]] = []
+    for tool_call in _extract_tool_calls(last_message):
+        tool_call_id = tool_call.get("id")
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            continue
+        if tool_call_id in executed_ids:
+            continue
+        if tool_call.get("name") == "task":
+            continue
+        pending.append(tool_call)
+    return pending
+
+
 def _route_from_agent(state: GraphState) -> str:
     """Route agent output to tools, subgraphs, or end."""
     if not state.messages:
@@ -51,8 +77,23 @@ def _route_from_agent(state: GraphState) -> str:
         logger.debug("graph_route_decision", route="end", reason="no_tool_calls")
         return "end"
 
-    if has_routable_pending_task_calls(state):
-        logger.info("graph_route_decision", route="subgraphs", reason="pending_task_calls")
+    has_routable_tasks = has_routable_pending_task_calls(state)
+    pending_non_task_calls = _pending_non_task_tool_calls(state)
+    if has_routable_tasks and pending_non_task_calls:
+        logger.info(
+            "graph_route_decision",
+            route="tools",
+            reason="mixed_task_and_non_task_tool_calls",
+            pending_non_task_count=len(pending_non_task_calls),
+        )
+        return "tools"
+
+    if has_routable_tasks:
+        logger.info(
+            "graph_route_decision",
+            route="subgraphs",
+            reason="pending_task_calls",
+        )
         return "subgraphs"
 
     logger.debug("graph_route_decision", route="tools", reason="non_task_tool_calls")
@@ -212,9 +253,17 @@ def _build_tool_node():
                     or []
                 )
             )
-            pending = [
-                tc for tc in tool_calls if tc.get("id") and tc.get("id") not in executed
-            ]
+            has_routable_tasks = has_routable_pending_task_calls(state)
+            pending = []
+            for tc in tool_calls:
+                tool_call_id = tc.get("id")
+                if not tool_call_id or tool_call_id in executed:
+                    continue
+                # When task calls are routed to subgraphs, process only the sibling
+                # non-task calls in this tools pass.
+                if has_routable_tasks and tc.get("name") == "task":
+                    continue
+                pending.append(tc)
             if not pending:
                 return {}
 
@@ -349,7 +398,34 @@ def _build_subgraph_node():
                     )
                 return await runner(state, call, stream_writer, config)
 
-            results = await asyncio.gather(*(run_one(call) for call in pending))
+            raw_results = await asyncio.gather(
+                *(run_one(call) for call in pending),
+                return_exceptions=True,
+            )
+            results: list[ToolMessage] = []
+            failed_tool_call_ids: list[str] = []
+            for call, result in zip(pending, raw_results):
+                if isinstance(result, BaseException):
+                    failed_tool_call_ids.append(call.tool_call_id)
+                    logger.warning(
+                        "subgraph_dispatch_task_failed",
+                        subagent_type=call.subagent_type,
+                        tool_call_id=call.tool_call_id,
+                        error=str(result),
+                    )
+                    results.append(
+                        ToolMessage(
+                            tool_call_id=call.tool_call_id,
+                            name="task",
+                            content=f"Subgraph execution failed: {str(result)[:800]}",
+                            additional_kwargs={
+                                "is_error": True,
+                                "error_type": "subgraph_execution_failed",
+                            },
+                        )
+                    )
+                    continue
+                results.append(result)
 
             new_executed = list(executed | {call.tool_call_id for call in pending})
             system_bucket["_executed_tool_calls"] = new_executed
@@ -359,6 +435,7 @@ def _build_subgraph_node():
                 "subgraph_dispatch_complete",
                 session_id=getattr(state, "session_id", None),
                 completed_count=len(results),
+                failed_count=len(failed_tool_call_ids),
                 tool_call_ids=[call.tool_call_id for call in pending],
             )
 

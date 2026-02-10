@@ -44,7 +44,7 @@ def test_bounded_add_messages_uses_global_bound(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_handoff_enriched_payload_adds_expected_fields(monkeypatch) -> None:
+async def test_handoff_enriched_payload_adds_expected_fields() -> None:
     store = _FakeWorkspaceStore(session_id="sess-handoff")
     middleware = HandoffCaptureMiddleware(workspace_store=store)
 
