@@ -1,299 +1,104 @@
 /**
  * FeedMe API Client
  *
- * Client functions for interacting with the FeedMe API endpoints.
- * Handles transcript upload, processing status, and conversation management.
+ * Canonical frontend contract for FeedMe endpoints.
+ * - Uses backend source-of-truth contracts
+ * - Sends auth headers on mutation/admin routes
+ * - Provides compatibility exports for existing store usage
  */
 
-// Custom error class for API unreachable scenarios
+import { getApiBaseUrl } from '@/shared/lib/utils/environment';
+import { apiMonitor } from '@/services/api/api-monitor';
+import backendHealthMonitor from '@/services/monitoring/backend-health-check';
+import { supabase } from '@/services/supabase';
+import { getAuthToken as getLocalAuthToken } from '@/services/auth/local-auth';
+
+// Re-export platform type from shared types.
+export type { PlatformType } from '@/shared/types/feedme';
+import type { PlatformType } from '@/shared/types/feedme';
+
 export class ApiUnreachableError extends Error {
-  public readonly errorType?: "timeout" | "network" | "server" | "unknown";
+  public readonly errorType?: 'timeout' | 'network' | 'server' | 'unknown';
   public readonly timestamp: Date;
   public readonly url?: string;
 
   constructor(
     message: string,
     public readonly originalError?: Error,
-    errorType?: "timeout" | "network" | "server" | "unknown",
+    errorType?: 'timeout' | 'network' | 'server' | 'unknown',
     url?: string,
   ) {
     super(message);
-    this.name = "ApiUnreachableError";
+    this.name = 'ApiUnreachableError';
     this.errorType = errorType;
     this.timestamp = new Date();
     this.url = url;
   }
 }
 
-// Request timeout configurations based on operation type
+const SUPERSEDED_REQUEST_MESSAGE = 'Request superseded by a newer action';
+
+export const isSupersededRequestError = (error: unknown): boolean =>
+  error instanceof ApiUnreachableError &&
+  error.message === SUPERSEDED_REQUEST_MESSAGE;
+
 const TIMEOUT_CONFIGS = {
-  // Quick operations (status checks, small payloads)
   quick: { timeout: 10000, retries: 2 },
-  // Standard operations (most API calls)
   standard: { timeout: 30000, retries: 3 },
-  // Heavy operations (file uploads, batch operations)
   heavy: { timeout: 60000, retries: 2 },
-  // Database operations (queries with potential slow aggregations)
   database: { timeout: 45000, retries: 2 },
 } as const;
 
-// Track in-flight requests to prevent duplicates and enable cancellation
 const activeRequests = new Map<string, AbortController>();
+const supersededRequests = new WeakSet<AbortController>();
 
-// Intelligent retry delay with exponential backoff and jitter to prevent thundering herd
 const getRetryDelay = (attempt: number, maxRetries: number): number => {
-  // Correct exponential backoff: delay increases with attempt number
-  const attemptNumber = maxRetries - attempt; // Convert remaining retries to attempt number
+  const attemptNumber = maxRetries - attempt;
   const baseDelay = Math.min(Math.pow(2, attemptNumber) * 1000, 8000);
-  const jitter = Math.random() * 1000; // Add 0-1s of jitter
+  const jitter = Math.random() * 1000;
   return baseDelay + jitter;
 };
 
-// Enhanced fetch with retry, timeout, and request deduplication
-const fetchWithRetry = async (
-  url: string,
-  options: RequestInit = {},
-  retries: number = 3,
-  timeout: number = 30000,
-  skipRetryOn503: boolean = false,
-  requestKey?: string, // Optional key for request deduplication
-): Promise<Response> => {
-  // Offline detection with more robust check
-  if (
-    typeof window !== "undefined" &&
-    navigator &&
-    navigator.onLine === false
-  ) {
-    throw new ApiUnreachableError(
-      "You are offline - unable to reach FeedMe service",
-    );
-  }
-
-  // Check backend health on first attempt
-  if (retries === 3) {
-    const healthStatus = backendHealthMonitor.getLastHealthStatus();
-    if (healthStatus && !healthStatus.healthy) {
-      console.warn(
-        "[FeedMe API] Backend is unhealthy, attempting anyway:",
-        healthStatus,
-      );
-      // Don't block the request, but log the warning
-    }
-  }
-
-  // Cancel any existing request with the same key
-  if (requestKey && activeRequests.has(requestKey)) {
-    const existingController = activeRequests.get(requestKey);
-    existingController?.abort();
-    activeRequests.delete(requestKey);
-    console.log(
-      `[FeedMe API] Cancelled existing request for key: ${requestKey}`,
-    );
-  }
-
-  const controller = new AbortController();
-
-  // Track this request if it has a key
-  if (requestKey) {
-    activeRequests.set(requestKey, controller);
-  }
-
-  const startTime = Date.now();
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-    console.warn(`[FeedMe API] Request timeout after ${timeout}ms for ${url}`);
-  }, timeout);
-
-  try {
-    console.log(
-      `[FeedMe API] Fetching ${url} (timeout: ${timeout}ms, retries left: ${retries})`,
-    );
-
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-    const duration = Date.now() - startTime;
-
-    // Track metrics
-    apiMonitor.track({
-      url,
-      method: options.method || "GET",
-      duration,
-      status: response.status,
-      timestamp: new Date(),
-      size: parseInt(response.headers.get("content-length") || "0", 10),
-    });
-
-    // Log slow requests for monitoring
-    if (duration > timeout * 0.8) {
-      console.warn(
-        `[FeedMe API] Slow request detected: ${url} took ${duration}ms`,
-      );
-    }
-
-    // Clean up request tracking
-    if (requestKey) {
-      activeRequests.delete(requestKey);
-    }
-
-    // Check for 503 Service Unavailable
-    if (response.status === 503) {
-      if (skipRetryOn503) {
-        console.log(
-          `[FeedMe API] Service unavailable (503) for ${url}, skipping retries`,
-        );
-        return response;
-      }
-      // Treat 503 as retriable
-      throw new Error(`Service temporarily unavailable (503)`);
-    }
-
-    // Check for other server errors that should trigger retry
-    if (response.status >= 500 && retries > 0) {
-      throw new Error(`Server error (${response.status})`);
-    }
-
-    return response;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    const duration = Date.now() - startTime;
-
-    // Determine error type
-    const isTimeout = error instanceof Error && error.name === "AbortError";
-    const isNetworkError =
-      error instanceof Error &&
-      (error.message.includes("NetworkError") ||
-        error.message.includes("fetch") ||
-        error.message.includes("ECONNREFUSED"));
-    const isServerError =
-      error instanceof Error &&
-      (error.message.includes("Server error") ||
-        error.message.includes("Service temporarily unavailable"));
-
-    // Track failed request metrics
-    apiMonitor.track({
-      url,
-      method: options.method || "GET",
-      duration,
-      status: isTimeout ? "timeout" : "error",
-      timestamp: new Date(),
-    });
-
-    // Clean up request tracking
-    if (requestKey) {
-      activeRequests.delete(requestKey);
-    }
-
-    console.warn(`[FeedMe API] Request failed for ${url}:`, error);
-
-    const shouldRetry =
-      retries > 0 &&
-      (isNetworkError || isServerError || (isTimeout && retries > 1));
-
-    if (shouldRetry) {
-      const delay = getRetryDelay(retries, 3);
-      console.log(
-        `[FeedMe API] Retrying in ${Math.round(delay)}ms... (${retries} retries left)`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delay));
-
-      // Increase timeout slightly for retries to account for potential slowness
-      const retryTimeout = isTimeout ? timeout * 1.5 : timeout;
-      return fetchWithRetry(
-        url,
-        options,
-        retries - 1,
-        retryTimeout,
-        skipRetryOn503,
-        requestKey,
-      );
-    }
-
-    // Generate contextual error message
-    let message: string;
-    let errorType: "timeout" | "network" | "server" | "unknown" = "unknown";
-
-    if (error instanceof Error) {
-      if (isTimeout) {
-        errorType = "timeout";
-        const timeoutSeconds = Math.round(timeout / 1000);
-        message = `Request timed out after ${timeoutSeconds} seconds - the server may be under heavy load`;
-      } else if (
-        error.message.includes("NetworkError") ||
-        error.message.includes("fetch")
-      ) {
-        errorType = "network";
-        message =
-          "Network connection failed - please check your internet connection";
-      } else if (
-        error.message.includes("ECONNREFUSED") ||
-        error.message.includes("refused")
-      ) {
-        errorType = "server";
-        message =
-          "Cannot connect to FeedMe service - it may be temporarily down";
-      } else if (error.message.includes("Service temporarily unavailable")) {
-        errorType = "server";
-        message =
-          "FeedMe service is temporarily unavailable - please try again in a few moments";
-      } else if (error.message.includes("Server error")) {
-        errorType = "server";
-        message =
-          "FeedMe service encountered an error - please try again later";
-      } else {
-        message = `Connection failed: ${error.message}`;
-      }
-    } else {
-      message = "Unexpected error connecting to FeedMe service";
-    }
-
-    // Enhance error with backend health information
-    const enhancedError = backendHealthMonitor.handleApiError(
-      new ApiUnreachableError(
-        message,
-        error instanceof Error ? error : new Error(String(error)),
-        errorType,
-        url,
-      ),
-    );
-
-    throw enhancedError;
-  }
-};
-
-// Helper to cancel all active requests (useful for cleanup)
-export const cancelAllActiveRequests = (): void => {
-  activeRequests.forEach((controller, key) => {
-    controller.abort();
-    console.log(`[FeedMe API] Cancelled request: ${key}`);
-  });
-  activeRequests.clear();
-};
-
-// API Base Configuration — prefer unified env resolver, with sensible fallbacks
-import { getApiBaseUrl } from "@/shared/lib/utils/environment";
-import { apiMonitor } from "@/services/api/api-monitor";
-import backendHealthMonitor from "@/services/monitoring/backend-health-check";
-
-// Prefer explicit NEXT_PUBLIC_API_BASE, then environment util (uses NEXT_PUBLIC_API_URL),
-// then final fallback based on NODE_ENV
 const resolvedBaseFromEnv = process.env.NEXT_PUBLIC_API_BASE;
 const resolvedBaseFromUtils = getApiBaseUrl();
 const API_BASE =
   resolvedBaseFromEnv ||
   resolvedBaseFromUtils ||
-  (process.env.NODE_ENV === "development"
-    ? "http://localhost:8000/api/v1"
-    : "/api/v1");
+  (process.env.NODE_ENV === 'development'
+    ? 'http://localhost:8000/api/v1'
+    : '/api/v1');
 const FEEDME_API_BASE = `${API_BASE}/feedme`;
 
-console.log("[FeedMe API] Using API_BASE:", API_BASE);
-console.log("[FeedMe API] Using FEEDME_API_BASE:", FEEDME_API_BASE);
+export type ProcessingStatusValue =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
-// Types
+export type ProcessingStageValue =
+  | 'queued'
+  | 'parsing'
+  | 'ai_extraction'
+  | 'embedding_generation'
+  | 'quality_assessment'
+  | 'completed'
+  | 'failed';
+
+export type OSCategory = 'windows' | 'macos' | 'both' | 'uncategorized';
+
+export const PLATFORM_LABELS: Record<PlatformType, string> = {
+  windows: 'Windows',
+  macos: 'macOS',
+  both: 'Both Windows and macOS',
+};
+
+export const PLATFORM_OPTIONS: { value: PlatformType; label: string }[] = [
+  { value: 'windows', label: 'Windows' },
+  { value: 'macos', label: 'macOS' },
+  { value: 'both', label: 'Both Windows and macOS' },
+];
+
 export interface UploadTranscriptRequest {
   title: string;
   uploaded_by?: string;
@@ -301,31 +106,24 @@ export interface UploadTranscriptRequest {
 }
 
 export interface UploadTranscriptResponse {
-  conversation_id: number; // Changed from 'id' to match backend response
-  id?: number; // Keep for backwards compatibility
+  conversation_id: number;
+  id?: number;
   title?: string;
-  processing_status: "pending" | "processing" | "completed" | "failed";
+  processing_status: ProcessingStatusValue;
   total_examples?: number;
   created_at?: string;
+  updated_at?: string;
   metadata?: Record<string, unknown>;
-  approval_status?: "pending" | "approved" | "rejected" | "awaiting_review";
-  message?: string; // Backend includes a message field
+  approval_status?: 'pending' | 'approved' | 'rejected' | 'awaiting_review';
+  folder_id?: number | null;
+  processing_method?: string;
+  extracted_text?: string;
+  os_category?: OSCategory;
+  message?: string;
+  duplicate?: boolean;
+  duplicate_conversation_id?: number;
+  upload_sha256?: string;
 }
-
-export type ProcessingStatusValue =
-  | "pending"
-  | "processing"
-  | "completed"
-  | "failed"
-  | "cancelled";
-export type ProcessingStageValue =
-  | "queued"
-  | "parsing"
-  | "ai_extraction"
-  | "embedding_generation"
-  | "quality_assessment"
-  | "completed"
-  | "failed";
 
 export interface ProcessingStatusResponse {
   conversation_id: number;
@@ -348,26 +146,30 @@ export interface ConversationListResponse {
   page: number;
   page_size: number;
   has_next: boolean;
-  // Support both backend schema variations
   total_conversations?: number;
   total_pages?: number;
 }
 
-// Approval Workflow Types
 export interface ApprovalRequest {
-  approved_by: string;
+  approved_by?: string;
+  approval_notes?: string;
   reviewer_notes?: string;
+  tags?: string[];
 }
 
 export interface RejectionRequest {
-  rejected_by: string;
-  reviewer_notes: string;
+  rejected_by?: string;
+  rejection_reason?: string;
+  rejection_notes?: string;
+  reviewer_notes?: string;
 }
 
 export interface ApprovalResponse {
   conversation: UploadTranscriptResponse;
-  action: string;
-  timestamp: string;
+  approval_status?: string;
+  action?: string;
+  timestamp?: string;
+  message: string;
 }
 
 export interface DeleteConversationResponse {
@@ -388,37 +190,22 @@ export interface ApprovalWorkflowStats {
   processing_failed: number;
   avg_quality_score?: number;
   avg_processing_time_ms?: number;
-  // Platform breakdown
   windows_count?: number;
   macos_count?: number;
 }
 
-export interface BulkApprovalRequest {
-  conversation_ids: number[];
-  action: "approve" | "reject";
-  approved_by: string;
-  reviewer_notes?: string;
-}
-
-export interface BulkApprovalResponse {
-  successful: number[];
-  failed: Array<{ conversation_id: number; error: string }>;
-  total_requested: number;
-  total_successful: number;
-  action_taken: string;
-}
-
-// Example Types (for backward compatibility)
 export interface FeedMeExample {
   id: number;
   conversation_id: number;
-  question: string;
-  answer: string;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
+  question?: string;
+  answer?: string;
+  question_text?: string;
+  answer_text?: string;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
   metadata?: Record<string, unknown>;
-  approval_status?: "pending" | "approved" | "rejected" | "awaiting_review";
+  approval_status?: 'pending' | 'approved' | 'rejected' | 'awaiting_review';
 }
 
 export interface ExampleListResponse {
@@ -426,52 +213,8 @@ export interface ExampleListResponse {
   total_examples: number;
   page: number;
   page_size: number;
-  has_next: boolean;
-}
-
-// Platform Types for conversation tagging - re-export from shared types
-export type { PlatformType } from "@/shared/types/feedme";
-import type { PlatformType } from "@/shared/types/feedme";
-
-export const PLATFORM_LABELS: Record<PlatformType, string> = {
-  windows: "Windows",
-  macos: "macOS",
-  both: "Both Windows and macOS",
-};
-
-export const PLATFORM_OPTIONS: { value: PlatformType; label: string }[] = [
-  { value: "windows", label: "Windows" },
-  { value: "macos", label: "macOS" },
-  { value: "both", label: "Both Windows and macOS" },
-];
-
-// Conversation metadata structure
-export interface ConversationMetadataTags {
-  platform?: PlatformType;
-  [key: string]: unknown;
-}
-
-export interface ConversationMetadata extends Record<string, unknown> {
-  tags?: ConversationMetadataTags;
-  ticket_id?: string | number | null;
-  processing_tracker?: {
-    progress?: number;
-    stage?: ProcessingStatusValue;
-    message?: string;
-  };
-}
-
-// Conversation Types
-export interface FeedMeConversation {
-  id: number;
-  title: string;
-  processing_status: ProcessingStatusValue;
-  extracted_text?: string;
-  folder_id?: number | null;
-  created_at: string;
-  updated_at: string;
-  metadata?: ConversationMetadata;
-  approval_status?: "pending" | "approved" | "rejected" | "awaiting_review";
+  has_next?: boolean;
+  total_pages?: number;
 }
 
 export interface SearchExamplesFilters {
@@ -501,7 +244,7 @@ export interface SearchExamplesRequest {
 
 export interface SearchExampleResult {
   id: number;
-  type: "conversation" | "example";
+  type: 'conversation' | 'example';
   title: string;
   snippet?: string | null;
   score: number;
@@ -527,7 +270,6 @@ export interface SearchExamplesResponse {
   facets?: Record<string, unknown>;
 }
 
-// Folder Types
 export interface FeedMeFolder {
   id: number;
   name: string;
@@ -540,41 +282,9 @@ export interface FeedMeFolder {
   conversation_count?: number;
 }
 
-export interface GeminiUsage {
-  daily_used: number;
-  daily_limit: number;
-  rpm_limit: number;
-  calls_in_window: number;
-  window_seconds_remaining: number;
-  utilization: {
-    daily: number;
-    rpm: number;
-  };
-  status: "healthy" | "warning";
-  day: string;
-}
-
-export interface EmbeddingUsage {
-  daily_used: number;
-  daily_limit: number;
-  rpm_limit: number;
-  tpm_limit: number;
-  calls_in_window: number;
-  tokens_in_window: number;
-  window_seconds_remaining: number;
-  token_window_seconds_remaining: number;
-  utilization: {
-    daily: number;
-    rpm: number;
-    tpm: number;
-  };
-  status: "healthy" | "warning";
-  day: string;
-}
-
 export interface FolderListResponse {
   folders: FeedMeFolder[];
-  total: number;
+  total_count: number;
 }
 
 export interface CreateFolderRequest {
@@ -592,474 +302,792 @@ export interface UpdateFolderRequest {
   parent_id?: number | null;
 }
 
-// API Client Class
+export interface FolderAssignmentFailure {
+  conversation_id: number;
+  reason: string;
+}
+
+export interface FolderAssignmentResponse {
+  folder_id: number | null;
+  folder_name: string;
+  conversation_ids: number[];
+  assigned_count: number;
+  requested_count: number;
+  failed: FolderAssignmentFailure[];
+  partial_success: boolean;
+  action: string;
+  message: string;
+}
+
+export interface GeminiUsage {
+  daily_used: number;
+  daily_limit: number;
+  rpm_limit: number;
+  calls_in_window: number;
+  window_seconds_remaining: number;
+  utilization: {
+    daily: number;
+    rpm: number;
+  };
+  status: 'healthy' | 'warning';
+  day: string;
+}
+
+export interface EmbeddingUsage {
+  daily_used: number;
+  daily_limit: number;
+  rpm_limit: number;
+  tpm_limit: number;
+  calls_in_window: number;
+  tokens_in_window: number;
+  window_seconds_remaining: number;
+  token_window_seconds_remaining: number;
+  utilization: {
+    daily: number;
+    rpm: number;
+    tpm: number;
+  };
+  status: 'healthy' | 'warning';
+  day: string;
+}
+
+export interface FeedMeStatsOverviewResponse {
+  time_range: {
+    start_at: string;
+    end_at: string;
+    range_days: number;
+  };
+  filters: {
+    folder_id: number | null;
+    os_category: OSCategory | null;
+  };
+  cards: {
+    queue_depth: number;
+    failure_rate: number;
+    p50_latency_ms: number;
+    p95_latency_ms: number;
+    assign_throughput: number;
+    kb_ready_throughput: number;
+    sla_warning_count: number;
+    sla_breach_count: number;
+  };
+  os_distribution: Record<OSCategory, number>;
+  sla_thresholds: {
+    warning_minutes: number;
+    breach_minutes: number;
+  };
+  total_conversations: number;
+  generated_at: string;
+}
+
+export interface FeedMeSettings {
+  tenant_id: string;
+  kb_ready_folder_id: number | null;
+  sla_warning_minutes: number;
+  sla_breach_minutes: number;
+  updated_at?: string | null;
+}
+
+export interface FeedMeSettingsUpdateRequest {
+  kb_ready_folder_id?: number | null;
+  sla_warning_minutes?: number;
+  sla_breach_minutes?: number;
+}
+
+export interface MarkReadyRequest {
+  confirm_move?: boolean;
+  reason?: string;
+}
+
+export interface MarkReadyResponse {
+  conversation_id: number;
+  kb_ready_folder_id: number;
+  folder_id: number;
+  os_category: OSCategory;
+  approval_status: string;
+  message: string;
+}
+
+export interface RegenerateAiNoteResponse {
+  conversation_id: number;
+  generation_status: 'completed' | 'failed';
+  metadata: Record<string, unknown>;
+  message: string;
+}
+
+export interface ConversationVersion {
+  id: number;
+  conversation_id: number;
+  version_number: number;
+  transcript_content: string;
+  created_at: string;
+  created_by?: string;
+  change_description?: string;
+  is_active: boolean;
+}
+
+export interface VersionListResponse {
+  versions: ConversationVersion[];
+  total_count: number;
+  active_version: number;
+}
+
+export interface ModifiedLine {
+  line_number: number;
+  original: string;
+  modified: string;
+}
+
+export interface VersionDiff {
+  diff_html: string;
+  additions: number;
+  deletions: number;
+  version_1_id: number;
+  version_2_id: number;
+  from_version?: number;
+  to_version?: number;
+  added_lines?: string[];
+  removed_lines?: string[];
+  modified_lines?: ModifiedLine[];
+  unchanged_lines?: string[];
+  stats?: Record<string, number>;
+}
+
+export interface ConversationEditRequest {
+  transcript_content: string;
+  edit_reason: string;
+  user_id: string;
+  title?: string;
+}
+
+export interface ConversationRevertRequest {
+  target_version: number;
+  user_id?: string;
+  reverted_by?: string;
+  reason?: string;
+  revert_reason?: string;
+  reprocess?: boolean;
+}
+
+export interface EditResponse {
+  conversation: UploadTranscriptResponse;
+  new_version: number;
+  conversation_id: number;
+  message: string;
+  task_id?: string;
+  reprocessing?: boolean;
+  new_version_uuid?: string;
+}
+
+export interface RevertResponse {
+  conversation: UploadTranscriptResponse;
+  conversation_id: number;
+  reverted_to_version: number;
+  new_version: number;
+  message: string;
+  task_id?: string;
+  reprocessing?: boolean;
+  new_version_uuid?: string;
+}
+
+const getAuthToken = async (): Promise<string | null> => {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (token) {
+      return token;
+    }
+  } catch {
+    // fall through
+  }
+
+  try {
+    const localToken = getLocalAuthToken();
+    if (localToken) {
+      return localToken;
+    }
+  } catch {
+    // fall through
+  }
+
+  if (typeof window !== 'undefined') {
+    return (
+      localStorage.getItem('access_token') ||
+      localStorage.getItem('authToken') ||
+      null
+    );
+  }
+
+  return null;
+};
+
+const buildHeaders = async (
+  options: {
+    auth?: boolean;
+    json?: boolean;
+    extra?: HeadersInit;
+  } = {},
+): Promise<HeadersInit> => {
+  const { auth = false, json = true, extra } = options;
+  const headers = new Headers(extra || {});
+
+  if (json && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  if (auth) {
+    const token = await getAuthToken();
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+  }
+
+  return headers;
+};
+
+const extractErrorMessage = async (response: Response): Promise<string> => {
+  const fallback = `${response.status} ${response.statusText}`.trim();
+  try {
+    const data = (await response.json()) as {
+      detail?: string;
+      message?: string;
+      error?: string;
+    };
+    return data.detail || data.message || data.error || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const fetchWithRetry = async (
+  url: string,
+  options: RequestInit = {},
+  retries = 3,
+  timeout = 30000,
+  skipRetryOn503 = false,
+  requestKey?: string,
+): Promise<Response> => {
+  if (typeof window !== 'undefined' && navigator.onLine === false) {
+    throw new ApiUnreachableError('You are offline - unable to reach FeedMe service');
+  }
+
+  if (retries === 3) {
+    const healthStatus = backendHealthMonitor.getLastHealthStatus();
+    if (healthStatus && !healthStatus.healthy) {
+      console.warn('[FeedMe API] Backend unhealthy, request will continue', healthStatus);
+    }
+  }
+
+  if (requestKey && activeRequests.has(requestKey)) {
+    const previousController = activeRequests.get(requestKey);
+    if (previousController) {
+      supersededRequests.add(previousController);
+      previousController.abort();
+    }
+    activeRequests.delete(requestKey);
+  }
+
+  const controller = new AbortController();
+  if (requestKey) {
+    activeRequests.set(requestKey, controller);
+  }
+
+  const startTime = Date.now();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    apiMonitor.track({
+      url,
+      method: options.method || 'GET',
+      duration: Date.now() - startTime,
+      status: response.status,
+      timestamp: new Date(),
+      size: parseInt(response.headers.get('content-length') || '0', 10),
+    });
+
+    if (requestKey) {
+      activeRequests.delete(requestKey);
+    }
+
+    if (response.status === 503) {
+      if (skipRetryOn503) {
+        return response;
+      }
+      throw new Error('Service temporarily unavailable (503)');
+    }
+
+    if (response.status >= 500 && retries > 0) {
+      throw new Error(`Server error (${response.status})`);
+    }
+
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    apiMonitor.track({
+      url,
+      method: options.method || 'GET',
+      duration: Date.now() - startTime,
+      status: error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'error',
+      timestamp: new Date(),
+    });
+
+    if (requestKey) {
+      activeRequests.delete(requestKey);
+    }
+
+    const isTimeout = error instanceof Error && error.name === 'AbortError';
+    const wasSuperseded = supersededRequests.has(controller);
+    if (wasSuperseded) {
+      supersededRequests.delete(controller);
+    }
+    const isNetworkError =
+      error instanceof Error &&
+      (error.message.includes('NetworkError') ||
+        error.message.includes('fetch') ||
+        error.message.includes('ECONNREFUSED'));
+    const isServerError =
+      error instanceof Error &&
+      (error.message.includes('Server error') ||
+        error.message.includes('Service temporarily unavailable'));
+
+    const shouldRetry =
+      retries > 0 &&
+      !wasSuperseded &&
+      (isNetworkError || isServerError || (isTimeout && retries > 1));
+
+    if (shouldRetry) {
+      const delay = getRetryDelay(retries, 3);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return fetchWithRetry(
+        url,
+        options,
+        retries - 1,
+        isTimeout ? Math.round(timeout * 1.5) : timeout,
+        skipRetryOn503,
+        requestKey,
+      );
+    }
+
+    let message = 'Unexpected error connecting to FeedMe service';
+    let errorType: 'timeout' | 'network' | 'server' | 'unknown' = 'unknown';
+
+    if (error instanceof Error) {
+      if (wasSuperseded) {
+        message = SUPERSEDED_REQUEST_MESSAGE;
+      } else if (isTimeout) {
+        errorType = 'timeout';
+        message = `Request timed out after ${Math.round(timeout / 1000)} seconds`;
+      } else if (isNetworkError) {
+        errorType = 'network';
+        message = 'Network connection failed';
+      } else if (error.message.includes('Service temporarily unavailable')) {
+        errorType = 'server';
+        message = 'FeedMe service is temporarily unavailable';
+      } else if (isServerError) {
+        errorType = 'server';
+        message = 'FeedMe service encountered an error';
+      } else {
+        message = error.message;
+      }
+    }
+
+    const wrapped = new ApiUnreachableError(
+      message,
+      error instanceof Error ? error : new Error(String(error)),
+      errorType,
+      url,
+    );
+
+    throw backendHealthMonitor.handleApiError(wrapped);
+  }
+};
+
+const requestJson = async <T>(
+  path: string,
+  options: {
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    auth?: boolean;
+    body?: unknown;
+    timeoutConfig?: keyof typeof TIMEOUT_CONFIGS;
+    skipRetryOn503?: boolean;
+    requestKey?: string;
+    headers?: HeadersInit;
+  } = {},
+): Promise<T> => {
+  const {
+    method = 'GET',
+    auth = false,
+    body,
+    timeoutConfig = 'standard',
+    skipRetryOn503 = false,
+    requestKey,
+    headers,
+  } = options;
+
+  const timeout = TIMEOUT_CONFIGS[timeoutConfig].timeout;
+  const retries = TIMEOUT_CONFIGS[timeoutConfig].retries;
+
+  const hasJsonBody = body !== undefined;
+  const builtHeaders = await buildHeaders({
+    auth,
+    json: hasJsonBody,
+    extra: headers,
+  });
+
+  const response = await fetchWithRetry(
+    `${FEEDME_API_BASE}${path}`,
+    {
+      method,
+      headers: builtHeaders,
+      body: hasJsonBody ? JSON.stringify(body) : undefined,
+    },
+    retries,
+    timeout,
+    skipRetryOn503,
+    requestKey,
+  );
+
+  if (!response.ok) {
+    throw new Error(await extractErrorMessage(response));
+  }
+
+  return response.json() as Promise<T>;
+};
+
+export const cancelAllActiveRequests = (): void => {
+  activeRequests.forEach((controller) => controller.abort());
+  activeRequests.clear();
+};
+
 export class FeedMeApiClient {
-  private baseUrl: string;
+  private readonly baseUrl: string;
 
   constructor(baseUrl: string = FEEDME_API_BASE) {
     this.baseUrl = baseUrl;
-    console.log("[FeedMe API Client] Initialized with baseUrl:", this.baseUrl);
   }
 
-  /**
-   * Upload a transcript via file upload
-   */
   async uploadTranscriptFile(
     title: string,
     file: File,
     uploadedBy?: string,
-    autoProcess: boolean = true,
+    autoProcess = true,
   ): Promise<UploadTranscriptResponse> {
     const formData = new FormData();
-    formData.append("title", title);
-    formData.append("transcript_file", file);
-    formData.append("auto_process", autoProcess.toString());
-
+    formData.append('title', title);
+    formData.append('transcript_file', file);
+    formData.append('auto_process', String(autoProcess));
     if (uploadedBy) {
-      formData.append("uploaded_by", uploadedBy);
+      formData.append('uploaded_by', uploadedBy);
     }
 
-    console.log(
-      "[FeedMe API] Uploading to:",
-      `${this.baseUrl}/conversations/upload`,
-    );
-
-    // Use heavy timeout for file uploads
-    const { timeout, retries } = TIMEOUT_CONFIGS.heavy;
+    const headers = await buildHeaders({ auth: true, json: false });
     const response = await fetchWithRetry(
       `${this.baseUrl}/conversations/upload`,
       {
-        method: "POST",
+        method: 'POST',
+        headers,
         body: formData,
       },
-      retries,
-      timeout,
+      TIMEOUT_CONFIGS.heavy.retries,
+      TIMEOUT_CONFIGS.heavy.timeout,
     );
 
     if (!response.ok) {
-      console.error(
-        "[FeedMe API] Upload failed:",
-        response.status,
-        response.statusText,
-      );
-      const errorData = await response.json().catch(() => ({}));
-      console.error("[FeedMe API] Error details:", errorData);
-      throw new Error(
-        errorData.detail ||
-          `Upload failed: ${response.status} ${response.statusText}`,
-      );
+      throw new Error(await extractErrorMessage(response));
     }
 
-    return response.json();
+    return response.json() as Promise<UploadTranscriptResponse>;
   }
 
-  // Text-based uploads are not supported in strict AI mode
-
-  /**
-   * Get processing status for a conversation
-   */
-  async getProcessingStatus(
-    conversationId: number,
-  ): Promise<ProcessingStatusResponse> {
-    // Status checks should be quick
-    const { timeout, retries } = TIMEOUT_CONFIGS.quick;
-    const response = await fetchWithRetry(
-      `${this.baseUrl}/conversations/${conversationId}/status`,
-      {},
-      retries,
-      timeout,
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to get status: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
+  async getProcessingStatus(conversationId: number): Promise<ProcessingStatusResponse> {
+    return requestJson<ProcessingStatusResponse>(`/conversations/${conversationId}/status`, {
+      timeoutConfig: 'quick',
+    });
   }
 
-  /**
-   * Get a single conversation by ID
-   */
-  async getConversationById(
-    conversationId: number,
-  ): Promise<UploadTranscriptResponse> {
-    const response = await fetchWithRetry(
-      `${this.baseUrl}/conversations/${conversationId}`,
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to get conversation: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
+  async getConversationById(conversationId: number): Promise<UploadTranscriptResponse> {
+    return requestJson<UploadTranscriptResponse>(`/conversations/${conversationId}`);
   }
 
-  /**
-   * Update a conversation
-   */
+  async getConversation(conversationId: number): Promise<UploadTranscriptResponse> {
+    return this.getConversationById(conversationId);
+  }
+
   async updateConversation(
     conversationId: number,
     updates: {
       title?: string;
       extracted_text?: string;
       metadata?: Record<string, unknown>;
-      approval_status?: "pending" | "approved" | "rejected" | "awaiting_review";
+      approval_status?: 'pending' | 'approved' | 'rejected' | 'awaiting_review';
+      os_category?: OSCategory;
     },
   ): Promise<UploadTranscriptResponse> {
-    const response = await fetchWithRetry(
-      `${this.baseUrl}/conversations/${conversationId}`,
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(updates),
-      },
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to update conversation: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
+    return requestJson<UploadTranscriptResponse>(`/conversations/${conversationId}`, {
+      method: 'PUT',
+      auth: true,
+      body: updates,
+    });
   }
 
-  /**
-   * List conversations with pagination
-   */
   async listConversations(
-    page: number = 1,
-    pageSize: number = 20,
+    page = 1,
+    pageSize = 20,
     status?: string,
     uploadedBy?: string,
     searchQuery?: string,
     folderId?: number | null,
   ): Promise<ConversationListResponse> {
     const params = new URLSearchParams({
-      page: page.toString(),
-      page_size: pageSize.toString(),
+      page: String(page),
+      page_size: String(pageSize),
     });
 
-    if (status) {
-      params.append("status", status);
+    if (status) params.append('status', status);
+    if (uploadedBy) params.append('uploaded_by', uploadedBy);
+    if (searchQuery) params.append('search', searchQuery);
+
+    // Default backend behavior is "all conversations" when no folder_id is supplied.
+    if (folderId !== undefined && folderId !== null) {
+      params.append('folder_id', String(folderId));
     }
 
-    if (uploadedBy) {
-      params.append("uploaded_by", uploadedBy);
-    }
-
-    if (searchQuery) {
-      params.append("search", searchQuery);
-    }
-
-    if (folderId !== undefined) {
-      if (folderId === null) {
-        // Don't send folder_id parameter to get all conversations
-      } else if (folderId === 0) {
-        params.append("folder_id", "0"); // Unassigned conversations
-      } else {
-        params.append("folder_id", folderId.toString());
-      }
-    }
-
-    // Listing conversations may involve DB pagination + filters; use database timeout
-    const { timeout, retries } = TIMEOUT_CONFIGS.database;
     const response = await fetchWithRetry(
       `${this.baseUrl}/conversations?${params.toString()}`,
       {},
-      retries,
-      timeout,
+      TIMEOUT_CONFIGS.database.retries,
+      TIMEOUT_CONFIGS.database.timeout,
       true,
-      `listConversations-${page}-${pageSize}-${searchQuery || ""}-${folderId || ""}`, // Request key for deduplication
+      `feedme-list-${page}-${pageSize}-${status || ''}-${uploadedBy || ''}-${folderId ?? 'all'}-${searchQuery || ''}`,
     );
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-
-      // Handle service unavailable specially
       if (response.status === 503) {
-        console.log("[FeedMe API] Service unavailable - returning empty list");
         return {
           conversations: [],
           total_count: 0,
-          page: page,
+          page,
           page_size: pageSize,
           has_next: false,
           total_conversations: 0,
           total_pages: 0,
         };
       }
-
-      throw new Error(
-        errorData.detail ||
-          `Failed to list conversations: ${response.status} ${response.statusText}`,
-      );
+      throw new Error(await extractErrorMessage(response));
     }
 
-    return response.json();
+    return response.json() as Promise<ConversationListResponse>;
   }
 
-  /**
-   * Get a specific conversation
-   */
-  async getConversation(
-    conversationId: number,
-  ): Promise<UploadTranscriptResponse> {
-    const response = await fetchWithRetry(
-      `${this.baseUrl}/conversations/${conversationId}`,
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to get conversation: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
+  async deleteConversation(conversationId: number): Promise<DeleteConversationResponse> {
+    return requestJson<DeleteConversationResponse>(`/conversations/${conversationId}`, {
+      method: 'DELETE',
+      auth: true,
+    });
   }
 
-  /**
-   * Delete a conversation
-   */
-  async deleteConversation(conversationId: number): Promise<void> {
-    const response = await fetchWithRetry(
-      `${this.baseUrl}/conversations/${conversationId}`,
+  async reprocessConversation(conversationId: number): Promise<{ task_id: string; status: string; message: string }> {
+    return requestJson<{ task_id: string; status: string; message: string }>(
+      `/conversations/${conversationId}/reprocess`,
       {
-        method: "DELETE",
+        method: 'POST',
+        auth: true,
       },
     );
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to delete conversation: ${response.status} ${response.statusText}`,
-      );
-    }
   }
 
-  /**
-   * Reprocess a conversation
-   */
-  async reprocessConversation(conversationId: number): Promise<void> {
-    const response = await fetchWithRetry(
-      `${this.baseUrl}/conversations/${conversationId}/reprocess`,
-      {
-        method: "POST",
-      },
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to reprocess conversation: ${response.status} ${response.statusText}`,
-      );
-    }
-  }
-
-  /**
-   * Check if FeedMe service is available
-   */
   async healthCheck(): Promise<boolean> {
     try {
-      console.log("[FeedMe API] Health check:", `${this.baseUrl}/analytics`);
-      // Health checks should be very quick
-      const { timeout, retries } = TIMEOUT_CONFIGS.quick;
-      const response = await fetchWithRetry(
-        `${this.baseUrl}/analytics`,
-        {},
-        retries,
-        timeout,
-        false,
-        "healthCheck", // Deduplicate health checks
-      );
-      console.log(
-        "[FeedMe API] Health check result:",
-        response.ok,
-        response.status,
-      );
+      const response = await fetchWithRetry(`${this.baseUrl}/health`, {}, 1, TIMEOUT_CONFIGS.quick.timeout);
       return response.ok;
-    } catch (error) {
-      console.error("[FeedMe API] Health check failed:", error);
+    } catch {
       return false;
     }
   }
 
-  /**
-   * Get conversation examples
-   */
   async getConversationExamples(
     conversationId: number,
-    page: number = 1,
-    pageSize: number = 20,
+    page = 1,
+    pageSize = 20,
     isActive?: boolean,
   ): Promise<ExampleListResponse> {
     const params = new URLSearchParams({
-      page: page.toString(),
-      page_size: pageSize.toString(),
+      page: String(page),
+      page_size: String(pageSize),
     });
-
     if (isActive !== undefined) {
-      params.append("is_active", isActive.toString());
+      params.append('is_active', String(isActive));
     }
 
-    const response = await fetchWithRetry(
-      `${this.baseUrl}/conversations/${conversationId}/examples?${params.toString()}`,
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to get examples: ${response.status} ${response.statusText}`,
+    // Example endpoints were deprecated in this release. Keep compatibility contract.
+    try {
+      return await requestJson<ExampleListResponse>(
+        `/conversations/${conversationId}/examples?${params.toString()}`,
       );
+    } catch {
+      return {
+        examples: [],
+        total_examples: 0,
+        page,
+        page_size: pageSize,
+        has_next: false,
+      };
     }
-
-    return response.json();
   }
 
-  /**
-   * Update an example
-   */
   async updateExample(
-    exampleId: number,
-    updates: Partial<FeedMeExample>,
+    _exampleId: number,
+    _updates: Partial<FeedMeExample>,
   ): Promise<FeedMeExample> {
-    const response = await fetchWithRetry(
-      `${this.baseUrl}/examples/${exampleId}`,
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(updates),
-      },
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to update example: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
+    throw new Error('Example editing endpoints were removed from FeedMe in this release.');
   }
 
-  /**
-   * Create folder with Supabase sync
-   */
-  async createFolderSupabase(folderData: FolderCreate): Promise<FeedMeFolder> {
-    return createFolderSupabase(folderData as CreateFolderRequest);
+  async createFolderSupabase(folderData: CreateFolderRequest): Promise<FeedMeFolder> {
+    return requestJson<FeedMeFolder>('/folders', {
+      method: 'POST',
+      auth: true,
+      body: folderData,
+    });
   }
 
-  /**
-   * Update folder with Supabase sync
-   */
   async updateFolderSupabase(
     folderId: number,
-    folderData: FolderUpdate,
+    folderData: UpdateFolderRequest,
   ): Promise<FeedMeFolder> {
-    return updateFolderSupabase(folderId, folderData);
+    return requestJson<FeedMeFolder>(`/folders/${folderId}`, {
+      method: 'PUT',
+      auth: true,
+      body: folderData,
+    });
   }
 
-  /**
-   * Delete folder with Supabase sync
-   */
   async deleteFolderSupabase(
     folderId: number,
     moveConversationsTo?: number,
-  ): Promise<{ message: string; folders_affected: number }> {
-    return deleteFolderSupabase(folderId, moveConversationsTo);
+  ): Promise<{ message: string }> {
+    const params = new URLSearchParams();
+    if (moveConversationsTo !== undefined) {
+      params.append('move_conversations_to', String(moveConversationsTo));
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+
+    return requestJson<{ message: string }>(`/folders/${folderId}${suffix}`, {
+      method: 'DELETE',
+      auth: true,
+    });
   }
 
-  /**
-   * Assign conversations to folder with Supabase sync
-   */
   async assignConversationsToFolderSupabase(
     folderId: number | null,
     conversationIds: number[],
-  ): Promise<{ message: string; assigned_count: number }> {
-    return assignConversationsToFolderSupabase(folderId, conversationIds);
-  }
-
-  /**
-   * Get Gemini vision API usage statistics
-   */
-  async getGeminiUsage(): Promise<GeminiUsage> {
-    const response = await fetchWithRetry(`${this.baseUrl}/gemini-usage`);
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to get Gemini usage: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Get embedding API usage statistics
-   */
-  async getEmbeddingUsage(): Promise<EmbeddingUsage> {
-    const response = await fetchWithRetry(`${this.baseUrl}/embedding-usage`);
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to get embedding usage: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
-  }
-
-  async searchExamples(
-    request: SearchExamplesRequest,
-  ): Promise<SearchExamplesResponse> {
-    const response = await fetchWithRetry(`${this.baseUrl}/search/examples`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  ): Promise<FolderAssignmentResponse> {
+    return requestJson<FolderAssignmentResponse>('/folders/assign', {
+      method: 'POST',
+      auth: true,
+      body: {
+        folder_id: folderId,
+        conversation_ids: conversationIds,
       },
-      body: JSON.stringify(request),
     });
+  }
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `Failed to search examples: ${response.status} ${response.statusText}`,
-      );
+  async listFolders(): Promise<FolderListResponse> {
+    return requestJson<FolderListResponse>('/folders', {
+      timeoutConfig: 'database',
+      skipRetryOn503: true,
+      requestKey: 'feedme-list-folders',
+    });
+  }
+
+  async getGeminiUsage(): Promise<GeminiUsage> {
+    return requestJson<GeminiUsage>('/gemini-usage');
+  }
+
+  async getEmbeddingUsage(): Promise<EmbeddingUsage> {
+    return requestJson<EmbeddingUsage>('/embedding-usage');
+  }
+
+  async searchExamples(request: SearchExamplesRequest): Promise<SearchExamplesResponse> {
+    return requestJson<SearchExamplesResponse>('/search/examples', {
+      method: 'POST',
+      body: request,
+    });
+  }
+
+  async getApprovalWorkflowStats(): Promise<ApprovalWorkflowStats> {
+    return requestJson<ApprovalWorkflowStats>('/approval/stats', {
+      timeoutConfig: 'database',
+      skipRetryOn503: true,
+      requestKey: 'feedme-approval-stats',
+    });
+  }
+
+  async getStatsOverview(params?: {
+    rangeDays?: number;
+    folderId?: number | null;
+    osCategory?: OSCategory | null;
+  }): Promise<FeedMeStatsOverviewResponse> {
+    const search = new URLSearchParams();
+    search.set('range_days', String(params?.rangeDays ?? 7));
+    if (params?.folderId !== undefined && params.folderId !== null) {
+      search.set('folder_id', String(params.folderId));
+    }
+    if (params?.osCategory) {
+      search.set('os_category', params.osCategory);
     }
 
-    return response.json();
+    return requestJson<FeedMeStatsOverviewResponse>(`/stats/overview?${search.toString()}`, {
+      timeoutConfig: 'database',
+    });
+  }
+
+  async markConversationReady(
+    conversationId: number,
+    request: MarkReadyRequest = {},
+  ): Promise<MarkReadyResponse> {
+    return requestJson<MarkReadyResponse>(`/conversations/${conversationId}/mark-ready`, {
+      method: 'POST',
+      auth: true,
+      body: request,
+    });
+  }
+
+  async regenerateAiNote(conversationId: number): Promise<RegenerateAiNoteResponse> {
+    return requestJson<RegenerateAiNoteResponse>(`/conversations/${conversationId}/ai-note/regenerate`, {
+      method: 'POST',
+      auth: true,
+    });
+  }
+
+  async getFeedMeSettings(): Promise<FeedMeSettings> {
+    return requestJson<FeedMeSettings>('/settings', {
+      auth: true,
+      timeoutConfig: 'database',
+    });
+  }
+
+  async updateFeedMeSettings(
+    updates: FeedMeSettingsUpdateRequest,
+  ): Promise<FeedMeSettings> {
+    return requestJson<FeedMeSettings>('/settings', {
+      method: 'PUT',
+      auth: true,
+      body: updates,
+      timeoutConfig: 'database',
+    });
   }
 }
 
-// Default client instance
 export const feedMeApi = new FeedMeApiClient();
 
-// Utility functions
 export const uploadTranscriptFile = (
   title: string,
   file: File,
@@ -1068,42 +1096,17 @@ export const uploadTranscriptFile = (
 ) => feedMeApi.uploadTranscriptFile(title, file, uploadedBy, autoProcess);
 
 export const uploadTranscriptText = () => {
-  throw new Error("Text-based uploads are disabled. Please upload a PDF file.");
+  throw new Error('Text-based uploads are disabled. Please upload a PDF file.');
 };
 
 export const getProcessingStatus = (conversationId: number) =>
   feedMeApi.getProcessingStatus(conversationId);
 
-/**
- * Get formatted Q&A content for editing
- */
-export async function getFormattedQAContent(conversationId: number): Promise<{
-  formatted_content: string;
-  total_examples: number;
-  content_type: "qa_examples" | "raw_transcript";
-  raw_transcript?: string;
-  message: string;
-}> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}/formatted-content`,
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to get formatted content: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
 export function listConversations(
   page?: number,
   pageSize?: number,
   searchQuery?: string,
-  sortBy?: string,
+  _sortBy?: string,
   folderId?: number | null,
 ) {
   return feedMeApi.listConversations(
@@ -1119,10 +1122,263 @@ export function listConversations(
 export const searchExamples = (request: SearchExamplesRequest) =>
   feedMeApi.searchExamples(request);
 
-// Helper function to simulate upload progress
+export async function updateConversation(
+  conversationId: number,
+  updateData: {
+    title?: string;
+    metadata?: Record<string, unknown>;
+    extracted_text?: string;
+    os_category?: OSCategory;
+  },
+): Promise<UploadTranscriptResponse> {
+  return feedMeApi.updateConversation(conversationId, updateData);
+}
+
+export async function editConversation(
+  conversationId: number,
+  editRequest: ConversationEditRequest,
+): Promise<EditResponse> {
+  const result = await requestJson<{
+    conversation_id: number;
+    new_version: number;
+    message: string;
+    new_version_uuid?: string;
+  }>(`/conversations/${conversationId}/edit`, {
+    method: 'PUT',
+    auth: true,
+    body: editRequest,
+  });
+
+  const conversation = await feedMeApi.getConversationById(conversationId);
+
+  return {
+    conversation,
+    conversation_id: result.conversation_id,
+    new_version: result.new_version,
+    message: result.message,
+    new_version_uuid: result.new_version_uuid,
+    reprocessing: true,
+  };
+}
+
+export async function getConversationVersions(
+  conversationId: number,
+): Promise<VersionListResponse> {
+  return requestJson<VersionListResponse>(`/conversations/${conversationId}/versions`);
+}
+
+export async function getConversationVersion(
+  conversationId: number,
+  versionNumber: number,
+): Promise<ConversationVersion> {
+  return requestJson<ConversationVersion>(
+    `/conversations/${conversationId}/versions/${versionNumber}`,
+  );
+}
+
+export async function getVersionDiff(
+  conversationId: number,
+  version1: number,
+  version2: number,
+): Promise<VersionDiff> {
+  return requestJson<VersionDiff>(
+    `/conversations/${conversationId}/versions/${version1}/diff/${version2}`,
+  );
+}
+
+export async function revertConversation(
+  conversationId: number,
+  targetVersion: number,
+  revertRequest: ConversationRevertRequest,
+): Promise<RevertResponse> {
+  const requestBody = {
+    ...revertRequest,
+    target_version: revertRequest.target_version ?? targetVersion,
+    user_id: revertRequest.user_id || revertRequest.reverted_by || 'system',
+    revert_reason:
+      revertRequest.revert_reason ||
+      revertRequest.reason ||
+      'Reverted from FeedMe UI',
+  };
+
+  const result = await requestJson<{
+    conversation_id: number;
+    reverted_to_version: number;
+    new_version: number;
+    message: string;
+    new_version_uuid?: string;
+  }>(`/conversations/${conversationId}/revert/${targetVersion}`, {
+    method: 'POST',
+    auth: true,
+    body: requestBody,
+  });
+
+  const conversation = await feedMeApi.getConversationById(conversationId);
+
+  return {
+    conversation,
+    conversation_id: result.conversation_id,
+    reverted_to_version: result.reverted_to_version,
+    new_version: result.new_version,
+    message: result.message,
+    new_version_uuid: result.new_version_uuid,
+    reprocessing: true,
+  };
+}
+
+export async function deleteConversation(
+  conversationId: number,
+): Promise<DeleteConversationResponse> {
+  return feedMeApi.deleteConversation(conversationId);
+}
+
+export async function approveConversation(
+  conversationId: number,
+  approvalRequest: ApprovalRequest,
+): Promise<ApprovalResponse> {
+  return requestJson<ApprovalResponse>(`/conversations/${conversationId}/approve`, {
+    method: 'POST',
+    auth: true,
+    body: approvalRequest,
+  });
+}
+
+export async function rejectConversation(
+  conversationId: number,
+  rejectionRequest: RejectionRequest,
+): Promise<ApprovalResponse> {
+  return requestJson<ApprovalResponse>(`/conversations/${conversationId}/reject`, {
+    method: 'POST',
+    auth: true,
+    body: rejectionRequest,
+  });
+}
+
+export async function getApprovalWorkflowStats(): Promise<ApprovalWorkflowStats> {
+  return feedMeApi.getApprovalWorkflowStats();
+}
+
+export async function createFolderSupabase(
+  folderData: CreateFolderRequest,
+): Promise<FeedMeFolder> {
+  return feedMeApi.createFolderSupabase(folderData);
+}
+
+export async function updateFolderSupabase(
+  folderId: number,
+  folderData: UpdateFolderRequest,
+): Promise<FeedMeFolder> {
+  return feedMeApi.updateFolderSupabase(folderId, folderData);
+}
+
+export async function deleteFolderSupabase(
+  folderId: number,
+  moveConversationsTo?: number,
+): Promise<{ message: string }> {
+  return feedMeApi.deleteFolderSupabase(folderId, moveConversationsTo);
+}
+
+export async function assignConversationsToFolderSupabase(
+  folderId: number | null,
+  conversationIds: number[],
+): Promise<FolderAssignmentResponse> {
+  return feedMeApi.assignConversationsToFolderSupabase(folderId, conversationIds);
+}
+
+export async function getConversationExamples(
+  conversationId: number,
+  page = 1,
+  pageSize = 20,
+  isActive?: boolean,
+): Promise<ExampleListResponse> {
+  return feedMeApi.getConversationExamples(conversationId, page, pageSize, isActive);
+}
+
+export async function updateExample(
+  exampleId: number,
+  updates: Partial<FeedMeExample>,
+): Promise<FeedMeExample> {
+  return feedMeApi.updateExample(exampleId, updates);
+}
+
+export async function deleteExample(_exampleId: number): Promise<{
+  example_id: number;
+  conversation_id: number;
+  conversation_title: string;
+  question_preview: string;
+  message: string;
+}> {
+  throw new Error('Example delete endpoint was removed from FeedMe in this release.');
+}
+
+export async function listFolders(): Promise<FolderListResponse> {
+  return feedMeApi.listFolders();
+}
+
+export async function createFolder(
+  request: CreateFolderRequest,
+): Promise<FeedMeFolder> {
+  return feedMeApi.createFolderSupabase(request);
+}
+
+export async function updateFolder(
+  folderId: number,
+  request: UpdateFolderRequest,
+): Promise<FeedMeFolder> {
+  return feedMeApi.updateFolderSupabase(folderId, request);
+}
+
+export async function deleteFolder(
+  folderId: number,
+): Promise<{ message: string }> {
+  return feedMeApi.deleteFolderSupabase(folderId);
+}
+
+export async function assignConversationsToFolder(
+  folderId: number | null,
+  conversationIds: number[],
+): Promise<FolderAssignmentResponse> {
+  return feedMeApi.assignConversationsToFolderSupabase(folderId, conversationIds);
+}
+
+export async function getAnalytics(): Promise<ApprovalWorkflowStats> {
+  return getApprovalWorkflowStats();
+}
+
+export async function getStatsOverview(params?: {
+  rangeDays?: number;
+  folderId?: number | null;
+  osCategory?: OSCategory | null;
+}): Promise<FeedMeStatsOverviewResponse> {
+  return feedMeApi.getStatsOverview(params);
+}
+
+export async function getFeedMeSettings(): Promise<FeedMeSettings> {
+  return feedMeApi.getFeedMeSettings();
+}
+
+export async function updateFeedMeSettings(
+  updates: FeedMeSettingsUpdateRequest,
+): Promise<FeedMeSettings> {
+  return feedMeApi.updateFeedMeSettings(updates);
+}
+
+export async function markConversationReady(
+  conversationId: number,
+  request: MarkReadyRequest = {},
+): Promise<MarkReadyResponse> {
+  return feedMeApi.markConversationReady(conversationId, request);
+}
+
+export async function regenerateAiNote(
+  conversationId: number,
+): Promise<RegenerateAiNoteResponse> {
+  return feedMeApi.regenerateAiNote(conversationId);
+}
+
 export const simulateUploadProgress = (
   onProgress: (progress: number) => void,
-  duration: number = 2000,
+  duration = 2000,
 ): Promise<void> => {
   return new Promise((resolve) => {
     const steps = 20;
@@ -1141,871 +1397,3 @@ export const simulateUploadProgress = (
     }, stepDuration);
   });
 };
-
-// Phase 3: Versioning and Edit API Types
-
-export interface ConversationVersion {
-  id: number;
-  conversation_id: number;
-  version: number;
-  title: string;
-  raw_transcript: string;
-  metadata: Record<string, unknown>;
-  is_active: boolean;
-  updated_by?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface VersionListResponse {
-  versions: ConversationVersion[];
-  total_count: number;
-  active_version: number;
-}
-
-export interface ModifiedLine {
-  line_number: number;
-  original: string;
-  modified: string;
-}
-
-export interface VersionDiff {
-  from_version: number;
-  to_version: number;
-  added_lines: string[];
-  removed_lines: string[];
-  modified_lines: ModifiedLine[];
-  unchanged_lines: string[];
-  stats: Record<string, number>;
-}
-
-export interface ConversationEditRequest {
-  transcript_content: string;
-  edit_reason: string;
-  user_id: string;
-}
-
-export interface ConversationRevertRequest {
-  target_version: number;
-  reverted_by: string;
-  reason?: string;
-  reprocess?: boolean;
-}
-
-export interface EditResponse {
-  conversation: UploadTranscriptResponse;
-  new_version: number;
-  task_id?: string;
-  reprocessing: boolean;
-}
-
-export interface RevertResponse {
-  conversation: UploadTranscriptResponse;
-  new_version: number;
-  reverted_to_version: number;
-  task_id?: string;
-  reprocessing: boolean;
-}
-
-// Phase 3: Versioning API Functions
-
-/**
- * Update conversation details (like title) without creating a new version
- */
-export async function updateConversation(
-  conversationId: number,
-  updateData: { title?: string; metadata?: Record<string, unknown> },
-): Promise<FeedMeConversation> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}`,
-    {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(updateData),
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to update conversation: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Edit a conversation and create a new version
- */
-export async function editConversation(
-  conversationId: number,
-  editRequest: ConversationEditRequest,
-): Promise<EditResponse> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}/edit`,
-    {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(editRequest),
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to edit conversation: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Get all versions of a conversation
- */
-export async function getConversationVersions(
-  conversationId: number,
-): Promise<VersionListResponse> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}/versions`,
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to get conversation versions: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Get a specific version of a conversation
- */
-export async function getConversationVersion(
-  conversationId: number,
-  versionNumber: number,
-): Promise<ConversationVersion> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}/versions/${versionNumber}`,
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to get conversation version: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Generate diff between two versions
- */
-export async function getVersionDiff(
-  conversationId: number,
-  version1: number,
-  version2: number,
-): Promise<VersionDiff> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}/versions/${version1}/diff/${version2}`,
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to generate version diff: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Revert conversation to a previous version
- */
-export async function revertConversation(
-  conversationId: number,
-  targetVersion: number,
-  revertRequest: ConversationRevertRequest,
-): Promise<RevertResponse> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}/revert/${targetVersion}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(revertRequest),
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to revert conversation: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-// Approval Workflow API Functions
-
-/**
- * Delete a conversation and all associated examples
- */
-export async function deleteConversation(
-  conversationId: number,
-): Promise<DeleteConversationResponse> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}`,
-    {
-      method: "DELETE",
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to delete conversation: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Approve a conversation
- */
-export async function approveConversation(
-  conversationId: number,
-  approvalRequest: ApprovalRequest,
-): Promise<ApprovalResponse> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}/approve`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(approvalRequest),
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to approve conversation: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Reject a conversation
- */
-export async function rejectConversation(
-  conversationId: number,
-  rejectionRequest: RejectionRequest,
-): Promise<ApprovalResponse> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/conversations/${conversationId}/reject`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(rejectionRequest),
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to reject conversation: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Get approval workflow statistics
- */
-export async function getApprovalWorkflowStats(): Promise<ApprovalWorkflowStats> {
-  // Stats queries might be slow due to aggregation
-  const { timeout, retries } = TIMEOUT_CONFIGS.database;
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/approval/stats`,
-    {},
-    retries,
-    timeout,
-    true,
-    "approvalStats", // Deduplicate stats requests
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-
-    // Handle service unavailable specially
-    if (response.status === 503) {
-      console.log("[FeedMe API] Service unavailable - returning default stats");
-      return {
-        total_conversations: 0,
-        pending_approval: 0,
-        awaiting_review: 0,
-        approved: 0,
-        rejected: 0,
-        published: 0,
-        currently_processing: 0,
-        processing_failed: 0,
-      };
-    }
-
-    throw new Error(
-      errorData.detail ||
-        `Failed to get approval workflow stats: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Get general FeedMe analytics
- */
-export async function getAnalytics(): Promise<ApprovalWorkflowStats> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/analytics`);
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to get analytics: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Bulk approve or reject conversations
- */
-// Deprecated: bulkApproveConversations removed in unified text flow
-
-/**
- * Review an individual example
- */
-// Deprecated: reviewExample removed in unified text flow
-
-// Folder Management API Functions
-
-export interface FolderCreate {
-  name: string;
-  description?: string;
-  color?: string;
-  parent_id?: number | null;
-  created_by?: string;
-}
-
-export interface FolderUpdate {
-  name?: string;
-  description?: string;
-  color?: string;
-  parent_id?: number | null;
-}
-
-export interface AssignFolderRequest {
-  folder_id?: number | null;
-  conversation_ids: number[];
-}
-
-export interface FolderListResponse {
-  folders: FeedMeFolder[];
-  total_count: number;
-}
-
-/**
- * Get all folders with conversation counts
- */
-// export async function listFolders(): Promise<FolderListResponse> {
-//   try {
-//     console.log('[FeedMe API] Fetching folders...')
-//     // Increase timeout for database operations, skip retry on 503
-//     const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {}, 3, 30000, true)
-//
-//     if (!response.ok) {
-//       const errorData = await response.json().catch(() => ({}))
-//       const errorMessage = errorData.detail || `Failed to list folders: ${response.status} ${response.statusText}`
-//       console.error('[FeedMe API] Folders error:', errorMessage)
-//
-//       // Handle service unavailable specially
-//       if (response.status === 503) {
-//         console.log('[FeedMe API] Service unavailable - returning empty folder list')
-//         return { folders: [] }
-//       }
-//
-//       throw new Error(errorMessage)
-//     }
-//
-//     const data = await response.json()
-//     console.log(`[FeedMe API] Successfully fetched ${data.folders?.length || 0} folders`)
-//     return data
-//   } catch (error) {
-//     console.error('[FeedMe API] Error fetching folders:', error)
-//
-//     // Re-throw ApiUnreachableError as-is
-//     if (error instanceof ApiUnreachableError) {
-//       throw error
-//     }
-//
-//     // Wrap other errors
-//     throw new Error(
-//       error instanceof Error
-//         ? `Failed to list folders: ${error.message}`
-//         : 'Failed to list folders: Unknown error'
-//     )
-//   }
-// }
-//
-// /**
-//  * Create a new folder
-//  */
-// export async function createFolder(folderData: FolderCreate): Promise<FeedMeFolder> {
-//   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {
-//     method: 'POST',
-//     headers: {
-//       'Content-Type': 'application/json',
-//     },
-//     body: JSON.stringify(folderData),
-//   })
-//
-//   if (!response.ok) {
-//     const errorData = await response.json().catch(() => ({}))
-//     throw new Error(errorData.detail || `Failed to create folder: ${response.status} ${response.statusText}`)
-//   }
-//
-//   return response.json()
-// }
-//
-// /**
-//  * Update an existing folder
-//  */
-// export async function updateFolder(folderId: number, folderData: FolderUpdate): Promise<FeedMeFolder> {
-//   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}`, {
-//     method: 'PUT',
-//     headers: {
-//       'Content-Type': 'application/json',
-//     },
-//     body: JSON.stringify(folderData),
-//   })
-//
-//   if (!response.ok) {
-//     const errorData = await response.json().catch(() => ({}))
-//     throw new Error(errorData.detail || `Failed to update folder: ${response.status} ${response.statusText}`)
-//   }
-//
-//   return response.json()
-// }
-//
-// /**
-//  * Delete a folder and optionally move conversations
-//  */
-// export async function deleteFolder(folderId: number, moveConversationsTo?: number): Promise<any> {
-//   let url = `${FEEDME_API_BASE}/folders/${folderId}`
-//   if (moveConversationsTo !== undefined) {
-//     const params = new URLSearchParams({ move_conversations_to: moveConversationsTo.toString() })
-//     url += `?${params.toString()}`
-//   }
-//
-//   const response = await fetchWithRetry(url, {
-//     method: 'DELETE',
-//   })
-//
-//   if (!response.ok) {
-//     const errorData = await response.json().catch(() => ({}))
-//     throw new Error(errorData.detail || `Failed to delete folder: ${response.status} ${response.statusText}`)
-//   }
-//
-//   return response.json()
-// }
-//
-// /**
-//  * Assign conversations to a folder
-//  */
-// export async function assignConversationsToFolder(assignRequest: AssignFolderRequest): Promise<any> {
-//   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/assign`, {
-//     method: 'POST',
-//     headers: {
-//       'Content-Type': 'application/json',
-//     },
-//     body: JSON.stringify(assignRequest),
-//   })
-//
-//   if (!response.ok) {
-//     const errorData = await response.json().catch(() => ({}))
-//     throw new Error(errorData.detail || `Failed to assign conversations: ${response.status} ${response.statusText}`)
-//   }
-//
-//   return response.json()
-// }
-//
-// /**
-//  * Get conversations in a specific folder
-//  */
-// export async function listFolderConversations(folderId: number, page = 1, pageSize = 20): Promise<ConversationListResponse> {
-//   const params = new URLSearchParams({
-//     page: page.toString(),
-//     page_size: pageSize.toString(),
-//   })
-//
-//   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}/conversations?${params.toString()}`)
-//
-//   if (!response.ok) {
-//     const errorData = await response.json().catch(() => ({}))
-//     throw new Error(errorData.detail || `Failed to list folder conversations: ${response.status} ${response.statusText}`)
-//   }
-//
-//   return response.json()
-// }
-
-// Supabase-enabled Folder Management Functions
-
-/**
- * Create folder with Supabase sync
- */
-export async function createFolderSupabase(
-  folderData: CreateFolderRequest,
-): Promise<FeedMeFolder> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(folderData),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to create folder: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Update folder with Supabase sync
- */
-export async function updateFolderSupabase(
-  folderId: number,
-  folderData: FolderUpdate,
-): Promise<FeedMeFolder> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/folders/${folderId}`,
-    {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(folderData),
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to update folder: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Delete folder with Supabase sync
- */
-export async function deleteFolderSupabase(
-  folderId: number,
-  moveConversationsTo?: number,
-): Promise<{ message: string; folders_affected: number }> {
-  let url = `${FEEDME_API_BASE}/folders/${folderId}`;
-  if (moveConversationsTo !== undefined) {
-    const params = new URLSearchParams({
-      move_conversations_to: moveConversationsTo.toString(),
-    });
-    url += `?${params.toString()}`;
-  }
-
-  const response = await fetchWithRetry(url, {
-    method: "DELETE",
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to delete folder: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Assign conversations to folder with Supabase sync
- */
-export async function assignConversationsToFolderSupabase(
-  folderId: number | null,
-  conversationIds: number[],
-): Promise<{ message: string; assigned_count: number }> {
-  const url = `${FEEDME_API_BASE}/folders/assign`;
-  const body: { folder_id: number | null; conversation_ids: number[] } = {
-    folder_id: folderId,
-    conversation_ids: conversationIds,
-  };
-
-  const response = await fetchWithRetry(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to assign conversations: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Get conversation examples
- */
-// Deprecated: getConversationExamples (stub)
-export async function getConversationExamples(
-  conversationId: number,
-  page: number = 1,
-  pageSize: number = 20,
-  isActive?: boolean,
-): Promise<{
-  examples: FeedMeExample[];
-  total_examples: number;
-  page: number;
-  page_size: number;
-  has_next: boolean;
-}> {
-  console.warn(
-    "[FeedMe API] getConversationExamples is deprecated (unified text flow). Returning empty.",
-    { conversationId, page, pageSize, isActive },
-  );
-  return {
-    examples: [],
-    total_examples: 0,
-    page,
-    page_size: pageSize,
-    has_next: false,
-  };
-}
-
-/**
- * Update an example
- */
-// Deprecated: updateExample (stub)
-export async function updateExample(
-  exampleId: number,
-  updates: Partial<FeedMeExample>,
-): Promise<FeedMeExample> {
-  console.warn(
-    "[FeedMe API] updateExample is deprecated (unified text flow). No-op.",
-    { exampleId, updates },
-  );
-  throw new Error(
-    "updateExample is deprecated and should not be used. Please use the unified text flow.",
-  );
-}
-
-/**
- * Delete an individual Q&A example
- */
-// Deprecated: deleteExample (stub)
-export async function deleteExample(exampleId: number): Promise<{
-  example_id: number;
-  conversation_id: number;
-  conversation_title: string;
-  question_preview: string;
-  message: string;
-}> {
-  console.warn(
-    "[FeedMe API] deleteExample is deprecated (unified text flow). No-op.",
-  );
-  // Return a proper response object with deprecation notice
-  return {
-    example_id: exampleId,
-    conversation_id: 0,
-    conversation_title: "Deprecated Function",
-    question_preview: "This function is deprecated",
-    message: "deleteExample is deprecated. Please use the unified text flow.",
-  };
-}
-
-// Folder API Functions
-
-/**
- * List all folders
- */
-export async function listFolders(): Promise<FolderListResponse> {
-  // Folder queries can be slower (DB aggregation)
-  const { timeout, retries } = TIMEOUT_CONFIGS.database;
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/folders`,
-    {},
-    retries,
-    timeout,
-    true,
-    "listFolders", // Deduplicate folder list requests
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to list folders: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Create a new folder
- */
-export async function createFolder(
-  request: CreateFolderRequest,
-): Promise<FeedMeFolder> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(request),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to create folder: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Update a folder
- */
-export async function updateFolder(
-  folderId: number,
-  request: UpdateFolderRequest,
-): Promise<FeedMeFolder> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/folders/${folderId}`,
-    {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to update folder: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Delete a folder
- */
-export async function deleteFolder(
-  folderId: number,
-): Promise<{ message: string }> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/folders/${folderId}`,
-    {
-      method: "DELETE",
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to delete folder: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}
-
-/**
- * Assign conversations to a folder
- */
-export async function assignConversationsToFolder(
-  folderId: number,
-  conversationIds: number[],
-): Promise<{ message: string; assigned_count: number }> {
-  const response = await fetchWithRetry(
-    `${FEEDME_API_BASE}/folders/${folderId}/conversations`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ conversation_ids: conversationIds }),
-    },
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail ||
-        `Failed to assign conversations to folder: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  return response.json();
-}

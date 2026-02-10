@@ -5,11 +5,14 @@ Analytics, usage statistics, and monitoring endpoints.
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import Dict, Any
+from datetime import datetime, timedelta, timezone
+import math
+from typing import Dict, Any, Optional
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from postgrest.base_request_builder import CountMethod
 
+from app.core.security import TokenPayload
 from app.core.settings import settings
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
 from app.db.supabase.client import get_supabase_client
@@ -21,15 +24,184 @@ from app.feedme.schemas import (
 )
 
 from .helpers import (
+    get_feedme_settings,
     get_feedme_supabase_client,
     get_conversation_by_id,
     update_conversation_status,
     supabase_client,
 )
+from .auth import require_feedme_admin
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["FeedMe"])
+COUNT_EXACT: CountMethod = CountMethod.exact
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+
+    rank = (len(sorted_values) - 1) * percentile
+    lower_index = int(math.floor(rank))
+    upper_index = int(math.ceil(rank))
+    if lower_index == upper_index:
+        return float(sorted_values[lower_index])
+    lower_value = sorted_values[lower_index]
+    upper_value = sorted_values[upper_index]
+    weight = rank - lower_index
+    return float(lower_value + (upper_value - lower_value) * weight)
+
+
+@router.get("/stats/overview", response_model=Dict[str, Any])
+async def get_feedme_stats_overview(
+    range_days: int = Query(7, ge=1, le=90, description="Relative time range in days"),
+    folder_id: Optional[int] = Query(None, description="Filter by folder id"),
+    os_category: Optional[str] = Query(
+        None, description="Filter by os_category (windows|macos|both|uncategorized)"
+    ),
+):
+    """Canonical FeedMe stats endpoint backed directly by DB truth."""
+    if not settings.feedme_enabled:
+        raise HTTPException(
+            status_code=503, detail="FeedMe service is currently disabled"
+        )
+
+    client = get_feedme_supabase_client()
+    if client is None:
+        raise HTTPException(
+            status_code=503, detail="FeedMe service is temporarily unavailable."
+        )
+
+    now = datetime.now(timezone.utc)
+    start_at = now - timedelta(days=range_days)
+    start_iso = start_at.isoformat()
+    end_iso = now.isoformat()
+
+    query = (
+        client.client.table("feedme_conversations")
+        .select(
+            "id,processing_status,processing_time_ms,os_category,created_at,updated_at,folder_id"
+        )
+        .gte("created_at", start_iso)
+        .lte("created_at", end_iso)
+    )
+
+    if folder_id is not None:
+        if folder_id == 0:
+            query = query.is_("folder_id", "null")
+        else:
+            query = query.eq("folder_id", folder_id)
+
+    if os_category:
+        query = query.eq("os_category", os_category)
+
+    conversations_response = await client._exec(lambda: query.execute())
+    rows = conversations_response.data or []
+
+    total_count = len(rows)
+    queue_depth = 0
+    failed_count = 0
+    latencies_ms: list[float] = []
+    os_distribution = {
+        "windows": 0,
+        "macos": 0,
+        "both": 0,
+        "uncategorized": 0,
+    }
+    warning_count = 0
+    breach_count = 0
+
+    settings_row = await get_feedme_settings()
+    sla_warning_minutes = int(settings_row.get("sla_warning_minutes") or 60)
+    sla_breach_minutes = int(settings_row.get("sla_breach_minutes") or 180)
+
+    for row in rows:
+        status = str(row.get("processing_status") or "pending").lower()
+        if status in {"pending", "processing"}:
+            queue_depth += 1
+        if status == "failed":
+            failed_count += 1
+
+        processing_time = row.get("processing_time_ms")
+        if isinstance(processing_time, (int, float)) and processing_time > 0:
+            latencies_ms.append(float(processing_time))
+
+        os_value = str(row.get("os_category") or "uncategorized").lower()
+        if os_value not in os_distribution:
+            os_value = "uncategorized"
+        os_distribution[os_value] += 1
+
+        if status in {"pending", "processing"}:
+            created_at_raw = row.get("created_at")
+            if isinstance(created_at_raw, str):
+                try:
+                    created_at = datetime.fromisoformat(
+                        created_at_raw.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    created_at = now
+                age_minutes = (now - created_at).total_seconds() / 60
+                if age_minutes >= sla_breach_minutes:
+                    breach_count += 1
+                elif age_minutes >= sla_warning_minutes:
+                    warning_count += 1
+
+    failure_rate = (failed_count / total_count * 100) if total_count > 0 else 0.0
+    p50_latency = _percentile(latencies_ms, 0.50)
+    p95_latency = _percentile(latencies_ms, 0.95)
+
+    assign_audit = await client._exec(
+        lambda: client.client.table("feedme_action_audit")
+        .select("id", count=COUNT_EXACT)
+        .eq("action", "assign_folder")
+        .gte("created_at", start_iso)
+        .lte("created_at", end_iso)
+        .execute()
+    )
+    kb_ready_audit = await client._exec(
+        lambda: client.client.table("feedme_action_audit")
+        .select("id", count=COUNT_EXACT)
+        .eq("action", "mark_ready_for_kb")
+        .gte("created_at", start_iso)
+        .lte("created_at", end_iso)
+        .execute()
+    )
+
+    assign_throughput = assign_audit.count or 0
+    kb_ready_throughput = kb_ready_audit.count or 0
+
+    return {
+        "time_range": {
+            "start_at": start_iso,
+            "end_at": end_iso,
+            "range_days": range_days,
+        },
+        "filters": {
+            "folder_id": folder_id,
+            "os_category": os_category,
+        },
+        "cards": {
+            "queue_depth": queue_depth,
+            "failure_rate": round(failure_rate, 2),
+            "p50_latency_ms": round(p50_latency, 2),
+            "p95_latency_ms": round(p95_latency, 2),
+            "assign_throughput": assign_throughput,
+            "kb_ready_throughput": kb_ready_throughput,
+            "sla_warning_count": warning_count,
+            "sla_breach_count": breach_count,
+        },
+        "os_distribution": os_distribution,
+        "sla_thresholds": {
+            "warning_minutes": sla_warning_minutes,
+            "breach_minutes": sla_breach_minutes,
+        },
+        "total_conversations": total_count,
+        "generated_at": now.isoformat(),
+    }
 
 
 @router.get("/analytics/pdf-storage", response_model=Dict[str, Any])
@@ -77,7 +249,10 @@ async def get_pdf_storage_analytics():
 
 
 @router.post("/cleanup/pdfs/batch", response_model=Dict[str, Any])
-async def trigger_pdf_cleanup_batch(limit: int = 100):
+async def trigger_pdf_cleanup_batch(
+    limit: int = 100,
+    current_user: TokenPayload = Depends(require_feedme_admin),
+):
     """Trigger batch cleanup of approved PDFs."""
     if not settings.feedme_enabled:
         raise HTTPException(
@@ -150,7 +325,9 @@ async def get_analytics():
 
 @router.post("/conversations/{conversation_id}/reprocess")
 async def reprocess_conversation(
-    conversation_id: int, background_tasks: BackgroundTasks
+    conversation_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(require_feedme_admin),
 ):
     """Schedules reprocessing of a conversation to extract examples."""
     if not settings.feedme_enabled:
@@ -280,60 +457,6 @@ async def get_embedding_usage():
     except Exception as e:
         logger.error(f"Error fetching embedding usage: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch usage statistics")
-
-
-@router.delete("/examples/{example_id}", response_model=Dict[str, Any])
-async def delete_example(example_id: int):
-    """Delete a specific Q&A example."""
-    if not settings.feedme_enabled:
-        raise HTTPException(
-            status_code=503, detail="FeedMe service is currently disabled"
-        )
-
-    try:
-        client = get_supabase_client()
-
-        example = await client.get_example_with_conversation(example_id)
-        if not example:
-            raise HTTPException(status_code=404, detail="Example not found")
-
-        # Save data before deletion for response
-        conversation_id = example.get("conversation_id")
-        conversation_title = example.get("conversation_title", "Unknown")
-        question_text = example.get("question_text", "")
-
-        success = await client.delete_example(example_id)
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to delete example")
-
-        # Update count - log but don't fail if this fails
-        try:
-            if isinstance(conversation_id, int):
-                await client.update_conversation_example_count(conversation_id)
-        except Exception as count_err:
-            logger.warning(
-                f"Failed to update example count for conversation {conversation_id}: {count_err}"
-            )
-
-        logger.info(f"Deleted example {example_id} from conversation {conversation_id}")
-
-        question_preview = (
-            question_text[:100] + "..." if len(question_text) > 100 else question_text
-        )
-
-        return {
-            "example_id": example_id,
-            "conversation_id": conversation_id,
-            "conversation_title": conversation_title,
-            "question_preview": question_preview,
-            "message": "Successfully deleted Q&A example",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete example {example_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete example")
 
 
 @router.get("/health")

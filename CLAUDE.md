@@ -99,6 +99,56 @@ The backend follows a modular agent-based architecture:
   - OCR (Tesseract, EasyOCR) as fallback only when Gemini processing fails
   - Multi-modal content handling
 
+### Feed Me Hardening Snapshot (Feb 2026)
+
+- **Schema/migrations**: added `app/db/migrations/040_feedme_single_release_hardening.sql` with additive Feed Me changes:
+  - `os_category` normalization (`windows|macos|both|uncategorized`)
+  - `upload_sha256` duplicate detection indexes
+  - `feedme_settings`, `feedme_action_audit`, `feedme_conversation_versions`
+  - deterministic version-history backfill.
+- **Authorization**: mutation endpoints now use JWT role-claim admin guard (`app/api/v1/endpoints/feedme/auth.py`), while read endpoints remain open.
+- **Upload contract**: `POST /api/v1/feedme/conversations/upload` now performs 30-day SHA-256 duplicate detection and returns deterministic duplicate payloads for “open existing” UX.
+- **Workflow endpoints**:
+  - `POST /feedme/conversations/{id}/mark-ready` (OS-required, KB setting required, confirm move support)
+  - `POST /feedme/conversations/{id}/ai-note/regenerate`
+  - `GET/PUT /feedme/settings`.
+- **Stats endpoint**: `GET /feedme/stats/overview` provides canonical DB-backed metrics (queue depth, failure rate, p50/p95 latency, assign throughput, KB-ready throughput, OS distribution, SLA warning/breach counters) with time/folder/OS filters.
+- **Folder assignment**: `POST /feedme/folders/assign` enforces max 50 IDs, standardized `assigned_count`, and partial-failure reporting.
+- **Versioning**: `app/feedme/versioning_service.py` now uses persisted `feedme_conversation_versions` for coherent list/get/diff/edit/revert behavior.
+- **Model fallback**:
+  - PDF extraction fallback in `app/feedme/processors/gemini_pdf_processor.py`
+  - AI tag/note generation fallback in `app/feedme/tasks.py`
+  - fallback target model: `gemini-2.5-flash-preview-09-2025`.
+- **Frontend alignment**:
+  - canonical API client cleanup in `frontend/src/features/feedme/services/feedme-api.ts` with auth headers on mutation/admin calls
+  - duplicate upload handling with open-existing flow
+  - manual refresh in unassigned view (auto-poll removed)
+  - folder bulk move confirm + partial-failure feedback
+  - sidebar note autosave at 1.5s debounce + blur, regenerate/mark-ready wiring, admin-action gating
+  - stats popover moved to `/feedme/stats/overview` with OS/folder/range filters, SLA indicators, and admin settings panel.
+- **Deprecated cleanup**:
+  - removed unreferenced legacy components:
+    - `frontend/src/features/feedme/components/FeedMeConversationManager.tsx`
+    - `frontend/src/features/feedme/components/ConversationCard.tsx`
+  - removed deprecated example-oriented backend routes from Feed Me conversations/analytics endpoints.
+- **Reliability + E2E follow-up (Feb 10, 2026)**:
+  - Applied `app/db/migrations/040_feedme_single_release_hardening.sql` on the active DB (unblocked `/feedme/settings` and audit/version persistence paths).
+  - Fixed rate-limiter lifecycle issues across prefork/threaded execution by scoping limiter singletons per process/thread in `app/core/rate_limiting/agent_wrapper.py`.
+  - Added rate-limiter fail-open fallbacks for Feed Me processing when Redis/loop state is temporarily unavailable:
+    - `app/feedme/processors/gemini_pdf_processor.py`
+    - `app/feedme/tasks.py`
+  - Updated `POST /feedme/conversations/{id}/ai-note/regenerate` to run sync task logic in a threadpool (`run_in_threadpool`) to avoid async loop conflicts.
+  - Ensured extraction provenance metadata is persisted (`extraction_info`, `extraction_method`) when writing processed conversation metadata.
+  - Fixed FeedMe-only search semantics in `app/tools/feedme_knowledge.py` so `search_sources=['feedme']` does not leak KB/web results.
+  - Fixed a status-transition race in `app/feedme/tasks.py` where conversations could temporarily report `completed` before embedding/note finalization; processing now remains `processing` until downstream completion updates.
+  - Added AI-note readiness hardening in `app/feedme/tasks.py`: embedding finalization performs best-effort inline note generation if missing, and AI tagging now retries on task-level failures via Celery retry.
+  - Completed real API E2E validation against provided sample PDFs (with modified copies for fresh hashes): upload/duplicate detection, processing/models, note generation, stats parity, folder + KB workflows, embeddings, and retrieval. Latest clean verified run: conversations `157/158/159` with full chunk embedding coverage and `0` failed steps in `/private/tmp/feedme_e2e_latest_report.json`.
+  - Added frontend supersede-safe request handling: `isSupersededRequestError` now prevents intentional abort/replacement events from surfacing as blocking errors in folder/unassigned dialogs.
+  - Hardened `FolderConversationsDialog` fetch concurrency with an in-flight guard + stale-response protection to avoid strict-mode double-fetch races.
+  - Polished folder modal UI: refresh/close actions are grouped, bulk controls are centered for cleaner visual balance, and selection checkbox spacing/size no longer crowds the conversation icon.
+  - Synced glow effect integration with official Aceternity-style settings and resolved lint drift in the generated `frontend/src/components/ui/glowing-effect.tsx`.
+  - Verified cleanup state after testing: no Feed Me test folders/conversations remain and no `feedme_e2e_*.pdf` files remain in `~/Downloads`.
+
 - **Database** (`app/db/`):
   - Supabase client and models
   - Vector embeddings for semantic search

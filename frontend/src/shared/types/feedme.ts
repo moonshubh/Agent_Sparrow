@@ -8,6 +8,7 @@ export interface ConversationMetadata {
   tags?: string[];
   ai_note?: string;
   ai_comment?: string;
+  ai_note_updated_at?: string;
   review_status?: "ready" | "pending" | "reviewed";
   ticket_id?: string;
   processing_tracker?: {
@@ -23,6 +24,7 @@ export interface ConversationDetail {
   id: number;
   title: string;
   extracted_text?: string;
+  os_category?: PlatformTag | "uncategorized";
   processing_status:
     | "pending"
     | "processing"
@@ -30,7 +32,7 @@ export interface ConversationDetail {
     | "failed"
     | "cancelled";
   processing_method?: string;
-  approval_status?: "pending" | "approved" | "rejected";
+  approval_status?: "pending" | "approved" | "rejected" | "awaiting_review";
   metadata?: ConversationMetadata;
   folder_id?: number | null;
   uploaded_by?: string | null;

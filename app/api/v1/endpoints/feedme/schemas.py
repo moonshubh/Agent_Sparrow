@@ -7,7 +7,7 @@ Core schemas are imported from app.feedme.schemas.
 
 from typing import List, Optional
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class FeedMeFolder(BaseModel):
@@ -47,6 +47,14 @@ class AssignFolderRequest(BaseModel):
 
     folder_id: Optional[int] = None  # None to remove from folder
     conversation_ids: List[int]
+
+    @field_validator("conversation_ids")
+    def validate_conversation_ids(cls, values: List[int]) -> List[int]:
+        if not values:
+            raise ValueError("At least one conversation id is required")
+        if len(values) > 50:
+            raise ValueError("Maximum 50 conversation ids can be assigned per request")
+        return values
 
 
 class FolderListResponse(BaseModel):

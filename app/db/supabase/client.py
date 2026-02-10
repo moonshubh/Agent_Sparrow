@@ -24,6 +24,16 @@ from app.core.settings import settings
 logger = logging.getLogger(__name__)
 
 COUNT_EXACT: CountMethod = CountMethod.exact
+FEEDME_CONVERSATION_LIST_COLUMNS = (
+    "id,uuid,title,original_filename,extracted_text,processing_method,"
+    "extraction_confidence,metadata,uploaded_by,approved_by,approved_at,"
+    "os_category,folder_id,upload_sha256,mime_type,pages,pdf_metadata,"
+    "processing_status,processing_started_at,processing_completed_at,"
+    "processing_time_ms,error_message,approval_status,total_examples,"
+    "quality_score,version,"
+    "high_quality_examples,medium_quality_examples,low_quality_examples,"
+    "created_at,updated_at"
+)
 
 
 class SupabaseConfig:
@@ -618,6 +628,8 @@ class SupabaseClient:
         pages: Optional[int] = None,
         pdf_metadata: Optional[Dict] = None,
         processing_method: Optional[str] = None,
+        upload_sha256: Optional[str] = None,
+        os_category: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new conversation"""
         try:
@@ -634,6 +646,8 @@ class SupabaseClient:
                 "pdf_metadata": pdf_metadata,
                 # Include processing method to avoid NULLs that break Pydantic enum validation
                 "processing_method": processing_method or "pdf_ai",
+                "upload_sha256": upload_sha256,
+                "os_category": os_category or "uncategorized",
             }
 
             response = await self._exec(
@@ -707,9 +721,14 @@ class SupabaseClient:
             Dict containing conversations list and pagination info
         """
         try:
-            query = self.client.table("feedme_conversations").select("*")
+            # Avoid selecting `raw_transcript` for list views; it can contain large
+            # base64 payloads and significantly slow pagination requests.
+            query = self.client.table("feedme_conversations").select(
+                FEEDME_CONVERSATION_LIST_COLUMNS
+            )
+            # Count-only query: use head=True to avoid returning all matching rows.
             count_query = self.client.table("feedme_conversations").select(
-                "id", count=COUNT_EXACT
+                "id", count=COUNT_EXACT, head=True
             )
 
             # Apply filters
@@ -1633,9 +1652,14 @@ class SupabaseClient:
             offset = (page - 1) * page_size
 
             # Build the query
-            query = self.client.table("feedme_conversations").select("*")
+            # Avoid selecting `raw_transcript` for list views; it can contain large
+            # base64 payloads and significantly slow pagination requests.
+            query = self.client.table("feedme_conversations").select(
+                FEEDME_CONVERSATION_LIST_COLUMNS
+            )
+            # Count-only query: use head=True to avoid returning all matching rows.
             count_query = self.client.table("feedme_conversations").select(
-                "id", count=COUNT_EXACT
+                "id", count=COUNT_EXACT, head=True
             )
 
             # Apply filters

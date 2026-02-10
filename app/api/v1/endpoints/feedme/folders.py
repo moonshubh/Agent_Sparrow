@@ -5,13 +5,13 @@ Folder management operations for organizing conversations.
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from postgrest.base_request_builder import CountMethod
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.core.security import TokenPayload
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
 from app.feedme.security import (
@@ -30,7 +30,13 @@ from .schemas import (
     FolderListResponse,
     AssignFolderRequest,
 )
-from .helpers import get_feedme_supabase_client, supabase_client
+from .helpers import (
+    get_feedme_settings,
+    get_feedme_supabase_client,
+    record_feedme_action_audit,
+    supabase_client,
+)
+from .auth import require_feedme_admin
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +109,11 @@ async def list_folders():
 
 @router.post("/folders", response_model=FeedMeFolder)
 @limiter.limit("30/minute")
-async def create_folder(request: Request, folder_data: FolderCreate):
+async def create_folder(
+    request: Request,
+    folder_data: FolderCreate,
+    current_user: TokenPayload = Depends(require_feedme_admin),
+):
     """Create a new folder for organizing conversations."""
     if not settings.feedme_enabled:
         raise HTTPException(
@@ -161,6 +171,12 @@ async def create_folder(request: Request, folder_data: FolderCreate):
 
         folder_result["conversation_count"] = 0
         logger.info(f"Created folder: {folder_data.name}")
+        await record_feedme_action_audit(
+            action="create_folder",
+            actor_id=current_user.sub,
+            folder_id=folder_result.get("id"),
+            after_state=folder_result,
+        )
         return FeedMeFolder(**folder_result)
 
     except HTTPException:
@@ -171,7 +187,11 @@ async def create_folder(request: Request, folder_data: FolderCreate):
 
 
 @router.put("/folders/{folder_id}", response_model=FeedMeFolder)
-async def update_folder(folder_id: int, folder_data: FolderUpdate):
+async def update_folder(
+    folder_id: int,
+    folder_data: FolderUpdate,
+    current_user: TokenPayload = Depends(require_feedme_admin),
+):
     """Update an existing folder's name, color, or description."""
     if not settings.feedme_enabled:
         raise HTTPException(
@@ -255,6 +275,13 @@ async def update_folder(folder_id: int, folder_data: FolderUpdate):
         )
 
         updated_folder["conversation_count"] = count_response.count or 0
+        await record_feedme_action_audit(
+            action="update_folder",
+            actor_id=current_user.sub,
+            folder_id=folder_id,
+            before_state=existing_folder,
+            after_state=updated_folder,
+        )
         logger.info(f"Updated folder {folder_id}")
         return FeedMeFolder(**updated_folder)
 
@@ -271,8 +298,9 @@ async def delete_folder(
     move_conversations_to: Optional[int] = Query(
         None, description="Folder ID to move conversations to"
     ),
+    current_user: TokenPayload = Depends(require_feedme_admin),
 ):
-    """Delete a folder and optionally move its conversations."""
+    """Delete a folder (blocked when the folder contains conversations)."""
     if not settings.feedme_enabled:
         raise HTTPException(
             status_code=503, detail="FeedMe service is currently disabled"
@@ -303,31 +331,30 @@ async def delete_folder(
 
         conversation_count = count_response.count or 0
 
-        if move_conversations_to is not None:
-            target_folder_response = await client._exec(
-                lambda: client.client.table("feedme_folders")
-                .select("id")
-                .eq("id", move_conversations_to)
-                .execute()
+        settings_row = await get_feedme_settings()
+        kb_folder_id = settings_row.get("kb_ready_folder_id")
+        if isinstance(kb_folder_id, int) and kb_folder_id == folder_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Configured KB folder cannot be deleted. Update FeedMe settings first.",
             )
 
-            if not target_folder_response.data:
-                raise HTTPException(status_code=404, detail="Target folder not found")
-
         if conversation_count > 0:
-            await client._exec(
-                lambda: client.client.table("feedme_conversations")
-                .update(
-                    {
-                        "folder_id": move_conversations_to,
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
-                .eq("folder_id", folder_id)
-                .execute()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Folder contains {conversation_count} conversation(s). "
+                    "Move conversations out before deletion."
+                ),
             )
 
         await client.delete_folder(folder_id)
+        await record_feedme_action_audit(
+            action="delete_folder",
+            actor_id=current_user.sub,
+            folder_id=folder_id,
+            before_state=folder,
+        )
         logger.info(
             f"Deleted folder {folder_id}, moved {conversation_count} conversations"
         )
@@ -335,7 +362,7 @@ async def delete_folder(
         return {
             "folder_id": folder_id,
             "folder_name": folder["name"],
-            "conversations_moved": conversation_count,
+            "conversations_moved": 0,
             "moved_to_folder_id": move_conversations_to,
             "message": f"Folder '{folder['name']}' deleted successfully",
         }
@@ -348,7 +375,10 @@ async def delete_folder(
 
 
 @router.post("/folders/assign")
-async def assign_conversations_to_folder(assign_request: AssignFolderRequest):
+async def assign_conversations_to_folder(
+    assign_request: AssignFolderRequest,
+    current_user: TokenPayload = Depends(require_feedme_admin),
+):
     """Assign multiple conversations to a folder or remove them from folders."""
     if not settings.feedme_enabled:
         raise HTTPException(
@@ -357,68 +387,83 @@ async def assign_conversations_to_folder(assign_request: AssignFolderRequest):
 
     try:
         client = get_supabase_client()
+        requested_ids = list(dict.fromkeys(assign_request.conversation_ids))
+        if len(requested_ids) > 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Maximum 50 conversation ids can be assigned per request",
+            )
 
+        target_folder_id = assign_request.folder_id
+        effective_folder_id = None if target_folder_id == 0 else target_folder_id
         folder_name = None
-        if assign_request.folder_id is not None:
+        if effective_folder_id is not None:
             folder_response = await client._exec(
                 lambda: client.client.table("feedme_folders")
                 .select("name")
-                .eq("id", assign_request.folder_id)
+                .eq("id", effective_folder_id)
                 .execute()
             )
 
             if not folder_response.data:
                 raise HTTPException(status_code=404, detail="Folder not found")
             folder_name = folder_response.data[0]["name"]
-
-        if assign_request.conversation_ids:
-            conversations_response = await client._exec(
-                lambda: client.client.table("feedme_conversations")
-                .select("id")
-                .in_("id", assign_request.conversation_ids)
-                .eq("is_active", True)
-                .execute()
-            )
-
-            existing_ids = [row["id"] for row in conversations_response.data]
-            missing_ids = set(assign_request.conversation_ids) - set(existing_ids)
-
-            if missing_ids:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Conversations not found: {list(missing_ids)}",
-                )
-
-            await client.bulk_assign_conversations_to_folder(
-                conversation_ids=assign_request.conversation_ids,
-                folder_id=assign_request.folder_id,
-            )
-
-            updated_count = len(existing_ids)
-            action = (
-                f"assigned to folder '{folder_name}'"
-                if folder_name
-                else "removed from folders"
-            )
-            logger.info(f"Successfully {action} {updated_count} conversations")
-
-            return {
-                "folder_id": assign_request.folder_id,
-                "folder_name": folder_name,
-                "conversation_ids": existing_ids,
-                "updated_count": updated_count,
-                "action": action,
-                "message": f"Successfully {action} {updated_count} conversations",
-            }
         else:
-            return {
-                "folder_id": assign_request.folder_id,
-                "folder_name": folder_name,
-                "conversation_ids": [],
-                "updated_count": 0,
-                "action": "no conversations provided",
-                "message": "No conversations were provided for assignment",
-            }
+            folder_name = "Unassigned"
+
+        conversations_response = await client._exec(
+            lambda: client.client.table("feedme_conversations")
+            .select("id,folder_id")
+            .in_("id", requested_ids)
+            .execute()
+        )
+        existing_by_id: dict[int, dict[str, Any]] = {
+            int(row["id"]): row for row in (conversations_response.data or [])
+        }
+        failed: list[dict[str, Any]] = []
+        assignable_ids: list[int] = []
+        for conversation_id in requested_ids:
+            if conversation_id not in existing_by_id:
+                failed.append({"conversation_id": conversation_id, "reason": "not_found"})
+                continue
+            assignable_ids.append(conversation_id)
+
+        if assignable_ids:
+            await client.bulk_assign_conversations_to_folder(
+                conversation_ids=assignable_ids,
+                folder_id=effective_folder_id,
+            )
+        assigned_count = len(assignable_ids)
+        requested_count = len(requested_ids)
+        action = (
+            f"assigned to folder '{folder_name}'"
+            if effective_folder_id is not None
+            else "removed from folders"
+        )
+        await record_feedme_action_audit(
+            action="assign_folder",
+            actor_id=current_user.sub,
+            folder_id=effective_folder_id,
+            after_state={
+                "folder_id": effective_folder_id,
+                "assigned_count": assigned_count,
+                "requested_count": requested_count,
+                "failed": failed,
+            },
+        )
+        logger.info("Folder assignment completed: %s/%s", assigned_count, requested_count)
+
+        return {
+            "folder_id": effective_folder_id,
+            "folder_name": folder_name,
+            "conversation_ids": assignable_ids,
+            "assigned_count": assigned_count,
+            "requested_count": requested_count,
+            "failed": failed,
+            "partial_success": bool(failed),
+            "action": action,
+            "message": f"Assigned {assigned_count} of {requested_count} conversation(s)",
+        }
 
     except HTTPException:
         raise

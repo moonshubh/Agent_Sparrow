@@ -7,6 +7,8 @@ Handles file upload and transcript processing initiation.
 import logging
 import os
 import base64
+import hashlib
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import (
@@ -17,9 +19,13 @@ from fastapi import (
     Form,
     BackgroundTasks,
     Request,
+    Response,
+    Depends,
+    status,
 )
 
 from app.core.settings import settings
+from app.core.security import TokenPayload
 from app.feedme.security import (
     SecureTitleModel,
     FileUploadValidator,
@@ -38,8 +44,11 @@ from app.feedme.schemas import (
 
 from .helpers import (
     create_conversation_in_db,
+    get_feedme_supabase_client,
+    record_feedme_action_audit,
     update_conversation_status,
 )
+from .auth import require_feedme_admin
 
 logger = logging.getLogger(__name__)
 audit_logger = SecurityAuditLogger()
@@ -53,6 +62,7 @@ router = APIRouter(tags=["FeedMe"])
 @limiter.limit("10/minute")
 async def upload_transcript(
     request: Request,
+    response: Response,
     background_tasks: BackgroundTasks,
     title: str = Form(..., description="Conversation title"),
     uploaded_by: Optional[str] = Form(
@@ -64,6 +74,7 @@ async def upload_transcript(
     transcript_file: Optional[UploadFile] = File(
         None, description="PDF file to upload"
     ),
+    current_user: TokenPayload = Depends(require_feedme_admin),
 ):
     """
     Uploads a customer support transcript for ingestion.
@@ -112,9 +123,8 @@ async def upload_transcript(
     filename = transcript_file.filename
     content_type = transcript_file.content_type
 
-    # Read file content
+    # Read file content once for validation + duplicate hashing
     file_content = await transcript_file.read()
-    await transcript_file.seek(0)
 
     # Validate file using security validator
     is_valid, error_msg = FileUploadValidator.validate_file(
@@ -130,6 +140,7 @@ async def upload_transcript(
         raise HTTPException(status_code=400, detail=message)
 
     original_filename = SecurityValidator.sanitize_filename(filename)
+    upload_sha256 = hashlib.sha256(file_content).hexdigest()
 
     # Validate file size
     if len(file_content) > settings.feedme_max_file_size_mb * 1024 * 1024:
@@ -163,7 +174,7 @@ async def upload_transcript(
 
     # Process file content
     try:
-        content_bytes = await transcript_file.read()
+        content_bytes = file_content
         # Note: original_filename already sanitized above
 
         if not is_pdf_file:
@@ -189,6 +200,54 @@ async def upload_transcript(
         )
 
     initial_method = ProcessingMethod.PDF_AI
+    uploaded_by = uploaded_by or current_user.sub
+
+    # Duplicate detection window: 30 days by content hash.
+    client = get_feedme_supabase_client()
+    if client is None:
+        raise HTTPException(
+            status_code=503, detail="FeedMe service is temporarily unavailable."
+        )
+    duplicate_window_start = (
+        datetime.now(timezone.utc) - timedelta(days=30)
+    ).isoformat()
+    duplicate_response = await client._exec(
+        lambda: client.client.table("feedme_conversations")
+        .select("id,processing_status,created_at")
+        .eq("upload_sha256", upload_sha256)
+        .gte("created_at", duplicate_window_start)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if duplicate_response.data:
+        duplicate = duplicate_response.data[0]
+        duplicate_id = int(duplicate["id"])
+        status_raw = str(duplicate.get("processing_status") or "pending")
+        processing_status = (
+            ProcessingStatus(status_raw)
+            if status_raw in {s.value for s in ProcessingStatus}
+            else ProcessingStatus.PENDING
+        )
+        await record_feedme_action_audit(
+            action="upload_duplicate_detected",
+            actor_id=current_user.sub,
+            conversation_id=duplicate_id,
+            after_state={
+                "duplicate_conversation_id": duplicate_id,
+                "upload_sha256": upload_sha256,
+                "duplicate_created_at": duplicate.get("created_at"),
+            },
+        )
+        response.status_code = status.HTTP_200_OK
+        return ConversationUploadResponse(
+            message="Duplicate PDF detected. Reusing existing conversation.",
+            conversation_id=duplicate_id,
+            processing_status=processing_status,
+            duplicate=True,
+            duplicate_conversation_id=duplicate_id,
+            upload_sha256=upload_sha256,
+        )
 
     conversation_data = ConversationCreate(
         title=title,
@@ -207,7 +266,21 @@ async def upload_transcript(
     )
 
     try:
-        conversation = await create_conversation_in_db(conversation_data)
+        conversation = await create_conversation_in_db(
+            conversation_data,
+            upload_sha256=upload_sha256,
+            os_category="uncategorized",
+        )
+        await record_feedme_action_audit(
+            action="upload_conversation",
+            actor_id=current_user.sub,
+            conversation_id=conversation.id,
+            after_state={
+                "title": conversation.title,
+                "upload_sha256": upload_sha256,
+                "original_filename": original_filename,
+            },
+        )
 
         if auto_process:
             background_tasks.add_task(
@@ -220,6 +293,8 @@ async def upload_transcript(
             message="Conversation upload accepted for processing.",
             conversation_id=conversation.id,
             processing_status=conversation.processing_status,
+            duplicate=False,
+            upload_sha256=upload_sha256,
         )
 
     except HTTPException:

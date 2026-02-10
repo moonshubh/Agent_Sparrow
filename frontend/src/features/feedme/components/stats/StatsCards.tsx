@@ -1,524 +1,162 @@
-/**
- * StatsCards Components - Clean Redesign
- *
- * Modern, minimalist stat cards with appropriate visualizations
- * for each type of statistic.
- */
+'use client';
 
-"use client";
-
-import React from "react";
-import { motion } from "motion/react";
-import { cn } from "@/shared/lib/utils";
-import { Skeleton } from "@/shared/ui/skeleton";
+import React from 'react';
+import { motion } from 'motion/react';
+import { Skeleton } from '@/shared/ui/skeleton';
+import { Badge } from '@/shared/ui/badge';
+import { GlowingEffect } from '@/shared/ui/glowing-effect';
 import {
-  MessageSquare,
-  Activity,
-  Zap,
-  Database,
-  Heart,
-  TrendingUp,
-  Clock,
+  AlertTriangle,
   CheckCircle2,
-  XCircle,
-  Loader2,
-} from "lucide-react";
-import type {
-  ConversationStats,
-  ProcessingMetrics,
-  ApiUsage,
-  SystemHealth,
-} from "@/features/feedme/hooks/use-stats-data";
+  Clock3,
+  Gauge,
+  Layers3,
+  ListChecks,
+  Timer,
+} from 'lucide-react';
+import type { FeedMeStatsOverviewResponse } from '@/features/feedme/services/feedme-api';
 
-// Shared card wrapper component
-interface StatCardProps {
-  label: string;
-  value: string | number;
+interface CardProps {
+  title: string;
+  value: string;
   subtitle?: string;
   icon: React.ReactNode;
+  delay?: number;
   children?: React.ReactNode;
-  className?: string;
-  animationDelay?: number;
-  accentColor?: string;
 }
 
-function StatCard({
-  label,
-  value,
-  subtitle,
-  icon,
-  children,
-  className,
-  animationDelay = 0,
-  accentColor = "hsl(200.4 98% 38%)",
-}: StatCardProps) {
+function StatCard({ title, value, subtitle, icon, delay = 0, children }: CardProps) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{
-        duration: 0.4,
-        delay: animationDelay,
-        ease: [0.4, 0, 0.2, 1],
-      }}
-      className={cn(
-        "relative rounded-xl p-5",
-        "bg-card border border-border",
-        "shadow-sm hover:shadow-md transition-shadow duration-200",
-        className,
-      )}
+      transition={{ duration: 0.25, delay }}
+      className="group relative min-h-[12.5rem] rounded-2xl p-1.5 transition-all duration-300 hover:-translate-y-1"
     >
-      {/* Header with icon */}
-      <div className="flex items-center justify-between mb-3">
-        <span
-          className="text-xs font-medium uppercase tracking-wide"
-          style={{ color: accentColor }}
-        >
-          {label}
-        </span>
-        <div
-          className="p-1.5 rounded-lg flex items-center justify-center"
-          style={{ backgroundColor: `${accentColor}15`, color: accentColor }}
-        >
-          {icon}
+      <GlowingEffect
+        blur={0}
+        borderWidth={3}
+        spread={80}
+        glow={true}
+        disabled={false}
+        proximity={64}
+        inactiveZone={0.01}
+      />
+      <div className="relative flex h-full flex-col justify-between gap-3 overflow-hidden rounded-2xl bg-card/95 p-4 shadow-none">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
+          <span className="text-muted-foreground">{icon}</span>
         </div>
+        <p className="text-2xl font-semibold tabular-nums">{value}</p>
+        {subtitle ? <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p> : null}
+        {children ? <div className="mt-3">{children}</div> : null}
       </div>
-
-      {/* Main value */}
-      <div className="text-3xl font-bold text-foreground tabular-nums">
-        {value}
-      </div>
-
-      {/* Subtitle */}
-      {subtitle && (
-        <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
-      )}
-
-      {/* Custom content (charts, etc.) */}
-      {children && <div className="mt-4">{children}</div>}
     </motion.div>
   );
 }
 
-// Simple progress bar component
-interface ProgressBarProps {
-  value: number;
-  max?: number;
-  color?: string;
-  showLabel?: boolean;
-  size?: "sm" | "md";
-}
-
-function ProgressBar({
-  value,
-  max = 100,
-  color = "hsl(200.4 98% 38%)",
-  showLabel = true,
-  size = "sm",
-}: ProgressBarProps) {
-  // Protect against division by zero
-  const percentage =
-    max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
-  const height = size === "sm" ? "h-1.5" : "h-2.5";
-
-  return (
-    <div className="space-y-1">
-      <div
-        className={cn("w-full bg-muted rounded-full overflow-hidden", height)}
-      >
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${percentage}%` }}
-          transition={{ duration: 0.8, ease: "easeOut" }}
-          className={cn("h-full rounded-full", height)}
-          style={{ backgroundColor: color }}
-        />
-      </div>
-      {showLabel && (
-        <div className="flex justify-between text-xs text-muted-foreground">
-          <span>{value.toLocaleString()}</span>
-          <span>{max.toLocaleString()}</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Mini bar chart for status breakdown
-interface MiniBarChartProps {
-  data: { label: string; value: number; color: string }[];
-}
-
-function MiniBarChart({ data }: MiniBarChartProps) {
-  const maxValue = Math.max(...data.map((d) => d.value), 1);
-
-  return (
-    <div className="flex items-end gap-1.5 h-10">
-      {data.map((item, index) => (
-        <motion.div
-          key={item.label}
-          initial={{ height: 0 }}
-          animate={{ height: `${Math.max(4, (item.value / maxValue) * 100)}%` }}
-          transition={{ duration: 0.5, delay: index * 0.1 }}
-          className="flex-1 rounded-t"
-          style={{ backgroundColor: item.color }}
-          title={`${item.label}: ${item.value}`}
-        />
-      ))}
-    </div>
-  );
-}
-
-// Loading skeleton
 export function StatsCardSkeleton() {
   return (
-    <div className="rounded-xl p-5 bg-card border border-border">
-      <div className="flex items-center justify-between mb-3">
-        <Skeleton className="h-3 w-20" />
-        <Skeleton className="h-7 w-7 rounded-lg" />
-      </div>
-      <Skeleton className="h-9 w-24 mb-2" />
-      <Skeleton className="h-3 w-32 mb-4" />
-      <Skeleton className="h-2 w-full rounded-full" />
+    <div className="rounded-xl border border-border bg-card p-4">
+      <Skeleton className="mb-3 h-3 w-24" />
+      <Skeleton className="mb-2 h-8 w-20" />
+      <Skeleton className="h-3 w-28" />
     </div>
   );
 }
 
-// ==========================================
-// Conversation Stats Card
-// ==========================================
-interface ConversationStatsCardProps {
-  data: ConversationStats;
-  className?: string;
-  animationDelay?: number;
+interface OverviewCardsProps {
+  overview: FeedMeStatsOverviewResponse;
 }
 
-export function ConversationStatsCard({
-  data,
-  className,
-  animationDelay = 0,
-}: ConversationStatsCardProps) {
-  // Show all relevant statuses, with awaiting review being the most common state
-  const statusData = [
-    {
-      label: "Awaiting Review",
-      value: data.byStatus.awaitingReview,
-      color: "hsl(280 60% 55%)",
-    },
-    {
-      label: "Pending",
-      value: data.byStatus.pending,
-      color: "hsl(40 90% 50%)",
-    },
-    {
-      label: "Processing",
-      value: data.byStatus.processing,
-      color: "hsl(200.4 98% 50%)",
-    },
-    {
-      label: "Approved",
-      value: data.byStatus.approved,
-      color: "hsl(135 45% 45%)",
-    },
-    {
-      label: "Rejected",
-      value: data.byStatus.rejected,
-      color: "hsl(0 70% 50%)",
-    },
-  ];
+export function OverviewCards({ overview }: OverviewCardsProps) {
+  const cards = overview.cards;
 
-  // Filter to only show statuses with values > 0 for cleaner display
-  const activeStatusData = statusData.filter((item) => item.value > 0);
-  // If all are zero, show all statuses
-  const displayData =
-    activeStatusData.length > 0 ? activeStatusData : statusData;
+  const warningCount = cards.sla_warning_count;
+  const breachCount = cards.sla_breach_count;
+  const slaStatus = breachCount > 0 ? 'breach' : warningCount > 0 ? 'warning' : 'healthy';
 
   return (
-    <StatCard
-      label="Conversations"
-      value={data.total.toLocaleString()}
-      subtitle="Total in system"
-      icon={<MessageSquare />}
-      animationDelay={animationDelay}
-      accentColor="hsl(200.4 98% 38%)"
-      className={className}
-    >
-      <div className="space-y-3">
-        {/* Status breakdown mini chart */}
-        <MiniBarChart data={displayData} />
+    <>
+      <StatCard
+        title="Queue Depth"
+        value={String(cards.queue_depth)}
+        subtitle="Pending or processing"
+        icon={<Layers3 className="h-4 w-4" />}
+      />
 
-        {/* Status legend */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-          {displayData.map((item) => (
-            <div key={item.label} className="flex items-center gap-1.5">
-              <div
-                className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: item.color }}
-              />
-              <span className="text-muted-foreground">{item.label}:</span>
-              <span className="font-medium text-foreground">{item.value}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </StatCard>
-  );
-}
+      <StatCard
+        title="Failure Rate"
+        value={`${cards.failure_rate.toFixed(2)}%`}
+        subtitle="Within selected window"
+        icon={<Gauge className="h-4 w-4" />}
+        delay={0.04}
+      />
 
-// ==========================================
-// Processing Metrics Card
-// ==========================================
-interface ProcessingMetricsCardProps {
-  data: ProcessingMetrics;
-  className?: string;
-  animationDelay?: number;
-}
+      <StatCard
+        title="Latency"
+        value={`${Math.round(cards.p95_latency_ms)} ms`}
+        subtitle={`p50 ${Math.round(cards.p50_latency_ms)} ms`}
+        icon={<Timer className="h-4 w-4" />}
+        delay={0.08}
+      />
 
-export function ProcessingMetricsCard({
-  data,
-  className,
-  animationDelay = 0,
-}: ProcessingMetricsCardProps) {
-  const successColor =
-    data.successRate >= 80
-      ? "hsl(135 45% 45%)"
-      : data.successRate >= 50
-        ? "hsl(40 90% 50%)"
-        : "hsl(0 70% 50%)";
+      <StatCard
+        title="Assign Throughput"
+        value={String(cards.assign_throughput)}
+        subtitle="Folder assignment actions"
+        icon={<ListChecks className="h-4 w-4" />}
+        delay={0.12}
+      />
 
-  return (
-    <StatCard
-      label="Processing"
-      value={`${data.successRate.toFixed(1)}%`}
-      subtitle="Success rate"
-      icon={<Activity />}
-      animationDelay={animationDelay}
-      accentColor={successColor}
-      className={className}
-    >
-      <div className="space-y-3">
-        {/* Success rate bar */}
-        <ProgressBar
-          value={data.successRate}
-          max={100}
-          color={successColor}
-          showLabel={false}
-          size="md"
-        />
+      <StatCard
+        title="KB Ready Throughput"
+        value={String(cards.kb_ready_throughput)}
+        subtitle="Marked ready for KB"
+        icon={<CheckCircle2 className="h-4 w-4" />}
+        delay={0.16}
+      />
 
-        {/* Metrics grid */}
-        <div className="grid grid-cols-2 gap-3 text-xs">
-          <div className="flex items-center gap-1.5">
-            <Clock className="w-3 h-3 text-muted-foreground" />
-            <span className="text-muted-foreground">Avg:</span>
-            <span className="font-medium">
-              {data.averageTime > 0 ? `${data.averageTime.toFixed(1)}s` : "N/A"}
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Loader2 className="w-3 h-3 text-muted-foreground" />
-            <span className="text-muted-foreground">Queue:</span>
-            <span className="font-medium">{data.queueSize}</span>
-          </div>
-        </div>
-      </div>
-    </StatCard>
-  );
-}
-
-// ==========================================
-// API Usage Cards (Gemini)
-// ==========================================
-interface ApiUsageCardProps {
-  data: ApiUsage;
-  className?: string;
-  animationDelay?: number;
-}
-
-export function GeminiUsageCard({
-  data,
-  className,
-  animationDelay = 0,
-}: ApiUsageCardProps) {
-  const usage = data.gemini;
-  const percentage =
-    usage.dailyLimit > 0 ? (usage.dailyUsed / usage.dailyLimit) * 100 : 0;
-
-  const statusColor =
-    usage.status === "healthy"
-      ? "hsl(135 45% 45%)"
-      : usage.status === "warning"
-        ? "hsl(40 90% 50%)"
-        : "hsl(0 70% 50%)";
-
-  return (
-    <StatCard
-      label="Gemini API"
-      value={usage.dailyUsed.toLocaleString()}
-      subtitle={`of ${usage.dailyLimit.toLocaleString()} daily limit`}
-      icon={<Zap />}
-      animationDelay={animationDelay}
-      accentColor={statusColor}
-      className={className}
-    >
-      <div className="space-y-3">
-        {/* Usage bar */}
-        <ProgressBar
-          value={usage.dailyUsed}
-          max={usage.dailyLimit}
-          color={statusColor}
-          showLabel={false}
-          size="md"
-        />
-
-        {/* Status indicator */}
-        <div className="flex items-center justify-between text-xs">
-          <div className="flex items-center gap-1.5">
-            {usage.status === "healthy" ? (
-              <CheckCircle2
-                className="w-3 h-3"
-                style={{ color: statusColor }}
-              />
-            ) : (
-              <XCircle className="w-3 h-3" style={{ color: statusColor }} />
-            )}
-            <span className="font-medium capitalize">{usage.status}</span>
-          </div>
-          <span className="text-muted-foreground">
-            {percentage.toFixed(1)}% used
-          </span>
-        </div>
-      </div>
-    </StatCard>
-  );
-}
-
-export function EmbeddingUsageCard({
-  data,
-  className,
-  animationDelay = 0,
-}: ApiUsageCardProps) {
-  const usage = data.embedding;
-  const percentage =
-    usage.dailyLimit > 0 ? (usage.dailyUsed / usage.dailyLimit) * 100 : 0;
-
-  const statusColor =
-    usage.status === "healthy"
-      ? "hsl(135 45% 45%)"
-      : usage.status === "warning"
-        ? "hsl(40 90% 50%)"
-        : "hsl(0 70% 50%)";
-
-  return (
-    <StatCard
-      label="Embeddings"
-      value={usage.dailyUsed.toLocaleString()}
-      subtitle={`of ${usage.dailyLimit.toLocaleString()} daily limit`}
-      icon={<Database />}
-      animationDelay={animationDelay}
-      accentColor={statusColor}
-      className={className}
-    >
-      <div className="space-y-3">
-        {/* Usage bar */}
-        <ProgressBar
-          value={usage.dailyUsed}
-          max={usage.dailyLimit}
-          color={statusColor}
-          showLabel={false}
-          size="md"
-        />
-
-        {/* Status indicator */}
-        <div className="flex items-center justify-between text-xs">
-          <div className="flex items-center gap-1.5">
-            {usage.status === "healthy" ? (
-              <CheckCircle2
-                className="w-3 h-3"
-                style={{ color: statusColor }}
-              />
-            ) : (
-              <XCircle className="w-3 h-3" style={{ color: statusColor }} />
-            )}
-            <span className="font-medium capitalize">{usage.status}</span>
-          </div>
-          <span className="text-muted-foreground">
-            {percentage.toFixed(1)}% used
-          </span>
-        </div>
-      </div>
-    </StatCard>
-  );
-}
-
-// ==========================================
-// System Health Card
-// ==========================================
-interface SystemHealthCardProps {
-  data: SystemHealth;
-  className?: string;
-  animationDelay?: number;
-}
-
-export function SystemHealthCard({
-  data,
-  className,
-  animationDelay = 0,
-}: SystemHealthCardProps) {
-  const statusConfig = {
-    excellent: { color: "hsl(135 45% 45%)", icon: Heart },
-    good: { color: "hsl(135 35% 50%)", icon: Heart },
-    fair: { color: "hsl(40 90% 50%)", icon: Heart },
-    poor: { color: "hsl(0 70% 50%)", icon: Heart },
-  };
-
-  const config = statusConfig[data.status];
-
-  return (
-    <StatCard
-      label="System Health"
-      value={`${data.score}/100`}
-      subtitle={`Status: ${data.status}`}
-      icon={<config.icon />}
-      animationDelay={animationDelay}
-      accentColor={config.color}
-      className={className}
-    >
-      <div className="space-y-3">
-        {/* Health score bar */}
-        <ProgressBar
-          value={data.score}
-          max={100}
-          color={config.color}
-          showLabel={false}
-          size="md"
-        />
-
-        {/* Issues or uptime */}
-        <div className="text-xs">
-          {data.issues.length > 0 ? (
-            <div className="space-y-1">
-              {data.issues.slice(0, 2).map((issue, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-1.5 text-muted-foreground"
-                >
-                  <XCircle className="w-3 h-3 text-amber-500" />
-                  <span>{issue}</span>
-                </div>
-              ))}
-            </div>
+      <StatCard
+        title="SLA Alerts"
+        value={`${warningCount}/${breachCount}`}
+        subtitle={`Warnings/Breaches (${overview.sla_thresholds.warning_minutes}/${overview.sla_thresholds.breach_minutes} min)`}
+        icon={
+          slaStatus === 'healthy' ? (
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
           ) : (
-            <div className="flex items-center gap-1.5 text-muted-foreground">
-              <CheckCircle2
-                className="w-3 h-3"
-                style={{ color: config.color }}
-              />
-              <span>All systems operational</span>
-            </div>
-          )}
+            <AlertTriangle className="h-4 w-4 text-amber-600" />
+          )
+        }
+        delay={0.2}
+      >
+        <div className="flex items-center gap-2 text-xs">
+          <Badge variant="secondary" className="bg-amber-100 text-amber-900">
+            Warnings {warningCount}
+          </Badge>
+          <Badge
+            variant="secondary"
+            className={breachCount > 0 ? 'bg-rose-100 text-rose-900' : 'bg-muted text-muted-foreground'}
+          >
+            Breaches {breachCount}
+          </Badge>
         </div>
-      </div>
-    </StatCard>
+      </StatCard>
+
+      <StatCard
+        title="OS Distribution"
+        value={String(overview.total_conversations)}
+        subtitle="Total conversations in range"
+        icon={<Clock3 className="h-4 w-4" />}
+        delay={0.24}
+      >
+        <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+          <span>Windows: {overview.os_distribution.windows}</span>
+          <span>macOS: {overview.os_distribution.macos}</span>
+          <span>Both: {overview.os_distribution.both}</span>
+          <span>Uncategorized: {overview.os_distribution.uncategorized}</span>
+        </div>
+      </StatCard>
+    </>
   );
 }

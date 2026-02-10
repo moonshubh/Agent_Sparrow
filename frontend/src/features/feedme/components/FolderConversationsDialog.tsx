@@ -23,8 +23,18 @@ import {
   Maximize2,
 } from "lucide-react";
 import { Input } from "@/shared/ui/input";
-import { feedMeApi } from "@/features/feedme/services/feedme-api";
+import {
+  feedMeApi,
+  isSupersededRequestError,
+} from "@/features/feedme/services/feedme-api";
 import { useRouter } from "next/navigation";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,6 +51,7 @@ import { cn } from "@/shared/lib/utils";
 import type { ProcessingStageValue } from "@/state/stores/realtime-store";
 import { DialogErrorBoundary } from "./DialogErrorBoundary";
 import { GlowingEffect } from "@/shared/ui/glowing-effect";
+import { useFoldersStore } from "@/state/stores/folders-store";
 
 // Constants
 const MAX_CONVERSATIONS_PER_PAGE = 100;
@@ -93,98 +104,141 @@ const FolderConversationsDialog = React.memo(
     );
     const [isDeleting, setIsDeleting] = useState(false);
     const [hasFetchedData, setHasFetchedData] = useState(false);
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const [moveTargetId, setMoveTargetId] = useState<string>("none");
+    const [confirmBulkMoveOpen, setConfirmBulkMoveOpen] = useState(false);
+    const [isBulkMoving, setIsBulkMoving] = useState(false);
     const router = useRouter();
     const showToast = useUIStore((state) => state.actions.showToast);
+    const folderTree = useFoldersStore((state) => state.folderTree);
     const renameInputRef = useRef<HTMLInputElement | null>(null);
+    const inFlightFetchRef = useRef<Promise<void> | null>(null);
+    const fetchRequestIdRef = useRef(0);
 
     const fetchFolderConversations = useCallback(async () => {
+      if (inFlightFetchRef.current) {
+        return inFlightFetchRef.current;
+      }
+
+      const requestId = ++fetchRequestIdRef.current;
       setLoading(true);
       setError(null);
-      try {
-        // Fetch conversations for this specific folder
-        const response = await feedMeApi.listConversations(
-          1,
-          MAX_CONVERSATIONS_PER_PAGE,
-          undefined,
-          undefined,
-          undefined,
-          folderId,
-        );
 
-        // API already filters by folderId, no need for client-side filtering
-        interface ProcessingTracker {
-          progress?: number;
-          stage?: ProcessingStageValue;
-          message?: string;
+      const fetchPromise = (async () => {
+        try {
+          // Fetch conversations for this specific folder
+          const response = await feedMeApi.listConversations(
+            1,
+            MAX_CONVERSATIONS_PER_PAGE,
+            undefined,
+            undefined,
+            undefined,
+            folderId,
+          );
+
+          if (requestId !== fetchRequestIdRef.current) {
+            return;
+          }
+
+          // API already filters by folderId, no need for client-side filtering
+          interface ProcessingTracker {
+            progress?: number;
+            stage?: ProcessingStageValue;
+            message?: string;
+          }
+
+          const enriched: ConversationItem[] = response.conversations.map(
+            (conv) => {
+              const safeMetadata = (conv.metadata ?? {}) as {
+                processing_tracker?: ProcessingTracker;
+                processing_method?: string;
+              };
+              const tracker = safeMetadata.processing_tracker ?? {};
+              const processingMethod =
+                (conv as { processing_method?: string }).processing_method ??
+                safeMetadata.processing_method;
+              const statusMessageSource = conv as {
+                status_message?: string;
+                message?: string;
+              };
+              const progress =
+                typeof tracker.progress === "number"
+                  ? tracker.progress
+                  : conv.processing_status === "completed" ||
+                      conv.processing_status === "failed"
+                    ? 100
+                    : undefined;
+
+              const conversationId = conv.id ?? conv.conversation_id ?? 0;
+
+              const extendedConv = conv as {
+                updated_at?: string;
+                extracted_text?: string;
+              };
+
+              return {
+                id: conversationId,
+                title: conv.title ?? `Conversation ${conversationId}`,
+                processing_status:
+                  conv.processing_status as ConversationItem["processing_status"],
+                progress_percentage: progress,
+                processing_stage: tracker.stage,
+                status_message:
+                  tracker.message ??
+                  statusMessageSource.status_message ??
+                  statusMessageSource.message ??
+                  undefined,
+                created_at: conv.created_at ?? new Date().toISOString(),
+                updated_at: extendedConv.updated_at,
+                extracted_text: extendedConv.extracted_text,
+                processing_method: processingMethod,
+                metadata: conv.metadata as Record<string, unknown> | undefined,
+                folder_id:
+                  (conv as { folder_id?: number | null }).folder_id ?? null,
+              };
+            },
+          );
+
+          setConversations(enriched);
+          setSelectedIds(new Set());
+        } catch (err) {
+          if (isSupersededRequestError(err)) {
+            return;
+          }
+          if (requestId !== fetchRequestIdRef.current) {
+            return;
+          }
+          console.error("Failed to fetch folder conversations:", err);
+          const errorMessage =
+            err instanceof Error ? err.message : "Failed to load conversations";
+          setError(errorMessage);
+        } finally {
+          if (requestId === fetchRequestIdRef.current) {
+            setLoading(false);
+          }
         }
+      })();
 
-        const enriched: ConversationItem[] = response.conversations.map(
-          (conv) => {
-            const safeMetadata = (conv.metadata ?? {}) as {
-              processing_tracker?: ProcessingTracker;
-              processing_method?: string;
-            };
-            const tracker = safeMetadata.processing_tracker ?? {};
-            const processingMethod =
-              (conv as { processing_method?: string }).processing_method ??
-              safeMetadata.processing_method;
-            const statusMessageSource = conv as {
-              status_message?: string;
-              message?: string;
-            };
-            const progress =
-              typeof tracker.progress === "number"
-                ? tracker.progress
-                : conv.processing_status === "completed" ||
-                    conv.processing_status === "failed"
-                  ? 100
-                  : undefined;
-
-            const conversationId = conv.id ?? conv.conversation_id ?? 0;
-
-            const extendedConv = conv as {
-              updated_at?: string;
-              extracted_text?: string;
-            };
-
-            return {
-              id: conversationId,
-              title: conv.title ?? `Conversation ${conversationId}`,
-              processing_status:
-                conv.processing_status as ConversationItem["processing_status"],
-              progress_percentage: progress,
-              processing_stage: tracker.stage,
-              status_message:
-                tracker.message ??
-                statusMessageSource.status_message ??
-                statusMessageSource.message ??
-                undefined,
-              created_at: conv.created_at ?? new Date().toISOString(),
-              updated_at: extendedConv.updated_at,
-              extracted_text: extendedConv.extracted_text,
-              processing_method: processingMethod,
-              metadata: conv.metadata as Record<string, unknown> | undefined,
-              folder_id:
-                (conv as { folder_id?: number | null }).folder_id ?? null,
-            };
-          },
-        );
-
-        setConversations(enriched);
-      } catch (err) {
-        console.error("Failed to fetch folder conversations:", err);
-        const errorMessage =
-          err instanceof Error ? err.message : "Failed to load conversations";
-        setError(errorMessage);
+      inFlightFetchRef.current = fetchPromise;
+      try {
+        await fetchPromise;
       } finally {
-        setLoading(false);
+        if (inFlightFetchRef.current === fetchPromise) {
+          inFlightFetchRef.current = null;
+        }
       }
     }, [folderId]);
 
     // Fetch conversations when dialog opens
     useEffect(() => {
       if (!isOpen || !folderId) {
+        fetchRequestIdRef.current += 1;
+        inFlightFetchRef.current = null;
         setHasFetchedData(false);
+        setSelectedIds(new Set());
+        setMoveTargetId("none");
+        setLoading(false);
+        setError(null);
         return;
       }
 
@@ -330,6 +384,101 @@ const FolderConversationsDialog = React.memo(
         document.removeEventListener("feedme:conversation-renamed", handler);
     }, []);
 
+    const folderOptions = folderTree
+      .filter((folder) => folder.id !== 0 && folder.id !== folderId)
+      .map((folder) => ({ id: folder.id, name: folder.name }));
+
+    const selectedCount = selectedIds.size;
+
+    const moveTargetLabel =
+      moveTargetId === "unassigned"
+        ? "Unassigned"
+        : folderOptions.find((folder) => String(folder.id) === moveTargetId)
+            ?.name || "Selected folder";
+
+    const toggleSelection = useCallback((conversationId: number) => {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(conversationId)) {
+          next.delete(conversationId);
+        } else {
+          next.add(conversationId);
+        }
+        return next;
+      });
+    }, []);
+
+    const toggleSelectAll = useCallback(() => {
+      setSelectedIds((prev) => {
+        if (prev.size === conversations.length) {
+          return new Set();
+        }
+        return new Set(conversations.map((conversation) => conversation.id));
+      });
+    }, [conversations]);
+
+    const executeBulkMove = useCallback(async () => {
+      if (moveTargetId === "none") {
+        return;
+      }
+      const ids = Array.from(selectedIds);
+      if (ids.length === 0) {
+        return;
+      }
+      if (ids.length > 50) {
+        showToast({
+          type: "error",
+          title: "Too many conversations selected",
+          message: "Bulk move supports a maximum of 50 conversations per action.",
+          duration: 5000,
+        });
+        return;
+      }
+
+      const targetFolderId =
+        moveTargetId === "unassigned" ? null : Number(moveTargetId);
+
+      setIsBulkMoving(true);
+      try {
+        const result = await feedMeApi.assignConversationsToFolderSupabase(
+          targetFolderId,
+          ids,
+        );
+
+        const movedIds = new Set(result.conversation_ids || []);
+        setConversations((prev) =>
+          prev.filter((conversation) => !movedIds.has(conversation.id)),
+        );
+        setSelectedIds(new Set());
+
+        if (result.partial_success) {
+          showToast({
+            type: "warning",
+            title: "Bulk move partially completed",
+            message: `Moved ${result.assigned_count} of ${result.requested_count} conversation(s).`,
+            duration: 5000,
+          });
+        } else {
+          showToast({
+            type: "success",
+            title: "Bulk move completed",
+            message: `Moved ${result.assigned_count} conversation(s) to ${moveTargetLabel}.`,
+            duration: 4000,
+          });
+        }
+      } catch (error) {
+        showToast({
+          type: "error",
+          title: "Bulk move failed",
+          message: error instanceof Error ? error.message : "Please try again.",
+          duration: 5000,
+        });
+      } finally {
+        setIsBulkMoving(false);
+        setConfirmBulkMoveOpen(false);
+      }
+    }, [moveTargetId, moveTargetLabel, selectedIds, showToast]);
+
     const getStatusIcon = useCallback(
       (status: ConversationItem["processing_status"]) => {
         switch (status) {
@@ -350,12 +499,15 @@ const FolderConversationsDialog = React.memo(
     return (
       <>
         <Dialog open={isOpen} onOpenChange={onClose}>
-          <DialogContent className="max-w-[900px] w-[900px] p-0 overflow-hidden">
+          <DialogContent
+            hideClose
+            className="w-[900px] max-w-[900px] overflow-hidden p-0"
+          >
             <DialogErrorBoundary
               fallbackTitle="Failed to load folder conversations"
               onReset={fetchFolderConversations}
             >
-              <DialogHeader className="flex flex-row items-center justify-between px-6 pt-6 pb-3 space-y-0">
+              <DialogHeader className="flex flex-row items-center justify-between gap-3 px-6 pt-6 pb-3 space-y-0">
                 <div className="flex items-center gap-3">
                   <Button
                     variant="ghost"
@@ -378,21 +530,77 @@ const FolderConversationsDialog = React.memo(
                     </span>
                   </DialogTitle>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={fetchFolderConversations}
-                  disabled={loading}
-                  aria-label="Refresh conversations"
-                >
-                  <RefreshCw
-                    className={cn("h-4 w-4", loading && "animate-spin")}
-                  />
-                  <span className="ml-2">Refresh</span>
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={fetchFolderConversations}
+                    disabled={loading}
+                    aria-label="Refresh conversations"
+                  >
+                    <RefreshCw
+                      className={cn("h-4 w-4", loading && "animate-spin")}
+                    />
+                    <span className="ml-2">Refresh</span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={onClose}
+                    aria-label="Close folder conversations"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
               </DialogHeader>
 
               <Separator />
+
+              <div className="border-b bg-muted/20 px-6 py-3">
+                <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-center gap-2 rounded-xl border border-border/50 bg-background/70 p-2.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleSelectAll}
+                    disabled={conversations.length === 0}
+                  >
+                    {selectedCount === conversations.length &&
+                    conversations.length > 0
+                      ? "Clear Selection"
+                      : "Select All"}
+                  </Button>
+                  <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                    Selected {selectedCount}
+                  </span>
+                  <Select value={moveTargetId} onValueChange={setMoveTargetId}>
+                    <SelectTrigger className="h-8 w-[220px]">
+                      <SelectValue placeholder="Move to folder" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Choose destination</SelectItem>
+                      <SelectItem value="unassigned">Unassigned</SelectItem>
+                      {folderOptions.map((folder) => (
+                        <SelectItem key={folder.id} value={String(folder.id)}>
+                          {folder.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    size="sm"
+                    onClick={() => setConfirmBulkMoveOpen(true)}
+                    disabled={
+                      selectedCount === 0 ||
+                      moveTargetId === "none" ||
+                      isBulkMoving
+                    }
+                    className="min-w-[120px]"
+                  >
+                    Move Selected
+                  </Button>
+                </div>
+              </div>
 
               <ScrollArea className="h-[500px]">
                 <div className="p-6">
@@ -444,7 +652,7 @@ const FolderConversationsDialog = React.memo(
                         return (
                           <div
                             key={conv.id}
-                            className="group relative flex h-full cursor-pointer flex-col overflow-hidden rounded-[1.75rem] border border-border/50 bg-background/70 p-5 shadow-[0_30px_80px_rgba(15,23,42,0.22)] transition-all duration-300 hover:-translate-y-1 hover:border-accent/40 hover:bg-background/90"
+                            className="group relative flex h-full cursor-pointer flex-col rounded-[1.5rem] p-1.5 transition-all duration-300 hover:-translate-y-1"
                             role="article"
                             aria-label={`Conversation: ${conv.title}`}
                             onClick={() => {
@@ -453,9 +661,25 @@ const FolderConversationsDialog = React.memo(
                             }}
                           >
                             <GlowingEffect
-                              spread={260}
-                              proximity={180}
-                              inactiveZone={0.1}
+                              blur={0}
+                              borderWidth={3}
+                              spread={80}
+                              glow={true}
+                              disabled={false}
+                              proximity={64}
+                              inactiveZone={0.01}
+                            />
+
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(conv.id)}
+                              onChange={(event) => {
+                                event.stopPropagation();
+                                toggleSelection(conv.id);
+                              }}
+                              onClick={(event) => event.stopPropagation()}
+                              className="absolute left-3 top-3 z-10 h-3 w-3 cursor-pointer rounded border-border bg-background/95 shadow-sm"
+                              aria-label={`Select conversation ${conv.id}`}
                             />
 
                             <button
@@ -470,7 +694,7 @@ const FolderConversationsDialog = React.memo(
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
 
-                            <div className="flex flex-col h-full pr-8">
+                            <div className="relative flex h-full flex-col overflow-hidden rounded-[1.25rem] bg-card/95 p-5 pl-5 pr-8 shadow-none">
                               <div className="mb-4 flex items-start gap-3">
                                 <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/20 text-black shadow-sm backdrop-blur dark:border-white/20 dark:bg-white/10 dark:text-white">
                                   <FileText className="h-4 w-4" />
@@ -592,6 +816,40 @@ const FolderConversationsDialog = React.memo(
             </DialogErrorBoundary>
           </DialogContent>
         </Dialog>
+
+        <AlertDialog
+          open={confirmBulkMoveOpen}
+          onOpenChange={(open) => {
+            if (!isBulkMoving) {
+              setConfirmBulkMoveOpen(open);
+            }
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Move selected conversations?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Move {selectedCount} conversation(s) to {moveTargetLabel}.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isBulkMoving}>
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  void executeBulkMove();
+                }}
+                disabled={isBulkMoving}
+              >
+                {isBulkMoving && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Move
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <AlertDialog
           open={!!deleteTarget}

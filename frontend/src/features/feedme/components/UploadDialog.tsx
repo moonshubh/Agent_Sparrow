@@ -20,6 +20,17 @@ import { Separator } from "@/shared/ui/separator";
 import { Upload, FileText, CheckCircle2, AlertCircle } from "lucide-react";
 import { feedMeApi } from "@/features/feedme/services/feedme-api";
 import { useUIStore } from "@/state/stores/ui-store";
+import { useRouter } from "next/navigation";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
 
 type Props = {
   isOpen: boolean;
@@ -38,7 +49,12 @@ export default function UploadDialog({ isOpen, onClose }: Props) {
   const [dragActive, setDragActive] = useState(false);
   const [sel, setSel] = useState<Sel[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [duplicateTarget, setDuplicateTarget] = useState<{
+    conversationId: number;
+    fileName: string;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
 
   const canUpload = useMemo(
     () =>
@@ -117,6 +133,35 @@ export default function UploadDialog({ isOpen, onClose }: Props) {
             s.file,
           );
           const convId = res.conversation_id || res.id;
+
+          if (res.duplicate && convId) {
+            setSel((prev) => {
+              const updated = [...prev];
+              updated[i] = {
+                ...s,
+                status: "done",
+                conversationId: convId,
+                progress: 100,
+                message: "Duplicate detected - existing conversation reused",
+              };
+              return updated;
+            });
+            results[i] = {
+              ...s,
+              status: "done",
+              conversationId: convId,
+              progress: 100,
+              message: "Duplicate detected - existing conversation reused",
+            };
+            setDuplicateTarget({ conversationId: convId, fileName: s.file.name });
+            useUIStore.getState().actions.showToast({
+              type: "info",
+              title: "Duplicate PDF detected",
+              message: "Reused existing conversation instead of creating a new job.",
+              duration: 4500,
+            });
+            continue;
+          }
 
           if (convId) {
             // Update to processing state
@@ -352,7 +397,7 @@ export default function UploadDialog({ isOpen, onClose }: Props) {
           )}
         </section>
         <DialogFooter className="px-6 pb-6">
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose} disabled={isUploading}>
             Close
           </Button>
           <Button disabled={!canUpload || isUploading} onClick={doUpload}>
@@ -360,6 +405,41 @@ export default function UploadDialog({ isOpen, onClose }: Props) {
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <AlertDialog
+        open={!!duplicateTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDuplicateTarget(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Duplicate PDF found</AlertDialogTitle>
+            <AlertDialogDescription>
+              {duplicateTarget
+                ? `“${duplicateTarget.fileName}” matches an existing upload.`
+                : "This file already exists."}{" "}
+              Open the existing conversation instead of uploading another copy?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep Here</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!duplicateTarget) return;
+                const conversationId = duplicateTarget.conversationId;
+                setDuplicateTarget(null);
+                onClose();
+                router.push(`/feedme/conversation/${conversationId}`);
+              }}
+            >
+              Open Existing Conversation
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

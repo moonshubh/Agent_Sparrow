@@ -5,7 +5,7 @@ Shared helper functions and utilities for FeedMe endpoints.
 """
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -170,6 +170,9 @@ async def get_conversation_by_id(conversation_id: int) -> Optional[FeedMeConvers
 
 async def create_conversation_in_db(
     conversation_data: ConversationCreate,
+    *,
+    upload_sha256: Optional[str] = None,
+    os_category: Optional[str] = None,
 ) -> FeedMeConversation:
     """
     Inserts a new conversation record into Supabase.
@@ -198,6 +201,15 @@ async def create_conversation_in_db(
                 conversation_data.processing_method.value
                 if isinstance(conversation_data.processing_method, ProcessingMethod)
                 else conversation_data.processing_method
+            ),
+            upload_sha256=upload_sha256,
+            os_category=(
+                os_category
+                or (
+                    conversation_data.os_category.value
+                    if hasattr(conversation_data.os_category, "value")
+                    else conversation_data.os_category
+                )
             ),
         )
         return FeedMeConversation(**result)
@@ -250,3 +262,101 @@ async def update_conversation_in_db(
         raise HTTPException(
             status_code=500, detail=f"Failed to update conversation: {str(e)}"
         )
+
+
+async def get_feedme_settings(tenant_id: str = "default") -> dict[str, Any]:
+    """Load FeedMe settings row, creating a deterministic default when missing."""
+    client = get_feedme_supabase_client()
+    if client is None:
+        raise HTTPException(
+            status_code=503, detail="FeedMe service is temporarily unavailable."
+        )
+
+    response = await client._exec(
+        lambda: client.client.table("feedme_settings")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .limit(1)
+        .execute()
+    )
+    if response.data:
+        return response.data[0]
+
+    inserted = await client._exec(
+        lambda: client.client.table("feedme_settings")
+        .insert({"tenant_id": tenant_id})
+        .execute()
+    )
+    if inserted.data:
+        return inserted.data[0]
+
+    raise HTTPException(status_code=500, detail="Failed to initialize FeedMe settings")
+
+
+async def update_feedme_settings(
+    updates: dict[str, Any],
+    *,
+    tenant_id: str = "default",
+    updated_by: Optional[str] = None,
+) -> dict[str, Any]:
+    """Update FeedMe settings and return the persisted row."""
+    client = get_feedme_supabase_client()
+    if client is None:
+        raise HTTPException(
+            status_code=503, detail="FeedMe service is temporarily unavailable."
+        )
+
+    existing = await get_feedme_settings(tenant_id=tenant_id)
+    payload = {
+        **updates,
+        "updated_by": updated_by,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    response = await client._exec(
+        lambda: client.client.table("feedme_settings")
+        .update(payload)
+        .eq("id", existing["id"])
+        .execute()
+    )
+    if response.data:
+        return response.data[0]
+    raise HTTPException(status_code=500, detail="Failed to update FeedMe settings")
+
+
+async def record_feedme_action_audit(
+    *,
+    action: str,
+    actor_id: Optional[str],
+    conversation_id: Optional[int] = None,
+    folder_id: Optional[int] = None,
+    before_state: Optional[dict[str, Any]] = None,
+    after_state: Optional[dict[str, Any]] = None,
+    reason: Optional[str] = None,
+) -> None:
+    """
+    Best-effort write to FeedMe action audit table.
+
+    This helper intentionally swallows failures to avoid blocking core workflows.
+    """
+    client = get_feedme_supabase_client()
+    if client is None:
+        return
+
+    payload = {
+        "action": action,
+        "actor_id": actor_id,
+        "conversation_id": conversation_id,
+        "folder_id": folder_id,
+        "reason": reason,
+        "before_state": before_state,
+        "after_state": after_state,
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    try:
+        await client._exec(
+            lambda: client.client.table("feedme_action_audit")
+            .insert(payload)
+            .execute()
+        )
+    except Exception as e:  # pragma: no cover - non-blocking audit path
+        logger.warning("Failed to persist FeedMe action audit: %s", e)

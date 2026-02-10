@@ -53,6 +53,7 @@ except ImportError:  # pragma: no cover
         )
 
 logger = logging.getLogger(__name__)
+FALLBACK_FEEDME_MODEL_ID = "gemini-2.5-flash-preview-09-2025"
 
 # Module-level client for google.genai SDK
 _genai_client = None
@@ -101,9 +102,12 @@ def _default_prompt() -> str:
         "Extract the full customer ↔ Mailbird support conversation in strict Markdown.\n\n"
         "Rules:\n"
         "- Output ONLY Markdown (no HTML).\n"
+        "- Do NOT emit escaped/encoded HTML tags (for example &lt;pre&gt; or &amp;lt;code&amp;gt;).\n"
         "- Preserve original order and clearly mark speakers (e.g., **Customer:**, **Mailbird Support:**).\n"
         "- Use readable paragraphs, headings, and lists where appropriate.\n"
+        "- Use fenced Markdown code blocks for command output and logs.\n"
         "- Remove repeated page headers/footers or frame artifacts.\n"
+        "- Avoid duplicating content already captured in earlier lines.\n"
         "- Include links and code/commands as Markdown.\n"
         "- Do not fabricate content. If a portion is unreadable, note it briefly.\n"
     )
@@ -115,6 +119,8 @@ def _final_merge_prompt() -> str:
         "Merge them into one coherent Markdown document while:\n"
         "- Preserving chronological order of the conversation.\n"
         "- Removing duplicates and repeated headers/footers.\n"
+        "- Preserving log/command blocks as fenced Markdown code blocks.\n"
+        "- Avoiding escaped HTML entities/tags in the final output.\n"
         "- Keeping formatting and links.\n"
         "Output ONLY the merged Markdown."
     )
@@ -139,6 +145,13 @@ def _ensure_model(api_key: str) -> str:
             _genai_client_api_key = api_key
 
     return model_name
+
+
+def _resolve_model_candidates(primary_model_name: str) -> list[str]:
+    candidates = [primary_model_name]
+    if primary_model_name != FALLBACK_FEEDME_MODEL_ID:
+        candidates.append(FALLBACK_FEEDME_MODEL_ID)
+    return candidates
 
 
 def _generate_content(model_name: str, parts: List[Any]) -> str:
@@ -208,14 +221,16 @@ def process_pdf_to_markdown(
         api_key = settings.gemini_api_key
 
     model_name = _ensure_model(api_key)
+    model_candidates = _resolve_model_candidates(model_name)
     logger.info(
-        "FeedMe PDF extraction using Gemini model %s (sdk=%s, max_pages=%s, pages_per_call=%s)",
-        model_name,
+        "FeedMe PDF extraction using Gemini models %s (sdk=%s, max_pages=%s, pages_per_call=%s)",
+        model_candidates,
         GENAI_SDK,
         max_pages,
         pages_per_call,
     )
     limiter = get_rate_limiter()
+    rate_limit_loop = asyncio.new_event_loop()
 
     # Get page count without loading all images into memory
     # Try pypdf first for efficiency, fallback to pdf2image
@@ -279,18 +294,66 @@ def process_pdf_to_markdown(
     prompt = _default_prompt()
     md_segments: List[str] = []
     calls_used = 0
+    model_usage: dict[str, int] = {candidate: 0 for candidate in model_candidates}
+    limiter_fail_open = False
+
+    def run_with_limit_or_fail_open(model_candidate: str, model_parts: List[Any]) -> str:
+        nonlocal limiter_fail_open
+        if limiter_fail_open:
+            return _generate_content(model_candidate, model_parts)
+        try:
+            return rate_limit_loop.run_until_complete(
+                limiter.execute_with_protection(
+                    "internal.feedme",
+                    _generate_content,
+                    model_candidate,
+                    model_parts,
+                )
+            )
+        except RateLimitExceededException:
+            raise
+        except Exception as exc:
+            err = str(exc).lower()
+            fail_open_markers = (
+                "event loop is closed",
+                "different loop",
+                "attached to a different loop",
+                "rate limiting service unavailable",
+            )
+            if any(marker in err for marker in fail_open_markers):
+                limiter_fail_open = True
+                logger.warning(
+                    "FeedMe extraction rate limiter unavailable; failing open for remaining calls: %s",
+                    exc,
+                )
+                return _generate_content(model_candidate, model_parts)
+            raise
 
     for idx, chunk in enumerate(chunks):
         try:
             parts = [prompt] + chunk
-            text = asyncio.run(
-                limiter.execute_with_protection(
-                    "internal.feedme",
-                    _generate_content,
-                    model_name,
-                    parts,
-                )
-            )
+            text = ""
+            last_error: Exception | None = None
+            for model_candidate in model_candidates:
+                try:
+                    text = run_with_limit_or_fail_open(model_candidate, parts)
+                    model_usage[model_candidate] = (
+                        model_usage.get(model_candidate, 0) + 1
+                    )
+                    break
+                except RateLimitExceededException:
+                    raise
+                except Exception as model_error:
+                    last_error = model_error
+                    logger.warning(
+                        "FeedMe extraction model failed (model=%s chunk=%s/%s): %s",
+                        model_candidate,
+                        idx + 1,
+                        len(chunks),
+                        model_error,
+                    )
+            if not text and last_error is not None:
+                raise last_error
             md_segments.append(text or "")
             calls_used += 1
         except RateLimitExceededException as exc:
@@ -298,7 +361,10 @@ def process_pdf_to_markdown(
             break
         except Exception as e:
             logger.error(
-                f"Gemini extraction failed on chunk {idx + 1}/{len(chunks)}: {e}"
+                "Gemini extraction failed on chunk %s/%s after fallback attempts: %s",
+                idx + 1,
+                len(chunks),
+                e,
             )
             md_segments.append("\n> [Extraction failed for this chunk]\n")
 
@@ -309,14 +375,29 @@ def process_pdf_to_markdown(
     if len(md_segments) > 1 and concatenated:
         try:
             merge_prompt = _final_merge_prompt()
-            final_text = asyncio.run(
-                limiter.execute_with_protection(
-                    "internal.feedme",
-                    _generate_content,
-                    model_name,
-                    [merge_prompt, concatenated],
-                )
-            )
+            final_text = ""
+            last_error: Exception | None = None
+            for model_candidate in model_candidates:
+                try:
+                    final_text = run_with_limit_or_fail_open(
+                        model_candidate,
+                        [merge_prompt, concatenated],
+                    )
+                    model_usage[model_candidate] = (
+                        model_usage.get(model_candidate, 0) + 1
+                    )
+                    break
+                except RateLimitExceededException:
+                    raise
+                except Exception as model_error:
+                    last_error = model_error
+                    logger.warning(
+                        "FeedMe merge model failed (model=%s): %s",
+                        model_candidate,
+                        model_error,
+                    )
+            if not final_text and last_error is not None:
+                raise last_error
             if final_text:
                 concatenated = final_text
         except RateLimitExceededException as exc:
@@ -329,9 +410,12 @@ def process_pdf_to_markdown(
         "total_pages": total_pages,
         "truncated": truncated,
         "calls_used": calls_used + (1 if len(md_segments) > 1 else 0),
+        "models_attempted": model_candidates,
+        "model_usage": model_usage,
         "warnings": ["Extraction truncated to page budget" if truncated else None],
     }
     # strip None warnings
     info["warnings"] = [w for w in info["warnings"] if w]
+    rate_limit_loop.close()
 
     return concatenated or "", info

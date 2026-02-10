@@ -6,8 +6,9 @@ Version control operations for conversation editing and history.
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.core.security import TokenPayload
 from app.feedme.schemas import (
     ConversationVersion,
     VersionListResponse,
@@ -17,6 +18,7 @@ from app.feedme.schemas import (
     EditResponse,
     RevertResponse,
 )
+from .auth import require_feedme_admin
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,9 @@ router = APIRouter(tags=["FeedMe"])
 
 @router.put("/conversations/{conversation_id}/edit", response_model=EditResponse)
 async def edit_conversation(
-    conversation_id: int, edit_request: ConversationEditRequest
+    conversation_id: int,
+    edit_request: ConversationEditRequest,
+    current_user: TokenPayload = Depends(require_feedme_admin),
 ):
     """
     Edit a conversation and create a new version.
@@ -139,7 +143,10 @@ async def get_version_diff(conversation_id: int, version_1: int, version_2: int)
     response_model=RevertResponse,
 )
 async def revert_conversation(
-    conversation_id: int, target_version: int, revert_request: ConversationRevertRequest
+    conversation_id: int,
+    target_version: int,
+    revert_request: ConversationRevertRequest,
+    current_user: TokenPayload = Depends(require_feedme_admin),
 ):
     """
     Revert a conversation to a previous version.

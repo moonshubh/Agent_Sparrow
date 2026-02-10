@@ -12,6 +12,7 @@ This module provides:
 
 import asyncio
 import base64
+import html
 import io
 import logging
 import os
@@ -56,6 +57,7 @@ except ImportError:  # pragma: no cover
 # Module-level client for google.genai SDK
 genai = cast(Any, genai)
 _genai_client: Any | None = None
+FEEDME_FALLBACK_MODEL_ID = "gemini-2.5-flash-preview-09-2025"
 
 
 # Use cached settings accessor for dynamic reload capability
@@ -129,6 +131,13 @@ def _embed_content(api_key: str, model_name: str, content: str) -> list:
         return emb["embedding"] if isinstance(emb, dict) else emb.embedding
 
 
+def _resolve_model_candidates(primary_model_name: str) -> list[str]:
+    candidates = [primary_model_name]
+    if primary_model_name != FEEDME_FALLBACK_MODEL_ID:
+        candidates.append(FEEDME_FALLBACK_MODEL_ID)
+    return candidates
+
+
 # Feature flags / behavior toggles
 DELETE_PDF_AFTER_EXTRACT = True  # Immediately remove PDF payload after extraction
 
@@ -155,6 +164,24 @@ def _light_cleanup(text: str) -> str:
     while "\n\n\n" in cleaned:
         cleaned = cleaned.replace("\n\n\n", "\n\n")
     return cleaned.strip()
+
+
+def _normalize_extracted_markdown(text: str) -> str:
+    """Normalize extraction artifacts while preserving content semantics."""
+    if not text:
+        return text
+
+    normalized = text
+    for _ in range(2):
+        decoded = html.unescape(normalized)
+        if decoded == normalized:
+            break
+        normalized = decoded
+
+    normalized = re.sub(r"`?<pre><code>", "```text\n", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"</code></pre>`?", "\n```", normalized, flags=re.IGNORECASE)
+    normalized = normalized.replace("\u2018", "'").replace("\u2019", "'")
+    return _light_cleanup(normalized)
 
 
 def _extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
@@ -314,7 +341,7 @@ def process_transcript(
                     )
 
                     if markdown_text:
-                        extracted_text = markdown_text
+                        extracted_text = _normalize_extracted_markdown(markdown_text)
                         extraction_confidence = (
                             0.98  # High confidence for AI extraction
                         )
@@ -373,8 +400,9 @@ def process_transcript(
             client = get_supabase_client()
             update = {
                 "extracted_text": extracted_text,
-                "processing_status": ProcessingStatus.COMPLETED.value,
-                "processed_at": datetime.now(timezone.utc).isoformat(),
+                # Keep the conversation in processing until downstream tasks
+                # (embeddings / note generation backfill) finish and set completed.
+                "processing_status": ProcessingStatus.PROCESSING.value,
                 "processing_time_ms": processing_time_ms,
                 "processing_method": processing_method,
             }
@@ -399,10 +427,11 @@ def process_transcript(
                 already_processed = False
 
             if isinstance(metadata, dict):
-                cm = current_meta or {}
-                # Merge ticket_id (non-editable)
-                if metadata.get("ticket_id"):
-                    cm["ticket_id"] = metadata.get("ticket_id")
+                cm = dict(current_meta) if isinstance(current_meta, dict) else {}
+                # Preserve all extraction metadata (including model usage/details).
+                for key, value in metadata.items():
+                    if value is not None:
+                        cm[key] = value
                 # Overwrite title with extracted subject only on first processing
                 if not already_processed and metadata.get("subject"):
                     update["title"] = metadata["subject"][:255]
@@ -694,6 +723,7 @@ def generate_text_chunks_and_embeddings(
     logger.info(
         f"Chunking + embedding for conversation {conversation_id} (task: {task_id})"
     )
+    rate_limit_loop: asyncio.AbstractEventLoop | None = None
     try:
         client = get_supabase_client()
         # Fetch conversation
@@ -839,6 +869,43 @@ def generate_text_chunks_and_embeddings(
         from app.core.rate_limiting.exceptions import RateLimitExceededException
 
         limiter = get_rate_limiter()
+        rate_limit_loop = asyncio.new_event_loop()
+        limiter_fail_open = False
+
+        def run_embedding_with_rate_limit(chunk_text: str, token_count: int) -> list:
+            nonlocal limiter_fail_open
+            if limiter_fail_open:
+                return _embed_content(api_key, model_name, chunk_text)
+            try:
+                return rate_limit_loop.run_until_complete(
+                    limiter.execute_with_protection(
+                        "internal.embedding",
+                        _embed_content,
+                        api_key,
+                        model_name,
+                        chunk_text,
+                        token_count=token_count,
+                    )
+                )
+            except RateLimitExceededException:
+                raise
+            except Exception as exc:
+                err = str(exc).lower()
+                fail_open_markers = (
+                    "event loop is closed",
+                    "different loop",
+                    "attached to a different loop",
+                    "rate limiting service unavailable",
+                )
+                if any(marker in err for marker in fail_open_markers):
+                    limiter_fail_open = True
+                    logger.warning(
+                        "Embedding rate limiter unavailable; failing open for remaining chunks (conversation_id=%s): %s",
+                        conversation_id,
+                        exc,
+                    )
+                    return _embed_content(api_key, model_name, chunk_text)
+                raise
 
         # Insert and embed per chunk with rate limiting
         stored = 0
@@ -878,16 +945,7 @@ def generate_text_chunks_and_embeddings(
 
                 # Generate embedding with bucket-based rate limiting
                 try:
-                    vec = asyncio.run(
-                        limiter.execute_with_protection(
-                            "internal.embedding",
-                            _embed_content,
-                            api_key,
-                            model_name,
-                            chunk,
-                            token_count=estimated_tokens,
-                        )
-                    )
+                    vec = run_embedding_with_rate_limit(chunk, estimated_tokens)
                 except RateLimitExceededException as exc:
                     logger.warning(
                         "Embedding rate limit reached, stopping at chunk %s: %s",
@@ -915,8 +973,45 @@ def generate_text_chunks_and_embeddings(
             f"Created {stored}/{len(chunks)} chunks with embeddings for conversation {conversation_id}"
         )
 
-        # Mark conversation as COMPLETED after embeddings are done
-        # (AI tags task runs in parallel and is optional)
+        # Ensure we have an AI note before exposing a terminal COMPLETED status.
+        # This reduces the window where UI/API show "completed" but note fields are empty.
+        try:
+            meta_resp = (
+                client.client.table("feedme_conversations")
+                .select("metadata")
+                .eq("id", conversation_id)
+                .maybe_single()
+                .execute()
+            )
+            meta_row = getattr(meta_resp, "data", None)
+            metadata = meta_row.get("metadata") if isinstance(meta_row, dict) else {}
+            metadata = metadata if isinstance(metadata, dict) else {}
+            ai_note_value = metadata.get("ai_note")
+            has_ai_note = isinstance(ai_note_value, str) and bool(ai_note_value.strip())
+
+            if not has_ai_note:
+                note_result = generate_ai_tags.run(conversation_id)
+                if not (isinstance(note_result, dict) and note_result.get("success")):
+                    logger.warning(
+                        "Inline AI note generation did not succeed for conversation %s; scheduling retry task",
+                        conversation_id,
+                    )
+                    try:
+                        generate_ai_tags.delay(conversation_id)
+                    except Exception as queue_exc:
+                        logger.warning(
+                            "Failed to queue AI note retry for conversation %s: %s",
+                            conversation_id,
+                            queue_exc,
+                        )
+        except Exception as note_exc:
+            logger.warning(
+                "AI note readiness check failed for conversation %s: %s",
+                conversation_id,
+                note_exc,
+            )
+
+        # Mark conversation as COMPLETED after embeddings (and note backfill check) are done.
         update_conversation_status(
             conversation_id,
             ProcessingStatus.COMPLETED,
@@ -937,6 +1032,9 @@ def generate_text_chunks_and_embeddings(
             message="Embedding failed",
         )
         return {"success": False, "conversation_id": conversation_id, "error": str(e)}
+    finally:
+        if rate_limit_loop is not None:
+            rate_limit_loop.close()
 
 
 @celery_app.task(bind=True, base=CallbackTask, name="app.feedme.tasks.generate_ai_tags")
@@ -948,6 +1046,7 @@ def generate_ai_tags(
     logger.info(
         f"Generating AI tags for conversation {conversation_id} (task: {task_id})"
     )
+    rate_limit_loop: asyncio.AbstractEventLoop | None = None
     try:
         client = get_supabase_client()
         resp = (
@@ -999,6 +1098,8 @@ def generate_ai_tags(
 
         config = get_models_config()
         model_name = config.internal["feedme"].model_id
+        model_candidates = _resolve_model_candidates(model_name)
+        model_usage: dict[str, int] = {candidate: 0 for candidate in model_candidates}
 
         # Chunked map-reduce summarization to capture the entire conversation
         # Map: summarize each chunk into 3-6 bullet points (no PII). Reduce: produce final JSON with tags and a concise multi-sentence comment.
@@ -1036,6 +1137,72 @@ def generate_ai_tags(
         from app.core.rate_limiting.exceptions import RateLimitExceededException
 
         limiter = get_rate_limiter()
+        rate_limit_loop = asyncio.new_event_loop()
+        limiter_fail_open = False
+
+        def run_with_limit_or_fail_open(model_candidate: str, prompt: str) -> str:
+            nonlocal limiter_fail_open
+            if limiter_fail_open:
+                return _generate_content(api_key, model_candidate, prompt)
+            try:
+                return rate_limit_loop.run_until_complete(
+                    limiter.execute_with_protection(
+                        "internal.feedme",
+                        _generate_content,
+                        api_key,
+                        model_candidate,
+                        prompt,
+                    )
+                )
+            except RateLimitExceededException:
+                raise
+            except Exception as exc:
+                err = str(exc).lower()
+                fail_open_markers = (
+                    "event loop is closed",
+                    "different loop",
+                    "attached to a different loop",
+                    "rate limiting service unavailable",
+                )
+                if any(marker in err for marker in fail_open_markers):
+                    limiter_fail_open = True
+                    logger.warning(
+                        "FeedMe AI-tagging rate limiter unavailable; failing open for remaining calls (conversation_id=%s): %s",
+                        conversation_id,
+                        exc,
+                    )
+                    return _generate_content(api_key, model_candidate, prompt)
+                raise
+
+        def run_with_fallback(prompt: str, stage_name: str) -> str:
+            last_error: Exception | None = None
+            for candidate in model_candidates:
+                try:
+                    response_text = run_with_limit_or_fail_open(candidate, prompt)
+                    model_usage[candidate] = model_usage.get(candidate, 0) + 1
+                    if candidate != model_name:
+                        logger.info(
+                            "FeedMe AI tagging fallback model used (stage=%s, model=%s, conversation_id=%s)",
+                            stage_name,
+                            candidate,
+                            conversation_id,
+                        )
+                    return response_text or ""
+                except RateLimitExceededException:
+                    raise
+                except Exception as model_error:
+                    last_error = model_error
+                    logger.warning(
+                        "FeedMe AI tagging model failed (stage=%s, model=%s, conversation_id=%s): %s",
+                        stage_name,
+                        candidate,
+                        conversation_id,
+                        model_error,
+                    )
+
+            if last_error is not None:
+                raise last_error
+            return ""
 
         chunks = chunk_text(text, per_chunk_chars)
         map_summaries: list[str] = []
@@ -1050,15 +1217,7 @@ def generate_ai_tags(
                 'Return STRICT JSON only: {"tags":[...],"comment":"..."}.'
             )
             try:
-                out = asyncio.run(
-                    limiter.execute_with_protection(
-                        "internal.feedme",
-                        _generate_content,
-                        api_key,
-                        model_name,
-                        single_prompt,
-                    )
-                )
+                out = run_with_fallback(single_prompt, "single")
             except RateLimitExceededException as exc:
                 logger.warning("Gemini tagging rate limited: %s", exc)
                 out = ""
@@ -1073,15 +1232,7 @@ def generate_ai_tags(
             )
             for idx, ck in enumerate(chunks):
                 try:
-                    txt = asyncio.run(
-                        limiter.execute_with_protection(
-                            "internal.feedme",
-                            _generate_content,
-                            api_key,
-                            model_name,
-                            map_prompt + ck,
-                        )
-                    )
+                    txt = run_with_fallback(map_prompt + ck, f"map-{idx + 1}")
                     if txt and txt.strip():
                         # Normalize to lines starting with '- '
                         lines = [
@@ -1110,15 +1261,7 @@ def generate_ai_tags(
                 'Return only: {"tags":[...],"comment":"..."}.'
             )
             try:
-                out = asyncio.run(
-                    limiter.execute_with_protection(
-                        "internal.feedme",
-                        _generate_content,
-                        api_key,
-                        model_name,
-                        reduce_prompt,
-                    )
-                )
+                out = run_with_fallback(reduce_prompt, "reduce")
             except RateLimitExceededException as exc:
                 logger.warning("Gemini reduce stage rate limited: %s", exc)
                 out = ""
@@ -1218,10 +1361,24 @@ def generate_ai_tags(
             "conversation_id": conversation_id,
             "tags": tags,
             "comment": comment,
+            "models_attempted": model_candidates,
+            "model_usage": model_usage,
         }
     except Exception as e:
         logger.error(f"AI tagging task failed: {e}")
+        if self.request.retries < self.max_retries:
+            countdown = 30 * (self.request.retries + 1)
+            logger.info(
+                "Retrying AI tagging task for conversation %s (attempt %s/%s)",
+                conversation_id,
+                self.request.retries + 1,
+                self.max_retries,
+            )
+            raise self.retry(exc=e, countdown=countdown)
         return {"success": False, "conversation_id": conversation_id, "error": str(e)}
+    finally:
+        if rate_limit_loop is not None:
+            rate_limit_loop.close()
 
 
 @celery_app.task(

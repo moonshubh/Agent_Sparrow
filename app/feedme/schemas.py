@@ -19,6 +19,7 @@ class ProcessingStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class ProcessingStage(str, Enum):
@@ -111,6 +112,15 @@ class ProcessingMethod(str, Enum):
     PDF_TEXT = "pdf_text"
 
 
+class OSCategory(str, Enum):
+    """OS category required for KB-ready workflow."""
+
+    WINDOWS = "windows"
+    MACOS = "macos"
+    BOTH = "both"
+    UNCATEGORIZED = "uncategorized"
+
+
 class FeedMeConversationBase(BaseModel):
     """Base model for FeedMe conversations - restructured for PDF+text workflow"""
 
@@ -140,6 +150,9 @@ class FeedMeConversationBase(BaseModel):
     )
     approved_at: Optional[datetime] = Field(
         None, description="Timestamp when text was approved"
+    )
+    os_category: OSCategory = Field(
+        default=OSCategory.UNCATEGORIZED, description="Conversation OS category"
     )
 
 
@@ -209,6 +222,7 @@ class ConversationUpdate(BaseModel):
     error_message: Optional[str] = None
     approved_by: Optional[str] = None
     approved_at: Optional[datetime] = None
+    os_category: Optional[OSCategory] = None
 
 
 # Analytics Models - Updated for unified text workflow
@@ -250,8 +264,11 @@ class AnalyticsResponse(BaseModel):
 class ApprovalRequest(BaseModel):
     """Request model for approving a conversation."""
 
-    approved_by: str = Field(
-        ..., description="The ID or name of the user who approved the conversation."
+    approved_by: Optional[str] = Field(
+        None,
+        description=(
+            "Optional approver identifier. When omitted, backend uses JWT subject."
+        ),
     )
     approval_notes: Optional[str] = Field(
         None, description="Optional notes for the approval."
@@ -264,10 +281,15 @@ class ApprovalRequest(BaseModel):
 class RejectionRequest(BaseModel):
     """Request model for rejecting a conversation."""
 
-    rejected_by: str = Field(
-        ..., description="The ID or name of the user who rejected the conversation."
+    rejected_by: Optional[str] = Field(
+        None,
+        description=(
+            "Optional rejector identifier. When omitted, backend uses JWT subject."
+        ),
     )
-    rejection_reason: str = Field(..., description="The reason for the rejection.")
+    rejection_reason: Optional[str] = Field(
+        None, description="Optional reason for the rejection."
+    )
     rejection_notes: Optional[str] = Field(
         None, description="Optional additional notes for the rejection."
     )
@@ -373,7 +395,16 @@ class FeedMeConversation(FeedMeConversationBase):
     )
 
     # Transcript content
-    raw_transcript: str = Field(..., description="Raw transcript content")
+    # Optional on list endpoints to avoid transferring large raw transcript payloads.
+    raw_transcript: Optional[str] = Field(
+        default=None, description="Raw transcript content"
+    )
+    folder_id: Optional[int] = Field(
+        default=None, description="Assigned folder id (NULL when unassigned)"
+    )
+    upload_sha256: Optional[str] = Field(
+        default=None, description="SHA-256 content hash for duplicate detection"
+    )
 
     # File format and metadata
     mime_type: Optional[str] = Field(None, description="MIME type of the uploaded file")
@@ -658,6 +689,9 @@ class ConversationUploadResponse(BaseModel):
     message: str
     conversation_id: int
     processing_status: ProcessingStatus
+    duplicate: bool = False
+    duplicate_conversation_id: Optional[int] = None
+    upload_sha256: Optional[str] = None
 
 
 class ConversationStatusUpdate(BaseModel):

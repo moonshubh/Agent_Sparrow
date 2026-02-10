@@ -7,6 +7,7 @@ type FolderBitsProps = {
   size?: number;
   items?: React.ReactNode[];
   className?: string;
+  open?: boolean;
 };
 
 const darkenColor = (hex: string, percent: number): string => {
@@ -42,6 +43,7 @@ export default function FolderBits({
   size = 1,
   items = [],
   className = "",
+  open,
 }: FolderBitsProps) {
   const maxItems = 3;
   const papers = items.slice(0, maxItems);
@@ -49,10 +51,12 @@ export default function FolderBits({
     papers.push(null);
   }
 
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
   const [paperOffsets, setPaperOffsets] = useState<{ x: number; y: number }[]>(
     Array.from({ length: maxItems }, () => ({ x: 0, y: 0 })),
   );
+  const isOpen = typeof open === "boolean" ? open : internalOpen;
+  const isControlled = typeof open === "boolean";
 
   const folderBackColor = darkenColor(color, 0.08);
   const paper1 = darkenColor("#ffffff", 0.1);
@@ -60,8 +64,11 @@ export default function FolderBits({
   const paper3 = "#ffffff";
 
   const handleClick = () => {
-    setOpen((prev) => !prev);
-    if (open) {
+    if (isControlled) {
+      return;
+    }
+    setInternalOpen((prev) => !prev);
+    if (isOpen) {
       setPaperOffsets(Array.from({ length: maxItems }, () => ({ x: 0, y: 0 })));
     }
   };
@@ -70,7 +77,7 @@ export default function FolderBits({
     e: React.MouseEvent<HTMLDivElement, MouseEvent>,
     index: number,
   ) => {
-    if (!open) return;
+    if (!isOpen) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
@@ -99,7 +106,7 @@ export default function FolderBits({
   return (
     <div style={scaleStyle} className={className}>
       <div
-        className={`group relative cursor-pointer transition-all duration-200 ease-in ${open ? "" : "hover:-translate-y-2"}`}
+        className={`group relative cursor-pointer transition-all duration-200 ease-in ${isOpen ? "" : "hover:-translate-y-2"}`}
         style={
           {
             "--folder-color": color,
@@ -107,10 +114,10 @@ export default function FolderBits({
             "--paper-1": paper1,
             "--paper-2": paper2,
             "--paper-3": paper3,
-            transform: open ? "translateY(-8px)" : undefined,
-          } as React.CSSProperties
-        }
-        onClick={handleClick}
+              transform: isOpen ? "translateY(-8px)" : undefined,
+            } as React.CSSProperties
+          }
+          onClick={handleClick}
       >
         <div className="relative h-[82px] w-[116px] rounded-tr-[12px] rounded-br-[12px] rounded-bl-[12px] bg-[var(--folder-back-color)]">
           <span className="absolute bottom-[98%] left-0 h-[12px] w-[36px] rounded-tl-[6px] rounded-tr-[6px] bg-[var(--folder-back-color)]" />
@@ -123,11 +130,11 @@ export default function FolderBits({
             }
             if (i === 1) {
               width = "w-[80%]";
-              height = open ? "h-[80%]" : "h-[70%]";
+              height = isOpen ? "h-[80%]" : "h-[70%]";
             }
             if (i === 2) {
-              width = open ? "w-[90%]" : "w-[90%]";
-              height = open ? "h-[80%]" : "h-[60%]";
+              width = isOpen ? "w-[90%]" : "w-[90%]";
+              height = isOpen ? "h-[80%]" : "h-[60%]";
             }
 
             const baseClasses = `absolute bottom-[12%] left-1/2 z-20 -translate-x-1/2 rounded-[12px] transition-all duration-300 ease-in-out ${width} ${height}`;
@@ -139,10 +146,10 @@ export default function FolderBits({
                 key={i}
                 onMouseMove={(e) => handlePaperMouseMove(e, i)}
                 onMouseLeave={(e) => handlePaperMouseLeave(e, i)}
-                className={`${baseClasses} ${open ? "hover:scale-110" : closedState}`}
+                className={`${baseClasses} ${isOpen ? "hover:scale-110" : closedState}`}
                 style={{
                   backgroundColor: i === 0 ? paper1 : i === 1 ? paper2 : paper3,
-                  transform: open ? openTransform : undefined,
+                  transform: isOpen ? openTransform : undefined,
                 }}
               >
                 {item}
@@ -151,14 +158,14 @@ export default function FolderBits({
           })}
           <div
             className={`absolute inset-0 z-30 origin-bottom rounded-[8px_14px_14px_14px] bg-[var(--folder-color)] transition-all duration-300 ease-in-out ${
-              open
+              isOpen
                 ? "[transform:skew(15deg)_scaleY(0.6)]"
                 : "group-hover:[transform:skew(15deg)_scaleY(0.6)]"
             }`}
           />
           <div
             className={`absolute inset-0 z-20 origin-bottom rounded-[8px_14px_14px_14px] bg-[var(--folder-color)] transition-all duration-300 ease-in-out opacity-60 ${
-              open
+              isOpen
                 ? "[transform:skew(-15deg)_scaleY(0.6)]"
                 : "group-hover:[transform:skew(-15deg)_scaleY(0.6)]"
             }`}

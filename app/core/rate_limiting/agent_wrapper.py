@@ -7,6 +7,8 @@ to existing agent implementations without major code changes.
 
 import asyncio
 import functools
+import os
+import threading
 from typing import Any, Callable, Optional, TypeVar, Dict, cast
 
 from app.core.logging_config import get_logger
@@ -24,14 +26,30 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 # Global rate limiter instance
 _global_rate_limiter: Optional[BucketRateLimiter] = None
+_global_rate_limiter_pid: Optional[int] = None
+_global_rate_limiter_thread_id: Optional[int] = None
 
 
 def get_rate_limiter() -> BucketRateLimiter:
-    """Get or create the global rate limiter instance."""
-    global _global_rate_limiter
-    if _global_rate_limiter is None:
+    """
+    Get or create a process-local rate limiter instance.
+
+    Celery workers use prefork, so inheriting an async Redis client created in the
+    parent process can lead to event-loop lifecycle errors in children. We bind the
+    singleton to the current PID to force safe re-initialization after fork.
+    """
+    global _global_rate_limiter, _global_rate_limiter_pid, _global_rate_limiter_thread_id
+    current_pid = os.getpid()
+    current_thread_id = threading.get_ident()
+    if (
+        _global_rate_limiter is None
+        or _global_rate_limiter_pid != current_pid
+        or _global_rate_limiter_thread_id != current_thread_id
+    ):
         config = RateLimitConfig.from_environment()
         _global_rate_limiter = BucketRateLimiter(config)
+        _global_rate_limiter_pid = current_pid
+        _global_rate_limiter_thread_id = current_thread_id
     return _global_rate_limiter
 
 
