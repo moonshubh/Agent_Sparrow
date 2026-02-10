@@ -7,10 +7,13 @@ graph TD;
 	__start__([<p>__start__</p>]):::first
 	agent(agent)
 	tools(tools)
+	subgraphs(subgraphs)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> agent;
 	agent -. &nbsp;end&nbsp; .-> __end__;
+	agent -.-> subgraphs;
 	agent -. &nbsp;continue&nbsp; .-> tools;
+	subgraphs --> agent;
 	tools --> agent;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0

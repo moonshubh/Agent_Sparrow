@@ -1,10 +1,24 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Last updated: 2026-02-09
 
 ## Project Overview
 
 Agent Sparrow is a multi-agent AI system with a FastAPI backend and Next.js frontend. It uses LangGraph for orchestrated agent workflows, integrates with AG-UI protocol for native streaming conversations, and leverages Supabase for data persistence. It supports multiple LLM providers (Google Gemini by default, xAI Grok when selected) via a provider factory.
+
+## Implementation Update (2026-02-09)
+
+- mem0 v1 backend activation completed via `mem0ai==1.0.3` with `vecs==0.4.5` and `pgvector==0.3.6`.
+- `MemoryService` now uses mem0 public APIs and includes production-safe fallbacks:
+  - embedding dimension clamp to 2000 for vecs/pgvector index limits
+  - collection fallback for dimension mismatch (`*_dim{n}`)
+  - telemetry vector-store fallback to avoid `mem0migrations` startup failures blocking primary memory.
+- Unified tool input hardening added to prevent model-argument validation failures (`db_unified_search`, `db_grep_search`, and `web_search` max-result coercion/clamping).
+- Tool execution reliability fixed for timeout-disabled mode in `tool_executor` (prevents false `Unknown error` returns).
+- Subgraph compatibility/event contract work is in place with smoke coverage for `task -> subgraph -> subagent_spawn/subagent_end`.
+- CI now includes fresh-venv dependency integrity checks (`pip install -r requirements.txt` + `pip check`).
+- Latest backend gate status: `pytest -q` pass, `ruff check .` pass, `mypy app/` still blocked by pre-existing baseline typing debt outside this rollout.
 
 ## Common Development Commands
 
@@ -207,7 +221,7 @@ Completed sprint upgrade focused on reliability, trust, and edit synchronization
 - **Inline image resize persistence fix (Feb 2026 follow-up)**: Memory TipTap image nodes now persist `width`/`height` attributes explicitly across markdown parse/render, so resized imported-memory images remain resized after saving, closing, and reopening.
 - **`mb_playbook` section emphasis (Feb 2026 follow-up)**: in imported-memory edit mode, `Problem`, `Impact`, and `Environment` headings are now highlighted with stronger cyan styling and underline for clear visual scannability.
 - **Root-cause update reliability fix (Feb 2026 follow-up)**: memory updates now defensively skip invalid/nonexistent reviewer IDs when setting `reviewed_by` (notably the SKIP_AUTH dev placeholder UUID), avoiding `memories_reviewed_by_fkey` failures that previously prevented edit persistence.
-- **`mb_playbook` label-line emphasis (Feb 2026 follow-up)**: highlight treatment now applies not only to markdown heading nodes but also to label-style paragraph lines (`Problem:`, `Impact:`, `Environment:`) used by imported summaries.
+- **`mb_playbook` label-line emphasis (Feb 2026 follow-up)**: highlight treatment now applies not only to Markdown heading nodes but also to label-style paragraph lines (`Problem:`, `Impact:`, `Environment:`) used by imported summaries.
 - **`mb_playbook` emphasis resilience (Feb 2026 follow-up)**: edit-view highlighting now has a content-structure fallback (for memories whose metadata tags/source were edited away) and stronger CSS specificity to keep heading emphasis consistently visible.
 - **Inline resize freeze fix (Feb 2026 follow-up)**: TipTap image resize now uses robust pointer cleanup (`pointerup`/`pointercancel`/window `blur`, capture release, and unmount-safe listener disposal) to prevent stuck drag listeners from freezing memory modal interactions.
 
@@ -473,7 +487,6 @@ See `docs/LangSmith-Observability-Guide.md` for detailed monitoring playbooks.
 
 ## Current Migration Status
 The codebase has successfully migrated to the native AG-UI client implementation:
-- ✅ Legacy CopilotKit artifacts removed (dependencies, hooks, and UI shims)
 - ✅ Native AG-UI client (@ag-ui/client) integrated
 - ✅ Direct SSE streaming without GraphQL translation
 - ✅ AG-UI protocol fully integrated (RunAgentInput/SSE events)

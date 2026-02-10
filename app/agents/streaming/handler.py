@@ -2433,7 +2433,7 @@ class StreamEventHandler:
                 try:
                     parsed = httpx.URL(value)
                     return parsed.scheme.lower() in {"http", "https"}
-                except Exception:
+                except httpx.InvalidURL:
                     return False
 
             def _coerce(value: Any) -> str:

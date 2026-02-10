@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
@@ -214,6 +215,19 @@ class HandoffCaptureMiddleware(AgentMiddleware):
                 "capture_number": self._capture_count + 1,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+
+            handoff_context.update(
+                {
+                    "tool_usage_summary": self._extract_tool_usage_summary(messages),
+                    "subagent_deployments": self._extract_subagent_deployments(
+                        messages
+                    ),
+                    "memory_ids": self._extract_memory_ids(scratchpad),
+                    "evidence_trail": self._extract_evidence_trail(
+                        messages, scratchpad
+                    ),
+                }
+            )
 
             # Store handoff context
             await self.workspace_store.set_handoff_context(handoff_context)
@@ -410,6 +424,128 @@ class HandoffCaptureMiddleware(AgentMiddleware):
                 break
 
         return decisions
+
+    def _extract_tool_usage_summary(
+        self,
+        messages: list[BaseMessage],
+    ) -> dict[str, Any]:
+        """Extract high-level requested/executed tool usage from message history."""
+        requested: set[str] = set()
+        executed: set[str] = set()
+
+        for msg in messages:
+            if getattr(msg, "type", "") == "ai":
+                tool_calls = getattr(msg, "tool_calls", None) or (
+                    (getattr(msg, "additional_kwargs", {}) or {}).get("tool_calls")
+                )
+                if isinstance(tool_calls, list):
+                    for call in tool_calls:
+                        if not isinstance(call, dict):
+                            continue
+                        name = call.get("name")
+                        if isinstance(name, str) and name:
+                            requested.add(name)
+            elif getattr(msg, "type", "") == "tool":
+                tool_name = getattr(msg, "name", None)
+                if isinstance(tool_name, str) and tool_name:
+                    executed.add(tool_name)
+
+        return {
+            "requested": sorted(requested),
+            "requested_count": len(requested),
+            "executed": sorted(executed),
+            "executed_count": len(executed),
+        }
+
+    def _extract_subagent_deployments(
+        self,
+        messages: list[BaseMessage],
+    ) -> list[str]:
+        """Extract subagent types requested via `task` tool calls."""
+        deployed: set[str] = set()
+
+        for msg in messages:
+            if getattr(msg, "type", "") != "ai":
+                continue
+            tool_calls = getattr(msg, "tool_calls", None) or (
+                (getattr(msg, "additional_kwargs", {}) or {}).get("tool_calls")
+            )
+            if not isinstance(tool_calls, list):
+                continue
+            for call in tool_calls:
+                if not isinstance(call, dict) or call.get("name") != "task":
+                    continue
+                args = call.get("args")
+                if args is None:
+                    args = call.get("arguments")
+                if args is None:
+                    args = {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        continue
+                if not isinstance(args, dict):
+                    continue
+                subagent_type = args.get("subagent_type") or args.get("subagentType")
+                if isinstance(subagent_type, str) and subagent_type.strip():
+                    deployed.add(subagent_type.strip())
+
+        return sorted(deployed)
+
+    def _extract_memory_ids(self, scratchpad: dict[str, Any]) -> list[str]:
+        """Extract retrieved memory ids from scratchpad memory stats."""
+        system_bucket = (
+            scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+        )
+        memory_stats = (
+            system_bucket.get("memory_stats", {})
+            if isinstance(system_bucket, dict)
+            else {}
+        )
+        ids = (
+            memory_stats.get("retrieved_memory_ids", [])
+            if isinstance(memory_stats, dict)
+            else []
+        )
+        if not isinstance(ids, list):
+            return []
+        return [str(value) for value in ids if value is not None]
+
+    def _extract_evidence_trail(
+        self,
+        messages: list[BaseMessage],
+        scratchpad: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Extract a compact trail of recent tool evidence."""
+        evidence: list[dict[str, Any]] = []
+
+        for msg in reversed(messages):
+            if getattr(msg, "type", "") != "tool":
+                continue
+            content = self._get_message_text(msg)
+            evidence.append(
+                {
+                    "tool_name": getattr(msg, "name", None),
+                    "tool_call_id": getattr(msg, "tool_call_id", None),
+                    "excerpt": content[:400] if content else "",
+                }
+            )
+            if len(evidence) >= 5:
+                break
+
+        system_bucket = (
+            scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+        )
+        model_selection = (
+            system_bucket.get("model_selection")
+            if isinstance(system_bucket, dict)
+            else None
+        )
+        evidence = list(reversed(evidence))
+        if model_selection:
+            evidence.append({"model_selection": model_selection})
+        return evidence
 
     def _format_progress_notes(self, handoff: Dict[str, Any]) -> str:
         """Format handoff context into progress notes.

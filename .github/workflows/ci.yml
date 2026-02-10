@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9"] # You can add other Python versions like "3.8", "3.10", "3.11"
+        python-version: ["3.11"] # Match runtime.txt and dependency constraints
 
     steps:
     - name: Checkout repository
@@ -27,6 +27,14 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+
+    - name: Verify dependency integrity in fresh venv
+      run: |
+        python -m venv .ci-deps-venv
+        . .ci-deps-venv/bin/activate
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        python -m pip check
 
     - name: Install dependencies
       run: |

@@ -149,6 +149,10 @@ class Settings(BaseSettings):
         default=False,
         alias="SUBAGENT_ALLOW_UNVERIFIED_MODELS",
     )
+    graph_message_bound: int = Field(
+        default=30,
+        alias="GRAPH_MESSAGE_BOUND",
+    )
 
     # Legacy Redis configuration (kept for compatibility, not used in simplified deployment)
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
@@ -878,6 +882,15 @@ class Settings(BaseSettings):
     def validate_memory_ttl_sec(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("memory_ttl_sec must be greater than zero")
+        return value
+
+    @field_validator("graph_message_bound")
+    @classmethod
+    def validate_graph_message_bound(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("graph_message_bound must be greater than zero")
+        if value > 500:
+            raise ValueError("graph_message_bound must be less than or equal to 500")
         return value
 
     @field_validator("zendesk_poll_interval_sec")

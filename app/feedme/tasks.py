@@ -2386,7 +2386,11 @@ def import_zendesk_tagged(
                 embedding = await service.generate_embedding(content)
             except Exception as exc:
                 error_text = str(exc)
-                fallback_eligible = "rate limiting service unavailable" in error_text.lower() or "event loop is closed" in error_text.lower()
+                error_text_lower = error_text.lower()
+                fallback_eligible = (
+                    "rate limiting service unavailable" in error_text_lower
+                    or "event loop is closed" in error_text_lower
+                )
                 if not fallback_eligible:
                     logger.warning(
                         "zendesk_import_embedding_failed ticket_id=%s error=%s",
@@ -2404,9 +2408,13 @@ def import_zendesk_tagged(
                 try:
                     model = service._get_embedding_model()
                     loop = asyncio.get_running_loop()
-                    embedding = await loop.run_in_executor(None, model.embed_query, content)
+                    embedding = await loop.run_in_executor(
+                        None,
+                        model.embed_query,
+                        content,
+                    )
                     assert_dim(embedding, context="zendesk_import_fallback")
-                except Exception as fallback_exc:
+                except Exception as fallback_exc:  # noqa: BLE001
                     logger.warning(
                         "zendesk_import_embedding_fallback_failed ticket_id=%s error=%s",
                         ticket_id,
@@ -2414,7 +2422,7 @@ def import_zendesk_tagged(
                     )
                     _record_failure(
                         ticket_id,
-                        f"embedding_fallback_failed: {str(fallback_exc)}",
+                        f"embedding_fallback_failed: {fallback_exc!s}",
                     )
                     continue
 

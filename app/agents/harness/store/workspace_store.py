@@ -7,8 +7,8 @@ pattern from DeepAgents, storing:
 
 **Persistence Scopes:**
 - GLOBAL: /playbooks/ - shared across all sessions (read-only for agents)
-- CUSTOMER: /customer/{id}/ - per-customer, survives across tickets
-- SESSION: /scratch/, /knowledge/, /context/, /handoff/, /progress/, /goals/ - per-ticket
+- CUSTOMER: /customer/{id}/, /shared/ - per-customer, survives across tickets
+- SESSION: /scratch/, /knowledge/, /context/, /handoff/, /progress/, /goals/, /evidence/, /reports/ - per-ticket
 
 Usage:
     from app.agents.harness.store import SparrowWorkspaceStore
@@ -56,12 +56,15 @@ SCOPE_ROUTING: Dict[str, PersistenceScope] = {
     "playbooks": PersistenceScope.GLOBAL,
     "user": PersistenceScope.USER,
     "customer": PersistenceScope.CUSTOMER,
+    "shared": PersistenceScope.CUSTOMER,
     "scratch": PersistenceScope.SESSION,
     "knowledge": PersistenceScope.SESSION,
     "context": PersistenceScope.SESSION,
     "handoff": PersistenceScope.SESSION,
     "progress": PersistenceScope.SESSION,
     "goals": PersistenceScope.SESSION,
+    "evidence": PersistenceScope.SESSION,
+    "reports": PersistenceScope.SESSION,
 }
 
 # Allowed path roots for validation

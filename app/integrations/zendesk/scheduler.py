@@ -2364,7 +2364,7 @@ def _apply_quality_gate_with_order_retry(
     *,
     use_html: bool,
     has_log_attachments: bool = False,
-) -> tuple[str, List[str]]:
+) -> tuple[str, list[str]]:
     """Apply quality gate with one deterministic order-reference retry pass."""
     candidate = sanitize_order_references(str(note_text or ""))
     issues = _quality_gate_issues(

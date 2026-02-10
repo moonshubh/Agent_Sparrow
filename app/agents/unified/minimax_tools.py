@@ -378,6 +378,7 @@ _api_client_lock = asyncio.Lock()
 _minimax_mcp_client: Optional[MultiServerMCPClient] = None
 _minimax_mcp_tools: Dict[str, BaseTool] = {}
 _mcp_client_lock = asyncio.Lock()
+_mcp_tools_lock = asyncio.Lock()
 
 
 def _resolve_mcp_timeout() -> Optional[float]:
@@ -473,29 +474,60 @@ async def _get_minimax_mcp_tool(tool_name: str) -> Optional[BaseTool]:
         return cached
 
     timeout = _resolve_mcp_timeout()
-    try:
-        if timeout:
-            tools = await asyncio.wait_for(
-                client.get_tools(server_name=MINIMAX_MCP_SERVER_NAME),
+    reset_reason: Optional[str] = None
+
+    async with _mcp_tools_lock:
+        # Another caller may have loaded the cache while we were waiting.
+        cached = _minimax_mcp_tools.get(tool_name)
+        if cached is not None:
+            return cached
+
+        try:
+            if timeout:
+                tools = await asyncio.wait_for(
+                    client.get_tools(server_name=MINIMAX_MCP_SERVER_NAME),
+                    timeout=timeout,
+                )
+            else:
+                tools = await client.get_tools(server_name=MINIMAX_MCP_SERVER_NAME)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "minimax_mcp_tools_load_timeout",
                 timeout=timeout,
+                server=MINIMAX_MCP_SERVER_NAME,
             )
-        else:
-            tools = await client.get_tools(server_name=MINIMAX_MCP_SERVER_NAME)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "minimax_mcp_tools_load_timeout",
-            timeout=timeout,
-            server=MINIMAX_MCP_SERVER_NAME,
-        )
-        await _reset_minimax_mcp_client("tools_load_timeout")
-        return None
-    except Exception as exc:
-        logger.warning("minimax_mcp_tools_load_failed", error=str(exc))
-        await _reset_minimax_mcp_client("tools_load_failed")
+            reset_reason = "tools_load_timeout"
+            tools = []
+        except Exception as exc:
+            sub_errors = []
+            if hasattr(exc, "exceptions"):
+                try:
+                    sub_errors = [str(sub_exc) for sub_exc in getattr(exc, "exceptions")]
+                except Exception:
+                    sub_errors = []
+            logger.warning(
+                "minimax_mcp_tools_load_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                sub_errors=sub_errors or None,
+            )
+            reset_reason = "tools_load_failed"
+            tools = []
+
+        for tool_item in tools:
+            _minimax_mcp_tools[tool_item.name] = tool_item
+
+        if _minimax_mcp_tools:
+            logger.debug(
+                "minimax_mcp_tools_cached",
+                count=len(_minimax_mcp_tools),
+                server=MINIMAX_MCP_SERVER_NAME,
+            )
+
+    if reset_reason:
+        await _reset_minimax_mcp_client(reset_reason)
         return None
 
-    for tool_item in tools:
-        _minimax_mcp_tools[tool_item.name] = tool_item
     return _minimax_mcp_tools.get(tool_name)
 
 

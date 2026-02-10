@@ -76,7 +76,7 @@ export interface SubagentRun {
 }
 
 /**
- * Abstract agent interface for CopilotKit compatibility.
+ * Abstract agent interface for AG-UI compatibility.
  * This replaces the @ag-ui/client AbstractAgent type.
  */
 export interface AbstractAgent {

@@ -1,8 +1,7 @@
 /**
  * AG-UI Client Configuration
  *
- * This module provides configuration and utilities for CopilotKit integration.
- * CopilotKit v1.50 uses native AG-UI protocol for streaming.
+ * This module provides configuration and utilities for AG-UI streaming.
  */
 
 import type { AttachmentInput } from "./types";
@@ -39,7 +38,7 @@ export interface AgentConfig {
 }
 
 /**
- * Get initial agent state for CopilotKit
+ * Get initial state for AG-UI runs.
  */
 export function getInitialAgentState(
   config: AgentConfig,
@@ -107,7 +106,7 @@ export async function getStreamHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
-// Message type for CopilotKit compatibility
+// Message type for AG-UI event compatibility
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "tool";
@@ -118,7 +117,7 @@ export interface Message {
   created_at?: string;
 }
 
-// RunAgentInput type for CopilotKit compatibility
+// RunAgentInput shape aligned with AG-UI endpoint payload
 export interface RunAgentInput {
   threadId?: string;
   runId?: string;

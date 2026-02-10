@@ -273,7 +273,7 @@ class MemoryUIService:
                     .execute()
                 )
                 reviewer_exists = bool(reviewer_lookup and reviewer_lookup.data)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- non-critical lookup should fail open
                 logger.warning(
                     "Reviewer lookup failed for %s while updating memory %s; skipping reviewed_by update: %s",
                     reviewer_id_str,

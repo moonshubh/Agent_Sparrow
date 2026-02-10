@@ -1,5 +1,20 @@
 # Repository Guidelines
 
+Last updated: 2026-02-09
+
+## Implementation Update (2026-02-09)
+
+- Activated mem0 v1 in backend (`mem0ai==1.0.3`) with compatible vector stack (`vecs==0.4.5`, `pgvector==0.3.6`).
+- Upgraded `app/memory/service.py` to use mem0 public APIs and added resilience for production:
+  - dimension clamp (`3072 -> 2000`) for index constraints
+  - collection fallback on dimension mismatch
+  - telemetry vector-store fallback so `mem0migrations` failures do not disable primary memory.
+- Hardened unified tool inputs against model-provided invalid values, including `db_unified_search`, `db_grep_search`, and `web_search`.
+- Improved orchestration observability with explicit routing/dispatch logs for subgraph paths.
+- Added/validated AG-UI smoke contract for `task -> subgraph -> subagent_spawn/subagent_end`.
+- Added CI dependency drift guard using a fresh venv install plus `pip check`.
+- Current backend quality gate snapshot: `pytest -q` pass, `ruff check .` pass, `mypy app/` still has pre-existing baseline issues unrelated to this rollout.
+
 ## Project Structure & Module Organization
 
 ### Frontend (Next.js/TypeScript)
@@ -41,7 +56,7 @@
 - Imported-memory image resize persistence is hardened by storing image `width`/`height` as explicit TipTap image attributes during markdown parse/render, preventing resized inline images from reverting after reopen.
 - `mb_playbook` edit view now highlights `Problem`, `Impact`, and `Environment` headings with stronger color + underline styling for faster scanability.
 - Root-cause fix for failed edits in local/dev mode: memory updates now skip invalid placeholder reviewer IDs (for example `00000000-0000-0000-0000-000000000000`) and only set `reviewed_by` when the reviewer exists in `auth.users`, preventing FK failures that previously blocked image-resize persistence.
-- `mb_playbook` emphasis now supports both markdown headings and label-style paragraph lines (`Problem:`, `Impact:`, `Environment:`), since imported content can use either format.
+- `mb_playbook` emphasis now supports both Markdown headings and label-style paragraph lines (`Problem:`, `Impact:`, `Environment:`), since imported content can use either format.
 - `mb_playbook` edit highlighting now includes a content-shape fallback (when metadata tags/source are missing) and stronger CSS specificity, so section emphasis remains visible after metadata-only edits.
 - Inline image resize interaction now has guarded pointer lifecycle cleanup (`pointerup`/`pointercancel`/window `blur` + capture release) to prevent stuck drag listeners that could freeze modal interactions after resizing.
 

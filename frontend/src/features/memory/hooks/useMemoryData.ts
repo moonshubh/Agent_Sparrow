@@ -397,16 +397,14 @@ export function useSubmitFeedback() {
     },
     onSuccess: (response, { memoryId }) => {
       const parsedConfidence = Number(response.new_confidence_score);
+      if (!Number.isFinite(parsedConfidence)) {
+        return;
+      }
 
       const applyConfidence = (memory: Memory): Memory => {
-        if (!Number.isFinite(parsedConfidence)) {
-          // onMutate already applied the deterministic optimistic confidence delta
-          return memory;
-        }
-        const nextConfidence = parsedConfidence;
         return {
           ...memory,
-          confidence_score: nextConfidence,
+          confidence_score: parsedConfidence,
         };
       };
 

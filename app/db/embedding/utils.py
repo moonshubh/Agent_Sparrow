@@ -17,6 +17,7 @@ Prerequisites:
 """
 
 # ruff: noqa: E402
+import importlib.util
 import logging
 import os
 import random
@@ -32,6 +33,13 @@ def _ensure_pgvector_stub() -> None:
         return
     if "pgvector.psycopg2" in sys.modules:
         return
+    # If a real pgvector package is installed, never replace it with a stub.
+    try:
+        if importlib.util.find_spec("pgvector.psycopg2") is not None:
+            return
+    except Exception:
+        # Fall through to stub creation only when introspection fails.
+        pass
 
     stub = types.ModuleType("pgvector")
     psycopg2_stub = types.ModuleType("pgvector.psycopg2")

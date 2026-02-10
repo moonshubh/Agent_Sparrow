@@ -843,9 +843,9 @@ class MemoryRecord(BaseModel):
     content: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
     source_type: str
-    review_status: Optional[str] = None
-    reviewed_by: Optional[str] = None
-    reviewed_at: Optional[datetime] = None
+    review_status: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
     confidence_score: float
     retrieval_count: int
     last_retrieved_at: Optional[datetime] = None
