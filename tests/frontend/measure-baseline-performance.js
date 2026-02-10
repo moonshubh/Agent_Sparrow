@@ -4,14 +4,14 @@
  * Baseline Performance Measurement Script
  *
  * Measures first-token latency and streaming throughput for Agent Sparrow
- * CopilotKit integration baseline (Phase 0).
+ * AG-UI streaming baseline.
  *
  * Usage:
  *   node tests/frontend/measure-baseline-performance.js [options]
  *
  * Options:
  *   --url <url>           API URL (default: http://localhost:8000)
- *   --endpoint <path>     Endpoint path (default: /api/v1/copilotkit)
+ *   --endpoint <path>     Endpoint path (default: /api/v1/agui/stream)
  *   --iterations <n>      Number of test iterations (default: 10)
  *   --session-id <id>     Session ID to use (default: generated)
  *   --output <file>       Output results to JSON file
@@ -37,7 +37,7 @@ const path = require('path');
 function parseArgs() {
   const args = {
     url: 'http://localhost:8000',
-    endpoint: '/api/v1/copilotkit',
+    endpoint: '/api/v1/agui/stream',
     iterations: 10,
     sessionId: `perf-test-${Date.now()}`,
     output: null,
@@ -125,36 +125,30 @@ function makeRequest(url, options, data) {
 async function measureSingleRequest(args, iterationNum) {
   const testMessage = `Performance test message ${iterationNum}: Analyze this simple query.`;
 
-  // GraphQL mutation for CopilotKit
-  const graphqlQuery = {
-    query: `
-      mutation GenerateCopilotResponse(
-        $data: GenerateCopilotResponseInput!
-      ) {
-        generateCopilotResponse(data: $data) {
-          threadId
-        }
-      }
-    `,
-    variables: {
-      data: {
-        messages: [
-          {
-            role: 'user',
-            content: testMessage,
-          },
-        ],
-        properties: {
-          session_id: args.sessionId,
-          agent_type: 'primary',
-          provider: 'google',
-          model: 'gemini-2.5-flash-preview-09-2025',
-        },
-      },
+  const runInput = {
+    threadId: args.sessionId,
+    runId: `perf-run-${Date.now()}-${iterationNum}`,
+    state: {
+      session_id: args.sessionId,
+      trace_id: `perf-trace-${Date.now()}-${iterationNum}`,
+      provider: 'google',
+      model: 'gemini-2.5-flash-preview-09-2025',
+      agent_type: 'primary',
+      use_server_memory: true,
     },
+    messages: [
+      {
+        id: `msg-${Date.now()}-${iterationNum}`,
+        role: 'user',
+        content: testMessage,
+      },
+    ],
+    tools: [],
+    context: [],
+    forwardedProps: {},
   };
 
-  const requestBody = JSON.stringify(graphqlQuery);
+  const requestBody = JSON.stringify(runInput);
   const fullUrl = `${args.url}${args.endpoint}`;
 
   const startTime = performance.now();

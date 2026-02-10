@@ -1,4 +1,4 @@
-// Local type definitions for CopilotKit v1.50 compatibility
+// Local type definitions for AG-UI payload compatibility
 export interface BinaryInputContent {
   type: "binary";
   mimeType: string;

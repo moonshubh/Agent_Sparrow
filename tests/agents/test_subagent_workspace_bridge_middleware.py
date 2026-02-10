@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any, Dict
 
@@ -195,5 +196,89 @@ def test_awrap_model_call_forces_ingest_of_unread_reports() -> None:
         tool_calls = list(response.tool_calls or [])
         assert any(tc.get("name") == "read_workspace_file" for tc in tool_calls)
         assert any(tc.get("name") == "mark_subagent_reports_read" for tc in tool_calls)
+
+    asyncio.run(_run())
+
+
+def test_awrap_tool_call_persists_structured_artifacts() -> None:
+    async def _run() -> None:
+        store = SparrowWorkspaceStore(
+            session_id="sess-bridge-artifacts",
+            user_id="user-1",
+            supabase_client=_IMPORT_FAILED,
+        )
+        middleware = SubagentWorkspaceBridgeMiddleware(
+            workspace_store=store,
+            report_read_limit_chars=5000,
+            capsule_max_chars=4000,
+        )
+
+        tool_call_id = "call_artifacts"
+        subagent_type = "research-agent"
+        report_body = (
+            "Investigated docs.\n"
+            "References:\n"
+            "- https://example.com/a\n"
+            "- https://example.com/b\n"
+        )
+
+        state = SimpleNamespace(
+            session_id="sess-bridge-artifacts",
+            trace_id="trace-bridge-artifacts",
+            user_id="user-1",
+            provider="google",
+            model="gemini",
+            agent_type="primary",
+            forwarded_props={"customer_id": "cust-1"},
+            thread_state={"foo": "bar"},
+            scratchpad={"_system": {"existing": True}},
+        )
+
+        runtime = ToolRuntime(
+            state=state,
+            tool_call_id=tool_call_id,
+            config={},
+            context={},
+            store=None,
+            stream_writer=None,
+        )
+
+        request = _FakeRequest(
+            tool_call={
+                "name": "task",
+                "id": tool_call_id,
+                "args": {
+                    "description": "Research customer issue",
+                    "subagent_type": subagent_type,
+                },
+            },
+            state=state,
+            runtime=runtime,
+        )
+
+        async def handler(_req: _FakeRequest) -> Command:
+            return Command(
+                update={
+                    "messages": [
+                        ToolMessage(content=report_body, tool_call_id=tool_call_id)
+                    ]
+                }
+            )
+
+        await middleware.awrap_tool_call(request, handler)  # type: ignore[arg-type]
+
+        evidence = await store.read_file("/context/evidence.json")
+        urls = await store.read_file("/knowledge/urls.json")
+        task_graph = await store.read_file("/scratch/task_graph.json")
+
+        evidence_doc = json.loads(evidence)
+        urls_doc = json.loads(urls)
+        graph_doc = json.loads(task_graph)
+
+        assert evidence_doc["reports"]
+        assert evidence_doc["reports"][-1]["tool_call_id"] == tool_call_id
+        assert "https://example.com/a" in urls_doc["urls"]
+        assert "https://example.com/b" in urls_doc["urls"]
+        assert any(node.get("id") == tool_call_id for node in graph_doc["nodes"])
 
     asyncio.run(_run())

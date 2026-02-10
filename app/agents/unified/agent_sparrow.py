@@ -207,6 +207,19 @@ TASK_TYPE_PATTERNS: dict[str, list[str]] = {
         r"\[error\]",
         r"\[warn",
     ],
+    "data_retrieval": [
+        r"\bquery\b.*\b(?:database|table|sql|record)s?\b",
+        r"\b(?:database|table|dataset)\b.*\b(?:search|lookup|retrieve)\b",
+        r"\b(?:kb|knowledge base|macro|feedme)\b.*\b(?:find|lookup|search)\b",
+        r"\b(?:metrics|numbers|stats|trend)\b",
+    ],
+    "web_research": [
+        r"\bresearch\b",
+        r"\bcompare\b.*\b(?:pricing|plans|features|options)\b",
+        r"\blatest\b.*\b(?:news|updates|changes)\b",
+        r"\bweb\b.*\b(?:search|lookup|sources)\b",
+        r"\bfact[- ]?check\b",
+    ],
 }
 
 # Pre-compile patterns for performance
@@ -379,6 +392,11 @@ def _determine_task_type(state: GraphState) -> str:
             state.agent_type = "log_analysis"
             # Use the standard coordinator model; per-file log analysis runs via tools.
             return "coordinator"
+
+    # Hint-only classification for future routing/prompting (no model selection change).
+    if fast_task in {"data_retrieval", "web_research"}:
+        forwarded_props["task_hint"] = fast_task
+        state.forwarded_props = forwarded_props
 
     # 3. Default: coordinator
     return "coordinator"

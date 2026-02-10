@@ -11,6 +11,7 @@ Phase 1 goals:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING, cast
@@ -74,6 +75,7 @@ _MARK_READ_TOOL_NAME = "mark_subagent_reports_read"
 _SYSTEM_BUCKET_KEY = "_system"
 _SUBAGENT_REPORTS_KEY = "subagent_reports"
 _CAPSULE_SCHEMA_VERSION = "context_capsule_v1"
+_URL_RE = re.compile(r"https?://[^\s)>\"]+", re.IGNORECASE)
 
 _FORWARDED_PROPS_ALLOWLIST = {
     "is_zendesk_ticket",
@@ -303,6 +305,19 @@ def _report_paths(subagent_type: str, tool_call_id: str) -> tuple[str, str]:
     return run_dir, report_path
 
 
+def _extract_urls(text: str) -> list[str]:
+    if not text:
+        return []
+    seen: set[str] = set()
+    urls: list[str] = []
+    for match in _URL_RE.findall(text):
+        url = match.strip().rstrip(".,;:")
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
 def _pointer_message(*, subagent_type: str, report_path: str, report: str) -> str:
     excerpt = (report or "").strip()
     if len(excerpt) > 1200:
@@ -507,6 +522,108 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware):
     def name(self) -> str:  # pragma: no cover - trivial
         return "subagent_workspace_bridge"
 
+    async def _read_json_file(self, path: str) -> dict[str, Any]:
+        try:
+            existing = await self._store.read_file(path)
+        except Exception:
+            return {}
+        if not existing:
+            return {}
+        try:
+            parsed = json.loads(existing)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    async def _write_json_file(self, path: str, payload: dict[str, Any]) -> None:
+        await self._store.write_file(
+            path,
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            metadata={
+                "kind": "structured_evidence_artifact",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+    async def _persist_structured_artifacts(
+        self,
+        *,
+        subagent_type: str,
+        tool_call_id: str,
+        report_path: str,
+        report_text: str,
+    ) -> None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        report_excerpt = (report_text or "").strip()[:1000]
+        urls = _extract_urls(report_text)
+
+        evidence_doc = await self._read_json_file("/context/evidence.json")
+        reports = evidence_doc.get("reports")
+        if not isinstance(reports, list):
+            reports = []
+        reports.append(
+            {
+                "subagent_type": subagent_type,
+                "tool_call_id": tool_call_id,
+                "report_path": report_path,
+                "excerpt": report_excerpt,
+                "captured_at": timestamp,
+            }
+        )
+        evidence_doc["reports"] = reports[-50:]
+        evidence_doc["updated_at"] = timestamp
+
+        urls_doc = await self._read_json_file("/knowledge/urls.json")
+        existing_urls = urls_doc.get("urls")
+        if not isinstance(existing_urls, list):
+            existing_urls = []
+        merged_urls = sorted(
+            {
+                str(value).strip()
+                for value in [*existing_urls, *urls]
+                if isinstance(value, str) and value.strip()
+            }
+        )
+        urls_doc["urls"] = merged_urls
+        urls_doc["updated_at"] = timestamp
+
+        task_graph_doc = await self._read_json_file("/scratch/task_graph.json")
+        nodes = task_graph_doc.get("nodes")
+        if not isinstance(nodes, list):
+            nodes = []
+        edges = task_graph_doc.get("edges")
+        if not isinstance(edges, list):
+            edges = []
+
+        coordinator_node = {"id": "coordinator", "type": "coordinator"}
+        task_node = {
+            "id": tool_call_id,
+            "type": "subagent_task",
+            "subagent_type": subagent_type,
+            "report_path": report_path,
+        }
+        if coordinator_node not in nodes:
+            nodes.append(coordinator_node)
+        if task_node not in nodes:
+            nodes.append(task_node)
+
+        edge = {
+            "from": "coordinator",
+            "to": tool_call_id,
+            "kind": "delegates_to",
+            "timestamp": timestamp,
+        }
+        if edge not in edges:
+            edges.append(edge)
+
+        task_graph_doc["nodes"] = nodes
+        task_graph_doc["edges"] = edges[-200:]
+        task_graph_doc["updated_at"] = timestamp
+
+        await self._write_json_file("/context/evidence.json", evidence_doc)
+        await self._write_json_file("/knowledge/urls.json", urls_doc)
+        await self._write_json_file("/scratch/task_graph.json", task_graph_doc)
+
     async def awrap_tool_call(  # type: ignore[override]
         self,
         request: "ToolCallRequest",
@@ -659,6 +776,18 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware):
                             "stored_at": datetime.now(timezone.utc).isoformat(),
                         },
                     )
+                    try:
+                        await self._persist_structured_artifacts(
+                            subagent_type=subagent_type,
+                            tool_call_id=tool_call_id,
+                            report_path=report_path,
+                            report_text=report_text,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "subagent_structured_artifacts_failed",
+                            error=str(exc),
+                        )
                 except Exception as exc:
                     logger.warning(
                         "subagent_report_write_failed", path=report_path, error=str(exc)

@@ -12,6 +12,8 @@ from langchain_core.messages import BaseMessage, SystemMessage
 from langgraph.graph import add_messages
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_serializer
 
+from app.core.settings import settings
+
 # Type variable for reducer functions
 T = TypeVar("T")
 
@@ -162,6 +164,8 @@ def bounded_add_messages(max_messages: int = 30):
     def reducer(
         current: List[BaseMessage], update: List[BaseMessage]
     ) -> List[BaseMessage]:
+        configured = int(getattr(settings, "graph_message_bound", max_messages) or 0)
+        effective_bound = configured if configured > 0 else max_messages
         merged = cast(
             List[BaseMessage],
             add_messages(cast(List[Any], current or []), cast(List[Any], update or [])),
@@ -180,7 +184,7 @@ def bounded_add_messages(max_messages: int = 30):
                 and getattr(m, "name", "") == "server_memory_context"
             )
         ]
-        tail = non_memory[-max_messages:]
+        tail = non_memory[-effective_bound:]
         return [*memory_msgs, *tail]
 
     return reducer
