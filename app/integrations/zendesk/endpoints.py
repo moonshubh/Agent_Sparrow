@@ -5,7 +5,6 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
-import re
 
 from fastapi import APIRouter, HTTPException, Request, status
 from postgrest.base_request_builder import CountMethod
@@ -15,6 +14,7 @@ from app.core.config import get_models_config, resolve_coordinator_config
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
 from .exclusions import compute_ticket_exclusion
+from .redaction import sanitize_zendesk_ticket_text
 from .security import verify_webhook_signature
 
 router = APIRouter(prefix="/integrations/zendesk", tags=["Zendesk"])
@@ -24,20 +24,6 @@ logger = logging.getLogger(__name__)
 COUNT_EXACT: CountMethod = CountMethod.exact
 
 # Default model for Zendesk - centralized to ensure consistency
-
-# Basic PII redactors for emails and phone numbers
-_EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]{1,})@([A-Za-z0-9.-]{1,})")
-_PHONE_RE = re.compile(
-    r"(?<!\d)(\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?){2}\d{4}(?!\d)"
-)
-
-
-def _redact_pii(text: str | None) -> str | None:
-    if not text or not isinstance(text, str):
-        return text
-    t = _EMAIL_RE.sub(lambda m: f"{m.group(1)[:2]}***@{m.group(2)}", text)
-    t = _PHONE_RE.sub("[redacted-phone]", t)
-    return t
 
 
 def _get_nested(d: Dict[str, Any] | None, *keys: str) -> Any:
@@ -133,24 +119,28 @@ async def _upsert_month_usage(delta_calls: int = 0) -> Dict[str, Any]:
     mk = datetime.now(timezone.utc).strftime("%Y-%m")
     desired_budget = 0
     resp = await supa._exec(
-        lambda: supa.client.table("zendesk_usage")
-        .select("month_key, calls_used, budget")
-        .eq("month_key", mk)
-        .maybe_single()
-        .execute()
+        lambda: (
+            supa.client.table("zendesk_usage")
+            .select("month_key, calls_used, budget")
+            .eq("month_key", mk)
+            .maybe_single()
+            .execute()
+        )
     )
     row = getattr(resp, "data", None)
     if not row:
         await supa._exec(
-            lambda: supa.client.table("zendesk_usage")
-            .insert(
-                {
-                    "month_key": mk,
-                    "calls_used": 0,
-                    "budget": desired_budget,
-                }
+            lambda: (
+                supa.client.table("zendesk_usage")
+                .insert(
+                    {
+                        "month_key": mk,
+                        "calls_used": 0,
+                        "budget": desired_budget,
+                    }
+                )
+                .execute()
             )
-            .execute()
         )
         row = {"month_key": mk, "calls_used": 0, "budget": desired_budget}
     else:
@@ -162,15 +152,17 @@ async def _upsert_month_usage(delta_calls: int = 0) -> Dict[str, Any]:
         if current_budget != 0:
             try:
                 await supa._exec(
-                    lambda: supa.client.table("zendesk_usage")
-                    .update(
-                        {
-                            "budget": 0,
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
-                        }
+                    lambda: (
+                        supa.client.table("zendesk_usage")
+                        .update(
+                            {
+                                "budget": 0,
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            }
+                        )
+                        .eq("month_key", mk)
+                        .execute()
                     )
-                    .eq("month_key", mk)
-                    .execute()
                 )
                 row["budget"] = 0
             except Exception:
@@ -178,15 +170,17 @@ async def _upsert_month_usage(delta_calls: int = 0) -> Dict[str, Any]:
     if delta_calls:
         new_val = max(0, int(row.get("calls_used", 0)) + int(delta_calls))
         await supa._exec(
-            lambda: supa.client.table("zendesk_usage")
-            .update(
-                {
-                    "calls_used": new_val,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
+            lambda: (
+                supa.client.table("zendesk_usage")
+                .update(
+                    {
+                        "calls_used": new_val,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                .eq("month_key", mk)
+                .execute()
             )
-            .eq("month_key", mk)
-            .execute()
         )
         row["calls_used"] = new_val
     return row
@@ -197,11 +191,13 @@ async def _get_feature_enabled() -> bool:
     try:
         supa = get_supabase_client()
         resp = await supa._exec(
-            lambda: supa.client.table("feature_flags")
-            .select("value")
-            .eq("key", "zendesk_enabled")
-            .maybe_single()
-            .execute()
+            lambda: (
+                supa.client.table("feature_flags")
+                .select("value")
+                .eq("key", "zendesk_enabled")
+                .maybe_single()
+                .execute()
+            )
         )
         data = getattr(resp, "data", None)
         if data and isinstance(data.get("value"), dict):
@@ -226,11 +222,13 @@ async def _get_feature_state_snapshot() -> Dict[str, Any]:
     try:
         supa = get_supabase_client()
         resp = await supa._exec(
-            lambda: supa.client.table("feature_flags")
-            .select("value")
-            .eq("key", "zendesk_enabled")
-            .maybe_single()
-            .execute()
+            lambda: (
+                supa.client.table("feature_flags")
+                .select("value")
+                .eq("key", "zendesk_enabled")
+                .maybe_single()
+                .execute()
+            )
         )
         data = getattr(resp, "data", None)
         if data and isinstance(data.get("value"), dict):
@@ -266,16 +264,20 @@ async def health(request: Request) -> Dict[str, Any]:
     supa = get_supabase_client()
     try:
         pending = await supa._exec(
-            lambda: supa.client.table("zendesk_pending_tickets")
-            .select("id", count=COUNT_EXACT, head=True)
-            .eq("status", "pending")
-            .execute()
+            lambda: (
+                supa.client.table("zendesk_pending_tickets")
+                .select("id", count=COUNT_EXACT, head=True)
+                .eq("status", "pending")
+                .execute()
+            )
         )
         retry = await supa._exec(
-            lambda: supa.client.table("zendesk_pending_tickets")
-            .select("id", count=COUNT_EXACT, head=True)
-            .eq("status", "retry")
-            .execute()
+            lambda: (
+                supa.client.table("zendesk_pending_tickets")
+                .select("id", count=COUNT_EXACT, head=True)
+                .eq("status", "retry")
+                .execute()
+            )
         )
         q_counts = {
             "pending": getattr(pending, "count", None),
@@ -289,11 +291,13 @@ async def health(request: Request) -> Dict[str, Any]:
 
         today = date.today().isoformat()
         du = await supa._exec(
-            lambda: supa.client.table("zendesk_daily_usage")
-            .select("gemini_calls_used,gemini_daily_limit")
-            .eq("usage_date", today)
-            .maybe_single()
-            .execute()
+            lambda: (
+                supa.client.table("zendesk_daily_usage")
+                .select("gemini_calls_used,gemini_daily_limit")
+                .eq("usage_date", today)
+                .maybe_single()
+                .execute()
+            )
         )
         daily_usage = getattr(du, "data", None) or {}
     except Exception:
@@ -396,11 +400,13 @@ async def set_feature(
     try:
         supa = get_supabase_client()
         resp = await supa._exec(
-            lambda: supa.client.table("feature_flags")
-            .select("value")
-            .eq("key", "zendesk_enabled")
-            .maybe_single()
-            .execute()
+            lambda: (
+                supa.client.table("feature_flags")
+                .select("value")
+                .eq("key", "zendesk_enabled")
+                .maybe_single()
+                .execute()
+            )
         )
         existing = (getattr(resp, "data", None) or {}).get("value") or {}
     except Exception:
@@ -413,9 +419,11 @@ async def set_feature(
     try:
         supa = get_supabase_client()
         await supa._exec(
-            lambda: supa.client.table("feature_flags")
-            .upsert({"key": "zendesk_enabled", "value": value})
-            .execute()
+            lambda: (
+                supa.client.table("feature_flags")
+                .upsert({"key": "zendesk_enabled", "value": value})
+                .execute()
+            )
         )
     except Exception as e:
         logger.error("feature flag upsert failed: %s", e)
@@ -495,9 +503,11 @@ async def webhook(request: Request) -> Dict[str, Any]:
                 except Exception:
                     ts_epoch = None
             await supa._exec(
-                lambda: supa.client.table("zendesk_webhook_events")
-                .insert({"sig_key": sig_key, "ts": ts_epoch})
-                .execute()
+                lambda: (
+                    supa.client.table("zendesk_webhook_events")
+                    .insert({"sig_key": sig_key, "ts": ts_epoch})
+                    .execute()
+                )
             )
     except Exception as e:
         msg = str(e)
@@ -613,14 +623,14 @@ async def webhook(request: Request) -> Dict[str, Any]:
 
     # Minimal retention: truncate long text fields and do NOT persist raw payload
     if subject is not None:
-        redacted_subject = _redact_pii(subject)
+        redacted_subject = sanitize_zendesk_ticket_text(str(subject))
         subject = (
             redacted_subject[:200]
             if isinstance(redacted_subject, str)
             else redacted_subject
         )
     if description is not None:
-        redacted_description = _redact_pii(description)
+        redacted_description = sanitize_zendesk_ticket_text(str(description))
         description = (
             redacted_description[:2000]
             if isinstance(redacted_description, str)
@@ -631,19 +641,21 @@ async def webhook(request: Request) -> Dict[str, Any]:
     try:
         supa = get_supabase_client()
         await supa._exec(
-            lambda: supa.client.table("zendesk_pending_tickets")
-            .insert(
-                {
-                    "ticket_id": ticket_id_int,
-                    "brand_id": str(brand_id) if brand_id is not None else None,
-                    "subject": subject,
-                    "description": description,
-                    "payload": {},
-                    "status": "pending",
-                    "requester_hashed": requester_hashed,
-                }
+            lambda: (
+                supa.client.table("zendesk_pending_tickets")
+                .insert(
+                    {
+                        "ticket_id": ticket_id_int,
+                        "brand_id": str(brand_id) if brand_id is not None else None,
+                        "subject": subject,
+                        "description": description,
+                        "payload": {},
+                        "status": "pending",
+                        "requester_hashed": requester_hashed,
+                    }
+                )
+                .execute()
             )
-            .execute()
         )
         queued = True
     except Exception as e:

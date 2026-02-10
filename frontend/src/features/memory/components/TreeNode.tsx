@@ -14,6 +14,7 @@ export function TreeNode({
   hovered,
   selected,
   reviewed,
+  editedInfluenced,
   dimmed,
   ghosted,
   lod,
@@ -30,6 +31,7 @@ export function TreeNode({
   hovered: boolean;
   selected: boolean;
   reviewed?: boolean;
+  editedInfluenced?: boolean;
   dimmed: boolean;
   ghosted: boolean;
   lod: LODLevel;
@@ -46,6 +48,8 @@ export function TreeNode({
   const baseColor = ghosted ? "#9CA3AF" : coreColor;
   const reviewedOpacity = ghosted ? 0.08 : dimmed ? 0.14 : hovered ? 0.6 : 0.38;
   const reviewedColor = "#34d399";
+  const editedOpacity = ghosted ? 0.08 : dimmed ? 0.14 : hovered ? 0.55 : 0.32;
+  const editedColor = "#f59e0b";
 
   const materialProps = useMemo(
     () => ({
@@ -126,6 +130,17 @@ export function TreeNode({
             color={reviewedColor}
             transparent
             opacity={reviewedOpacity}
+          />
+        </mesh>
+      )}
+
+      {editedInfluenced && showDetail && (
+        <mesh position={[node.position.x, node.position.y, node.position.z]}>
+          <torusGeometry args={[0.9, 0.04, 10, 36]} />
+          <meshBasicMaterial
+            color={editedColor}
+            transparent
+            opacity={editedOpacity}
           />
         </mesh>
       )}

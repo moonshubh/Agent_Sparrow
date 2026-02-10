@@ -659,6 +659,53 @@
   gap: 12px;
 }
 
+.memory-sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--memory-text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.memory-sync-pill--syncing {
+  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.14);
+  color: #bfdbfe;
+}
+
+.memory-sync-pill--success {
+  border-color: rgba(16, 185, 129, 0.42);
+  background: rgba(16, 185, 129, 0.14);
+  color: #bbf7d0;
+}
+
+.memory-sync-pill--error {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.16);
+  color: #fde68a;
+}
+
+.memory-sync-pill button {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: inherit;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.memory-sync-pill button:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .memory-header-sort {
   display: flex;
   align-items: center;
@@ -1552,6 +1599,11 @@
 .memory-graph-mode-legend__dot--reviewed {
   background: #34d399;
   box-shadow: 0 0 16px rgba(52, 211, 153, 0.28);
+}
+
+.memory-graph-mode-legend__dot--edited {
+  background: #f59e0b;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.32);
 }
 
 /* Graph Legend */
@@ -3850,6 +3902,17 @@
   margin-top: 2px;
 }
 
+.node-detail-edited-chip {
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fde68a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .node-detail-action {
   display: flex;
   align-items: center;
@@ -3995,6 +4058,40 @@
   max-width: 400px;
 }
 
+.memory-content-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-content-click-target {
+  width: 100%;
+  display: block;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.01);
+  color: inherit;
+  cursor: pointer;
+  transition: var(--memory-transition-fast);
+}
+
+.memory-content-click-target:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.memory-content-click-target:focus-visible {
+  outline: none;
+  border-color: var(--memory-primary);
+  box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.16);
+}
+
+.memory-content-click-target.is-edited {
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
 .memory-content-header {
   display: flex;
   align-items: center;
@@ -4028,8 +4125,57 @@
   word-break: break-word;
 }
 
-.memory-row.is-edited .memory-content-tooltip-target {
-  cursor: help;
+.memory-content-rich-preview {
+  position: relative;
+  max-height: 230px;
+  overflow: hidden;
+}
+
+.memory-content-inline-tiptap .memory-tiptap-wrapper {
+  min-height: 0;
+}
+
+.memory-content-inline-tiptap .memory-tiptap-editor {
+  min-height: 0;
+}
+
+.memory-content-inline-tiptap .memory-tiptap-editor--readonly {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.memory-content-inline-tiptap .ProseMirror {
+  padding: 0;
+  max-width: 100%;
+}
+
+.memory-content-inline-tiptap .ProseMirror > *:first-child {
+  margin-top: 0;
+}
+
+.memory-content-inline-tiptap .ProseMirror > *:last-child {
+  margin-bottom: 0;
+}
+
+.memory-content-expand-btn {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: var(--memory-primary);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+}
+
+.memory-content-expand-btn:hover {
+  color: #7cc8ff;
+  text-decoration: underline;
+}
+
+.memory-row.is-edited .memory-content-click-target {
+  cursor: pointer;
 }
 
 .memory-retrieval-count {
@@ -5207,6 +5353,53 @@
 .memory-tiptap-editor h3 + ul,
 .memory-tiptap-editor h3 + ol {
   margin-top: 0;
+}
+
+.memory-tiptap-editor .memory-key-heading {
+  color: #22d3ee !important;
+  text-decoration: underline !important;
+  text-decoration-color: rgba(34, 211, 238, 0.75);
+  text-underline-offset: 4px;
+  text-decoration-thickness: 2px;
+}
+
+.memory-tiptap-editor .memory-key-heading * {
+  color: #22d3ee !important;
+}
+
+.memory-tiptap-editor .memory-key-label-line {
+  color: #22d3ee !important;
+  font-weight: 600;
+  text-decoration: underline !important;
+  text-decoration-color: rgba(34, 211, 238, 0.75);
+  text-underline-offset: 4px;
+  text-decoration-thickness: 2px;
+}
+
+.memory-tiptap-editor .memory-key-label-line * {
+  color: #22d3ee !important;
+}
+
+.memory-tiptap-wrapper.memory-edit-mb-playbook
+  .memory-tiptap-editor
+  .memory-key-heading {
+  color: #22d3ee !important;
+  border-bottom-color: rgba(34, 211, 238, 0.55);
+  text-decoration: underline !important;
+  text-decoration-color: rgba(34, 211, 238, 0.75);
+  text-underline-offset: 4px;
+  text-decoration-thickness: 2px;
+}
+
+.memory-tiptap-wrapper.memory-edit-mb-playbook
+  .memory-tiptap-editor
+  .memory-key-label-line {
+  color: #22d3ee !important;
+  font-weight: 600;
+  text-decoration: underline !important;
+  text-decoration-color: rgba(34, 211, 238, 0.75);
+  text-underline-offset: 4px;
+  text-decoration-thickness: 2px;
 }
 
 .memory-tiptap-editor p {

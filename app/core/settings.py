@@ -45,9 +45,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
     google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
-    gemma_helper_max_calls: int = Field(
-        default=10, alias="GEMMA_HELPER_MAX_CALLS"
-    )
+    gemma_helper_max_calls: int = Field(default=10, alias="GEMMA_HELPER_MAX_CALLS")
     gemini_afc_max_remote_calls: Optional[int] = Field(
         default=1000, alias="GEMINI_AFC_MAX_REMOTE_CALLS"
     )
@@ -218,9 +216,7 @@ class Settings(BaseSettings):
     # Thinking trace mode: narrated | hybrid | provider_reasoning | off
     trace_mode: str = Field(default="narrated", alias="TRACE_MODE")
     # Agent timeouts: disabled by default for quality-first processing
-    agent_disable_timeouts: bool = Field(
-        default=True, alias="AGENT_DISABLE_TIMEOUTS"
-    )
+    agent_disable_timeouts: bool = Field(default=True, alias="AGENT_DISABLE_TIMEOUTS")
     agent_helper_timeout_sec: Optional[float] = Field(
         default=None, alias="AGENT_HELPER_TIMEOUT_SEC"
     )
@@ -544,6 +540,23 @@ class Settings(BaseSettings):
     zendesk_excluded_tags: List[str] = Field(
         default_factory=lambda: ["mac_general__feature_delivered", "mb_spam_suspected"],
         alias="ZENDESK_EXCLUDED_TAGS",
+    )
+    # Strict spam guard controls for Zendesk ticket triage.
+    zendesk_spam_guard_strict_enabled: bool = Field(
+        default=True, alias="ZENDESK_SPAM_GUARD_STRICT_ENABLED"
+    )
+    zendesk_spam_score_threshold: float = Field(
+        default=0.65, alias="ZENDESK_SPAM_SCORE_THRESHOLD"
+    )
+    zendesk_spam_recipient_burst_threshold: int = Field(
+        default=20, alias="ZENDESK_SPAM_RECIPIENT_BURST_THRESHOLD"
+    )
+    zendesk_spam_high_risk_domain_suffixes: List[str] = Field(
+        default_factory=lambda: ["8b.io"],
+        alias="ZENDESK_SPAM_HIGH_RISK_DOMAIN_SUFFIXES",
+    )
+    zendesk_spam_always_block_explicit_link: bool = Field(
+        default=True, alias="ZENDESK_SPAM_ALWAYS_BLOCK_EXPLICIT_LINK"
     )
     zendesk_excluded_brand_ids: List[str] = Field(
         default_factory=list,
@@ -920,6 +933,7 @@ class Settings(BaseSettings):
         "zendesk_firecrawl_support_pages",
         "zendesk_internal_retrieval_max_per_source",
         "zendesk_issue_pattern_max_hits",
+        "zendesk_spam_recipient_burst_threshold",
     )
     @classmethod
     def validate_zendesk_positive_ints(cls, v: int) -> int:
@@ -932,6 +946,7 @@ class Settings(BaseSettings):
         "zendesk_macro_min_relevance",
         "zendesk_feedme_min_relevance",
         "zendesk_issue_pattern_min_similarity",
+        "zendesk_spam_score_threshold",
     )
     @classmethod
     def validate_zendesk_relevance_thresholds(cls, v: float) -> float:
@@ -1047,6 +1062,37 @@ class Settings(BaseSettings):
             return [item.strip().lower() for item in raw.split(",") if item.strip()]
         if isinstance(v, list):
             return [str(item).strip().lower() for item in v if str(item).strip()]
+        return []
+
+    @field_validator("zendesk_spam_high_risk_domain_suffixes", mode="before")
+    @classmethod
+    def parse_zendesk_spam_high_risk_domain_suffixes(cls, v):
+        if v is None:
+            return ["8b.io"]
+        if isinstance(v, str):
+            raw = v.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [
+                            str(item).strip().lower().lstrip(".")
+                            for item in parsed
+                            if str(item).strip()
+                        ]
+                except Exception:
+                    return []
+            return [
+                item.strip().lower().lstrip(".")
+                for item in raw.split(",")
+                if item.strip()
+            ]
+        if isinstance(v, list):
+            return [
+                str(item).strip().lower().lstrip(".") for item in v if str(item).strip()
+            ]
         return []
 
     @field_validator("zendesk_excluded_brand_ids", mode="before")

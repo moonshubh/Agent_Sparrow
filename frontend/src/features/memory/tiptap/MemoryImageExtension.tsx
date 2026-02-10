@@ -11,6 +11,41 @@ import {
 
 export const MemoryImageExtension = Image.extend({
   name: "image",
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: {
+        default: null,
+        parseHTML: (element) =>
+          parseDimensionValue(
+            element.getAttribute("data-width") ?? element.getAttribute("width"),
+          ) ?? null,
+        renderHTML: (attributes) => {
+          const width = parseDimensionValue(attributes.width);
+          if (!width) return {};
+          return {
+            width: String(width),
+            "data-width": String(width),
+          };
+        },
+      },
+      height: {
+        default: null,
+        parseHTML: (element) =>
+          parseDimensionValue(
+            element.getAttribute("data-height") ?? element.getAttribute("height"),
+          ) ?? null,
+        renderHTML: (attributes) => {
+          const height = parseDimensionValue(attributes.height);
+          if (!height) return {};
+          return {
+            height: String(height),
+            "data-height": String(height),
+          };
+        },
+      },
+    };
+  },
   addNodeView() {
     return ReactNodeViewRenderer(MemoryImageView);
   },

@@ -152,6 +152,29 @@ The Memory UI provides a 3D knowledge graph visualization for managing agent mem
 - Feedback loop: message thumbs up/down → memory confidence updates
 - Semantic search across memory content
 
+### Memory UI Reliability + Trust Upgrade (Feb 2026)
+Completed sprint upgrade focused on reliability, trust, and edit synchronization:
+
+- **Import hardening**: `Import Knowledge` now defaults to `mb_playbook` across UI, API schema/docs, and Celery import fallback handling.
+- **Table UX simplification**: content-cell single click opens edit modal for admins and rich read-only modal for non-admin users; eye action removed.
+- **Description preview reliability**: added robust fallback preview and explicit show more/show less expansion to prevent blank/truncated post-edit previews.
+- **Feedback determinism**: thumbs-up/down now apply optimistic updates with rollback-safe cache handling and robust numeric confidence parsing.
+- **Edited memory normalization**: edited detection standardized to `updated_at > created_at` plus editor identity metadata/reviewer fields (frontend + backend parity).
+- **Retrieval ranking explainability**: `search_memories` now returns `is_edited`, `edited_boost`, `hybrid_score` and orders by hybrid score with a conservative `0.05` edited boost.
+- **Agent prioritization alignment**: unified agent memory context consumes and surfaces hybrid ranking details (`similarity`, `confidence`, `edited`, `edited_boost`, `hybrid`).
+- **Graph/table sync**: post-edit graph sync indicator, async extraction polling, non-blocking timeout warning, and manual refresh path.
+- **Graph trust visuals**: added edited-influence amber overlay accents, legend updates, and node-level edited-influence chip/counter.
+- **Feedback step guarantee (Feb 2026 follow-up)**: thumbs feedback confidence now changes in fixed 5% steps (`+0.05` for `thumbs_up`, `-0.05` for `thumbs_down`) in both UI optimistic updates and the DB RPC (`20260209124500_memory_feedback_confidence_step_five.sql`) to keep table percentages consistent with persisted values.
+- **Feedback table reflection hardening (Feb 2026 follow-up)**: memory table feedback handlers now safely coerce confidence/count values before optimistic math, prevent action-click propagation side effects, and sync selected detail panel confidence immediately from feedback responses.
+- **Import Knowledge reliability follow-up (Feb 2026)**: Zendesk `mb_playbook` imports now expose task status polling (`GET /api/v1/memory/import/zendesk-tagged/{task_id}`), return structured completion details (`processed_tickets`, `imported_memory_ids`, failure breakdown), and the Memory UI now polls queued imports to show completion/failure toasts, refresh data on completion, and focus the latest imported memory in table view.
+- **Import resilience hardening**: import task now records per-ticket failure reasons and falls back to direct embedding generation when rate-limit infrastructure is temporarily unavailable (for example, Celery async loop lifecycle issues), reducing silent partial-import failures.
+- **Inline image resize persistence fix (Feb 2026 follow-up)**: Memory TipTap image nodes now persist `width`/`height` attributes explicitly across markdown parse/render, so resized imported-memory images remain resized after saving, closing, and reopening.
+- **`mb_playbook` section emphasis (Feb 2026 follow-up)**: in imported-memory edit mode, `Problem`, `Impact`, and `Environment` headings are now highlighted with stronger cyan styling and underline for clear visual scannability.
+- **Root-cause update reliability fix (Feb 2026 follow-up)**: memory updates now defensively skip invalid/nonexistent reviewer IDs when setting `reviewed_by` (notably the SKIP_AUTH dev placeholder UUID), avoiding `memories_reviewed_by_fkey` failures that previously prevented edit persistence.
+- **`mb_playbook` label-line emphasis (Feb 2026 follow-up)**: highlight treatment now applies not only to Markdown heading nodes but also to label-style paragraph lines (`Problem:`, `Impact:`, `Environment:`) used by imported summaries.
+- **`mb_playbook` emphasis resilience (Feb 2026 follow-up)**: edit-view highlighting now has a content-structure fallback (for memories whose metadata tags/source were edited away) and stronger CSS specificity to keep heading emphasis consistently visible.
+- **Inline resize freeze fix (Feb 2026 follow-up)**: TipTap image resize now uses robust pointer cleanup (`pointerup`/`pointercancel`/window `blur`, capture release, and unmount-safe listener disposal) to prevent stuck drag listeners from freezing memory modal interactions.
+
 ### State Management
 - **Backend**: LangGraph state in `app/agents/orchestration/orchestration/state.py`
   - Supports attachments, trace_id, session management

@@ -1787,11 +1787,14 @@ def import_zendesk_tagged(
         from app.security.pii_redactor import redact_pii
         from uuid import uuid5, NAMESPACE_URL
 
-        raw_tag = (tag or "md_playbook").strip()
+        raw_tag = (tag or "mb_playbook").strip()
         tag_tokens = [t.strip() for t in raw_tag.split(",") if t.strip()]
-        if len(tag_tokens) == 1 and tag_tokens[0] in {"md_playbook", "mb_playbook"}:
-            tag_tokens = ["md_playbook", "mb_playbook"]
-        tag_value = ",".join(tag_tokens) if tag_tokens else "md_playbook"
+        if tag_tokens:
+            tag_tokens = [
+                "mb_playbook" if token.lower() == "md_playbook" else token
+                for token in tag_tokens
+            ]
+        tag_value = ",".join(tag_tokens) if tag_tokens else "mb_playbook"
         ticket_limit = max(1, int(limit))
 
         settings = current_settings()
@@ -1809,6 +1812,10 @@ def import_zendesk_tagged(
                 "skipped": 0,
                 "failed": 0,
                 "tag": tag_value,
+                "processed_tickets": 0,
+                "imported_memory_ids": [],
+                "failed_ticket_ids": [],
+                "failure_reasons": {},
                 "error": "Zendesk credentials missing",
             }
 
@@ -1820,7 +1827,7 @@ def import_zendesk_tagged(
         )
 
         queries: list[str] = []
-        for tag_name in tag_tokens or ["md_playbook"]:
+        for tag_name in tag_tokens or ["mb_playbook"]:
             queries.append(f"type:ticket tags:{tag_name} status:solved")
             queries.append(f"type:ticket tags:{tag_name} status:closed")
         tickets: list[dict[str, Any]] = []
@@ -1845,6 +1852,12 @@ def import_zendesk_tagged(
                 continue
             deduped[str(tid)] = item
         ticket_rows = list(deduped.values())[:ticket_limit]
+        logger.info(
+            "zendesk_import_discovered_tickets tag=%s total=%d selected=%d",
+            tag_value,
+            len(deduped),
+            len(ticket_rows),
+        )
 
         supabase = get_supabase_client()
         if not getattr(supabase.config, "service_key", None):
@@ -1856,6 +1869,10 @@ def import_zendesk_tagged(
                 "skipped": 0,
                 "failed": len(ticket_rows),
                 "tag": tag_value,
+                "processed_tickets": len(ticket_rows),
+                "imported_memory_ids": [],
+                "failed_ticket_ids": [],
+                "failure_reasons": {},
                 "error": "SUPABASE_SERVICE_KEY is required for memory imports",
             }
         service = get_memory_ui_service()
@@ -1863,6 +1880,16 @@ def import_zendesk_tagged(
         tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
 
         imported = skipped = failed = 0
+        imported_memory_ids: list[str] = []
+        failed_ticket_ids: list[str] = []
+        failure_reasons: dict[str, str] = {}
+
+        def _record_failure(ticket_id_value: str, reason: str) -> None:
+            nonlocal failed
+            failed += 1
+            failed_ticket_ids.append(ticket_id_value)
+            failure_reasons[ticket_id_value] = reason[:240]
+
         if not getattr(supabase.config, "service_key", None):
             logger.warning(
                 "zendesk_import_missing_service_key; memory assets may fail to render for private buckets"
@@ -2201,13 +2228,46 @@ def import_zendesk_tagged(
             try:
                 embedding = await service.generate_embedding(content)
             except Exception as exc:
-                logger.warning(
-                    "zendesk_import_embedding_failed ticket_id=%s error=%s",
-                    ticket_id,
-                    str(exc)[:180],
+                error_text = str(exc)
+                error_text_lower = error_text.lower()
+                fallback_eligible = (
+                    "rate limiting service unavailable" in error_text_lower
+                    or "event loop is closed" in error_text_lower
                 )
-                failed += 1
-                continue
+                if not fallback_eligible:
+                    logger.warning(
+                        "zendesk_import_embedding_failed ticket_id=%s error=%s",
+                        ticket_id,
+                        error_text[:180],
+                    )
+                    _record_failure(ticket_id, f"embedding_failed: {error_text}")
+                    continue
+
+                logger.warning(
+                    "zendesk_import_embedding_fallback ticket_id=%s reason=%s",
+                    ticket_id,
+                    error_text[:180],
+                )
+                try:
+                    model = service._get_embedding_model()
+                    loop = asyncio.get_running_loop()
+                    embedding = await loop.run_in_executor(
+                        None,
+                        model.embed_query,
+                        content,
+                    )
+                    assert_dim(embedding, context="zendesk_import_fallback")
+                except Exception as fallback_exc:  # noqa: BLE001
+                    logger.warning(
+                        "zendesk_import_embedding_fallback_failed ticket_id=%s error=%s",
+                        ticket_id,
+                        str(fallback_exc)[:180],
+                    )
+                    _record_failure(
+                        ticket_id,
+                        f"embedding_fallback_failed: {fallback_exc!s}",
+                    )
+                    continue
 
             payload = {
                 "id": memory_id,
@@ -2224,61 +2284,44 @@ def import_zendesk_tagged(
             }
 
             try:
-                await supabase._exec(
-                    lambda: supabase.client.table("memories").insert(payload).execute()
+                existing = await supabase._exec(
+                    lambda: supabase.client.table("memories")
+                    .select("id")
+                    .eq("id", memory_id)
+                    .limit(1)
+                    .execute()
                 )
+                exists = bool(existing.data)
+
+                if exists:
+                    update_payload = {
+                        "content": payload["content"],
+                        "metadata": payload["metadata"],
+                        "source_type": payload["source_type"],
+                        "agent_id": payload["agent_id"],
+                        "tenant_id": payload["tenant_id"],
+                        "review_status": payload["review_status"],
+                        "confidence_score": payload["confidence_score"],
+                        "embedding": payload["embedding"],
+                        "updated_at": payload["updated_at"],
+                    }
+                    await supabase._exec(
+                        lambda: supabase.client.table("memories")
+                        .update(update_payload)
+                        .eq("id", memory_id)
+                        .execute()
+                    )
+                else:
+                    await supabase._exec(
+                        lambda: supabase.client.table("memories").insert(payload).execute()
+                    )
             except Exception as exc:
-                msg = str(exc).lower()
-                if (
-                    "duplicate key" in msg
-                    or "unique constraint" in msg
-                    or "23505" in msg
-                ):
-                    try:
-                        update_payload = {
-                            "content": payload["content"],
-                            "metadata": payload["metadata"],
-                            "source_type": payload["source_type"],
-                            "agent_id": payload["agent_id"],
-                            "tenant_id": payload["tenant_id"],
-                            "review_status": payload["review_status"],
-                            "confidence_score": payload["confidence_score"],
-                            "embedding": payload["embedding"],
-                            "updated_at": payload["updated_at"],
-                        }
-                        await supabase._exec(
-                            lambda: supabase.client.table("memories")
-                            .update(update_payload)
-                            .eq("id", memory_id)
-                            .execute()
-                        )
-                        try:
-                            store = SparrowWorkspaceStore(
-                                session_id=f"zendesk-{ticket_id}"
-                            )
-                            await store.cleanup_session_data()
-                        except Exception as cleanup_exc:
-                            logger.debug(
-                                "zendesk_import_cleanup_failed ticket_id=%s error=%s",
-                                ticket_id,
-                                str(cleanup_exc)[:180],
-                            )
-                        imported += 1
-                        continue
-                    except Exception as update_exc:
-                        logger.warning(
-                            "zendesk_import_update_failed ticket_id=%s error=%s",
-                            ticket_id,
-                            str(update_exc)[:180],
-                        )
-                        failed += 1
-                        continue
                 logger.warning(
-                    "zendesk_import_insert_failed ticket_id=%s error=%s",
+                    "zendesk_import_persist_failed ticket_id=%s error=%s",
                     ticket_id,
                     str(exc)[:180],
                 )
-                failed += 1
+                _record_failure(ticket_id, f"persist_failed: {str(exc)}")
                 continue
 
             try:
@@ -2292,12 +2335,17 @@ def import_zendesk_tagged(
                 )
 
             imported += 1
+            imported_memory_ids.append(memory_id)
 
         return {
             "imported": imported,
             "skipped": skipped,
             "failed": failed,
             "tag": tag_value,
+            "processed_tickets": len(ticket_rows),
+            "imported_memory_ids": imported_memory_ids,
+            "failed_ticket_ids": failed_ticket_ids,
+            "failure_reasons": failure_reasons,
         }
 
     return asyncio.run(_run())

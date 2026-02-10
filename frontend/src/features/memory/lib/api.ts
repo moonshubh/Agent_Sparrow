@@ -38,6 +38,7 @@ import type {
   ImportMemorySourcesResponse,
   ImportZendeskTaggedRequest,
   ImportZendeskTaggedResponse,
+  ImportZendeskTaggedTaskStatusResponse,
   ApproveMemoryResponse,
   ListMemoriesRequest,
   ListMemoriesResponse,
@@ -301,6 +302,17 @@ export async function importZendeskTagged(
     ImportZendeskTaggedResponse,
     ImportZendeskTaggedRequest
   >(`${MEMORY_API_BASE}/import/zendesk-tagged`, request);
+}
+
+/**
+ * Get status for a queued Zendesk tagged import task (admin only)
+ */
+export async function getZendeskTaggedImportStatus(
+  taskId: string,
+): Promise<ImportZendeskTaggedTaskStatusResponse> {
+  return apiClient.get<ImportZendeskTaggedTaskStatusResponse>(
+    `${MEMORY_API_BASE}/import/zendesk-tagged/${encodeURIComponent(taskId)}`,
+  );
 }
 
 /**
@@ -796,13 +808,28 @@ export async function getDuplicateCandidates(
 export async function getGraphData(
   entityTypes?: EntityType[],
 ): Promise<GraphData> {
+  const graphQs = new URLSearchParams();
+  graphQs.set("limit_entities", String(API_LIMITS.MAX_ENTITIES));
+  graphQs.set("limit_relationships", String(API_LIMITS.MAX_RELATIONSHIPS));
+  if (entityTypes && entityTypes.length > 0) {
+    entityTypes.forEach((type) => graphQs.append("entity_types", type));
+  }
+
+  try {
+    return await apiClient.get<GraphData>(`${MEMORY_API_BASE}/graph?${graphQs}`);
+  } catch (err: unknown) {
+    // Fallback for environments where backend graph enrichment is not deployed yet.
+    if (!(err instanceof APIRequestError) || err.status !== 404) {
+      throw err;
+    }
+  }
+
   const [entities, relationships] = await Promise.all([
     getEntities(entityTypes),
     getRelationships(),
   ]);
 
   const entityIds = new Set(entities.map((entity) => entity.id));
-
   const nodes: GraphNode[] = entities.map((entity) => ({
     id: entity.id,
     entityType: entity.entity_type,
@@ -818,6 +845,8 @@ export async function getGraphData(
     updatedAt: entity.updated_at,
     color: ENTITY_COLORS[entity.entity_type] || "#6B7280",
     size: Math.max(4, Math.min(20, entity.occurrence_count * 2)),
+    hasEditedMemory: false,
+    editedMemoryCount: 0,
   }));
 
   const links: GraphLink[] = relationships
@@ -835,6 +864,7 @@ export async function getGraphData(
       occurrenceCount: rel.occurrence_count,
       acknowledgedAt: rel.acknowledged_at ?? null,
       lastModifiedAt: rel.last_modified_at ?? null,
+      hasEditedProvenance: false,
     }));
 
   return { nodes, links };
@@ -892,6 +922,7 @@ export const memoryAPI = {
   dismissDuplicate,
   importMemorySources,
   importZendeskTagged,
+  getZendeskTaggedImportStatus,
   approveMemory,
   updateRelationship,
   mergeRelationships,

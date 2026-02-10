@@ -1289,6 +1289,92 @@ export function AgentProvider({
         }
       }
 
+      // Rehydrate persisted artifacts from assistant message metadata.
+      // This is a reliability fallback when live custom events are dropped.
+      const artifactStore = getGlobalArtifactStore();
+      for (const msg of nextMessages) {
+        if (msg.role !== "assistant" || !isRecord(msg.metadata)) continue;
+        const rawArtifacts = msg.metadata.artifacts;
+        if (!Array.isArray(rawArtifacts)) continue;
+
+        for (const rawArtifact of rawArtifacts) {
+          if (!isRecord(rawArtifact)) continue;
+          const type =
+            typeof rawArtifact.type === "string"
+              ? rawArtifact.type.trim().toLowerCase()
+              : "";
+          const artifactId =
+            typeof rawArtifact.id === "string" && rawArtifact.id.trim()
+              ? rawArtifact.id.trim()
+              : "";
+          const title =
+            typeof rawArtifact.title === "string" && rawArtifact.title.trim()
+              ? rawArtifact.title.trim()
+              : type === "image"
+                ? "Generated Image"
+                : "Article";
+          const messageId = String(msg.id);
+
+          if (type === "article") {
+            const content =
+              typeof rawArtifact.content === "string" ? rawArtifact.content : "";
+            if (!content) continue;
+            registerArticleArtifact({
+              id: artifactId || undefined,
+              title,
+              content,
+              messageId,
+            });
+            continue;
+          }
+
+          if (type !== "image" || !artifactStore) continue;
+
+          const imageUrl =
+            typeof rawArtifact.imageUrl === "string"
+              ? rawArtifact.imageUrl
+              : typeof rawArtifact.content === "string"
+                ? rawArtifact.content
+                : "";
+          const imageData =
+            typeof rawArtifact.imageData === "string"
+              ? rawArtifact.imageData
+              : "";
+          if (!imageUrl && !imageData) continue;
+
+          const fallbackId = `img-hydrated-${hashText(`${title}:${imageUrl || imageData.slice(0, 256)}`)}`;
+          const resolvedId = artifactId || fallbackId;
+          const state = artifactStore.getState();
+          if (state.artifactsById[resolvedId]) continue;
+
+          state.addArtifact({
+            id: resolvedId,
+            type: "image",
+            title,
+            content: imageUrl || "",
+            messageId,
+            imageUrl: imageUrl || undefined,
+            imageData: imageData || undefined,
+            mimeType:
+              typeof rawArtifact.mimeType === "string"
+                ? rawArtifact.mimeType
+                : "image/png",
+            altText:
+              typeof rawArtifact.altText === "string"
+                ? rawArtifact.altText
+                : undefined,
+            aspectRatio:
+              typeof rawArtifact.aspectRatio === "string"
+                ? rawArtifact.aspectRatio
+                : undefined,
+            resolution:
+              typeof rawArtifact.resolution === "string"
+                ? rawArtifact.resolution
+                : undefined,
+          });
+        }
+      }
+
       const lastAssistantId =
         [...nextMessages].reverse().find((msg) => msg.role === "assistant")
           ?.id ?? "";
