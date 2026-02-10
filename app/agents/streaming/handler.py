@@ -2433,7 +2433,7 @@ class StreamEventHandler:
                 try:
                     parsed = httpx.URL(value)
                     return parsed.scheme.lower() in {"http", "https"}
-                except Exception:
+                except httpx.InvalidURL:
                     return False
 
             def _coerce(value: Any) -> str:
@@ -2567,7 +2567,7 @@ class StreamEventHandler:
                     page_url=image.get("page_url"),
                 )
             logger.info(
-                "article_artifact_emitted: title={}, content_length={}, images={}",
+                "article_artifact_emitted: title=%s, content_length=%d, images=%d",
                 title,
                 len(content or ""),
                 len(normalized_images),

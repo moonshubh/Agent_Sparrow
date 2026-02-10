@@ -266,7 +266,7 @@ def _escape_like_pattern(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-GRAPH_ENTITY_COLORS: Dict[str, str] = {
+GRAPH_ENTITY_COLORS: dict[str, str] = {
     "product": "#0078D4",
     "feature": "#10B981",
     "issue": "#EF4444",
@@ -287,7 +287,7 @@ def _metadata_text(metadata: Any, key: str) -> str:
     return ""
 
 
-def _memory_has_editor_identity(memory_row: Dict[str, Any]) -> bool:
+def _memory_has_editor_identity(memory_row: dict[str, Any]) -> bool:
     reviewed_by = memory_row.get("reviewed_by")
     if isinstance(reviewed_by, str) and reviewed_by.strip():
         return True
@@ -305,7 +305,7 @@ def _memory_has_editor_identity(memory_row: Dict[str, Any]) -> bool:
     return any(_metadata_text(metadata, key) for key in editor_keys)
 
 
-def _is_memory_edited(memory_row: Dict[str, Any]) -> bool:
+def _is_memory_edited(memory_row: dict[str, Any]) -> bool:
     created_at = memory_row.get("created_at")
     updated_at = memory_row.get("updated_at")
 
@@ -437,7 +437,7 @@ async def list_entities(
     current_user: Annotated[TokenPayload, Depends(get_current_user)],
     service: MemoryUIService = Depends(get_memory_ui_service),
     limit: int = Query(default=500, ge=1, le=2000),
-    entity_types: List[str] | None = Query(default=None),
+    entity_types: list[str] | None = Query(default=None),
 ) -> List[MemoryEntityRecord]:
     supabase = service._get_supabase()
     try:
@@ -505,7 +505,7 @@ async def get_graph_data(
     service: MemoryUIService = Depends(get_memory_ui_service),
     limit_entities: int = Query(default=500, ge=1, le=2000),
     limit_relationships: int = Query(default=2000, ge=1, le=10000),
-    entity_types: List[str] | None = Query(default=None),
+    entity_types: list[str] | None = Query(default=None),
 ) -> GraphDataResponse:
     supabase = service._get_supabase()
 
@@ -633,7 +633,7 @@ async def get_graph_data(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to load graph data",
-        )
+        ) from exc
 
 
 @router.put(
@@ -3705,7 +3705,7 @@ async def update_memory(
                 parsed_reviewer = UUID(admin_user.sub)
                 if parsed_reviewer.int != 0:
                     reviewer_id = parsed_reviewer
-            except Exception:
+            except (ValueError, TypeError):
                 logger.warning(
                     "Skipping reviewed_by assignment for memory %s due to invalid admin user id: %s",
                     memory_id,

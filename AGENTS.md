@@ -41,7 +41,7 @@
 - Imported-memory image resize persistence is hardened by storing image `width`/`height` as explicit TipTap image attributes during markdown parse/render, preventing resized inline images from reverting after reopen.
 - `mb_playbook` edit view now highlights `Problem`, `Impact`, and `Environment` headings with stronger color + underline styling for faster scanability.
 - Root-cause fix for failed edits in local/dev mode: memory updates now skip invalid placeholder reviewer IDs (for example `00000000-0000-0000-0000-000000000000`) and only set `reviewed_by` when the reviewer exists in `auth.users`, preventing FK failures that previously blocked image-resize persistence.
-- `mb_playbook` emphasis now supports both markdown headings and label-style paragraph lines (`Problem:`, `Impact:`, `Environment:`), since imported content can use either format.
+- `mb_playbook` emphasis now supports both Markdown headings and label-style paragraph lines (`Problem:`, `Impact:`, `Environment:`), since imported content can use either format.
 - `mb_playbook` edit highlighting now includes a content-shape fallback (when metadata tags/source are missing) and stronger CSS specificity, so section emphasis remains visible after metadata-only edits.
 - Inline image resize interaction now has guarded pointer lifecycle cleanup (`pointerup`/`pointercancel`/window `blur` + capture release) to prevent stuck drag listeners that could freeze modal interactions after resizing.
 

@@ -395,24 +395,16 @@ export function useSubmitFeedback() {
         queryClient.setQueryData(queryKey, data);
       });
     },
-    onSuccess: (response, { memoryId, request }) => {
+    onSuccess: (response, { memoryId }) => {
       const parsedConfidence = Number(response.new_confidence_score);
-      const fallbackDelta =
-        request.feedback_type === "thumbs_up"
-          ? 0.05
-          : request.feedback_type === "thumbs_down"
-            ? -0.05
-            : 0;
+      if (!Number.isFinite(parsedConfidence)) {
+        return;
+      }
 
       const applyConfidence = (memory: Memory): Memory => {
-        const current = Number(memory.confidence_score);
-        const safeCurrent = Number.isFinite(current) ? current : 0.5;
-        const nextConfidence = Number.isFinite(parsedConfidence)
-          ? parsedConfidence
-          : Math.min(1, Math.max(0, safeCurrent + fallbackDelta));
         return {
           ...memory,
-          confidence_score: nextConfidence,
+          confidence_score: parsedConfidence,
         };
       };
 

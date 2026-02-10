@@ -10,7 +10,7 @@ _PHONE_RE = re.compile(
 
 # Common order-reference token forms seen in Zendesk billing tickets.
 _ORDER_TOKEN_RE = re.compile(
-    r"(?i)\b(?:MAI(?:\[[^\]]+\]|[A-Z0-9]{2,})?(?:[-_][A-Z0-9]{2,})+)\b"
+    r"(?i)\b(?=[A-Z0-9\[\]_-]*\d)MAI(?:\[[^\]]+\]|[A-Z0-9]{2,})?(?:[-_][A-Z0-9]{2,})+\b"
 )
 
 # Label + token capture for contextual replacement.

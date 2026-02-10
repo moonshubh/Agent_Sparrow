@@ -65,13 +65,27 @@ export function MemoryTipTapEditor({
   }, [content, editor]);
 
   useEffect(() => {
-    if (!editor || !keyHeadingHighlights || keyHeadingHighlights.length === 0) {
-      return;
-    }
+    if (!editor) return;
 
-    const normalizedHeadings = keyHeadingHighlights
+    const clearHighlights = () => {
+      const root = editor.view.dom as HTMLElement | null;
+      if (!root) return;
+      root
+        .querySelectorAll<HTMLElement>(
+          ".memory-key-heading, .memory-key-label-line",
+        )
+        .forEach((node) =>
+          node.classList.remove("memory-key-heading", "memory-key-label-line"),
+        );
+    };
+
+    const normalizedHeadings = (keyHeadingHighlights ?? [])
       .map((heading) => heading.trim().toLowerCase())
       .filter(Boolean);
+    if (normalizedHeadings.length === 0) {
+      clearHighlights();
+      return;
+    }
     const headingSet = new Set(normalizedHeadings);
 
     const normalizeHeadingText = (value: string): string =>
@@ -150,6 +164,7 @@ export function MemoryTipTapEditor({
 
     return () => {
       editor.off("update", applyHeadingHighlights);
+      clearHighlights();
     };
   }, [editor, keyHeadingHighlights]);
 
