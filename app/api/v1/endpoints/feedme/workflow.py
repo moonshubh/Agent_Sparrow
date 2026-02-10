@@ -72,7 +72,7 @@ async def mark_conversation_ready_for_kb(
     conversation_id: int,
     request: MarkReadyRequest,
     current_user: TokenPayload = Depends(require_feedme_admin),
-):
+) -> MarkReadyResponse:
     """Atomically mark a conversation as KB-ready and move to configured KB folder."""
     if not settings.feedme_enabled:
         raise HTTPException(
@@ -86,11 +86,13 @@ async def mark_conversation_ready_for_kb(
         )
 
     conversation_response = await client._exec(
-        lambda: client.client.table("feedme_conversations")
-        .select("id,folder_id,os_category,approval_status,metadata")
-        .eq("id", conversation_id)
-        .limit(1)
-        .execute()
+        lambda: (
+            client.client.table("feedme_conversations")
+            .select("id,folder_id,os_category,approval_status,metadata")
+            .eq("id", conversation_id)
+            .limit(1)
+            .execute()
+        )
     )
     if not conversation_response.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -124,11 +126,13 @@ async def mark_conversation_ready_for_kb(
             )
 
         folder_check = await client._exec(
-            lambda: client.client.table("feedme_folders")
-            .select("id")
-            .eq("id", fallback_folder_id)
-            .limit(1)
-            .execute()
+            lambda: (
+                client.client.table("feedme_folders")
+                .select("id")
+                .eq("id", fallback_folder_id)
+                .limit(1)
+                .execute()
+            )
         )
         if not folder_check.data:
             raise HTTPException(
@@ -176,10 +180,12 @@ async def mark_conversation_ready_for_kb(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     update_response = await client._exec(
-        lambda: client.client.table("feedme_conversations")
-        .update(update_payload)
-        .eq("id", conversation_id)
-        .execute()
+        lambda: (
+            client.client.table("feedme_conversations")
+            .update(update_payload)
+            .eq("id", conversation_id)
+            .execute()
+        )
     )
     if not update_response.data:
         raise HTTPException(status_code=500, detail="Failed to mark conversation ready")
@@ -211,7 +217,7 @@ async def mark_conversation_ready_for_kb(
 async def regenerate_ai_note(
     conversation_id: int,
     current_user: TokenPayload = Depends(require_feedme_admin),
-):
+) -> RegenerateAiNoteResponse:
     """Regenerate AI note and return current note metadata snapshot."""
     if not settings.feedme_enabled:
         raise HTTPException(
@@ -240,7 +246,9 @@ async def regenerate_ai_note(
         else:
             generation_status = "failed"
     except Exception as e:
-        logger.error("AI note regeneration failed for conversation %s: %s", conversation_id, e)
+        logger.error(
+            "AI note regeneration failed for conversation %s: %s", conversation_id, e
+        )
         generation_status = "failed"
 
     refreshed = await client.get_conversation_by_id(conversation_id)
@@ -279,7 +287,7 @@ async def regenerate_ai_note(
 @router.get("/settings", response_model=FeedMeSettingsResponse)
 async def get_feedme_settings_endpoint(
     current_user: TokenPayload = Depends(require_feedme_admin),
-):
+) -> FeedMeSettingsResponse:
     """Get FeedMe workflow settings."""
     row = await get_feedme_settings()
     return FeedMeSettingsResponse(
@@ -295,7 +303,7 @@ async def get_feedme_settings_endpoint(
 async def update_feedme_settings_endpoint(
     request: FeedMeSettingsUpdateRequest,
     current_user: TokenPayload = Depends(require_feedme_admin),
-):
+) -> FeedMeSettingsResponse:
     """Update FeedMe workflow settings (KB folder + SLA thresholds)."""
     updates = request.model_dump(exclude_unset=True)
     if not updates:
@@ -308,9 +316,20 @@ async def update_feedme_settings_endpoint(
             updated_at=row.get("updated_at"),
         )
 
+    before_row = await get_feedme_settings()
     warning = updates.get("sla_warning_minutes")
     breach = updates.get("sla_breach_minutes")
-    if warning is not None and breach is not None and breach <= warning:
+    effective_warning = (
+        warning
+        if warning is not None
+        else int(before_row.get("sla_warning_minutes") or 60)
+    )
+    effective_breach = (
+        breach
+        if breach is not None
+        else int(before_row.get("sla_breach_minutes") or 180)
+    )
+    if effective_breach <= effective_warning:
         raise HTTPException(
             status_code=400,
             detail="sla_breach_minutes must be greater than sla_warning_minutes",
@@ -323,16 +342,17 @@ async def update_feedme_settings_endpoint(
         )
     if "kb_ready_folder_id" in updates and updates["kb_ready_folder_id"] is not None:
         folder_check = await client._exec(
-            lambda: client.client.table("feedme_folders")
-            .select("id")
-            .eq("id", updates["kb_ready_folder_id"])
-            .limit(1)
-            .execute()
+            lambda: (
+                client.client.table("feedme_folders")
+                .select("id")
+                .eq("id", updates["kb_ready_folder_id"])
+                .limit(1)
+                .execute()
+            )
         )
         if not folder_check.data:
             raise HTTPException(status_code=404, detail="KB folder not found")
 
-    before_row = await get_feedme_settings()
     row = await update_feedme_settings(
         updates,
         updated_by=current_user.sub,

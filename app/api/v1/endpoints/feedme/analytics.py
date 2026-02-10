@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import math
 from typing import Dict, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from postgrest.base_request_builder import CountMethod
 
 from app.core.security import TokenPayload
@@ -21,6 +21,9 @@ from app.feedme.schemas import (
     ProcessingStage,
     AnalyticsResponse,
     ConversationStats,
+    FeedMeStatsOverviewResponse,
+    TaskScheduleResponse,
+    ReprocessResponse,
 )
 
 from .helpers import (
@@ -56,14 +59,14 @@ def _percentile(values: list[float], percentile: float) -> float:
     return float(lower_value + (upper_value - lower_value) * weight)
 
 
-@router.get("/stats/overview", response_model=Dict[str, Any])
+@router.get("/stats/overview", response_model=FeedMeStatsOverviewResponse)
 async def get_feedme_stats_overview(
     range_days: int = Query(7, ge=1, le=90, description="Relative time range in days"),
     folder_id: Optional[int] = Query(None, description="Filter by folder id"),
     os_category: Optional[str] = Query(
         None, description="Filter by os_category (windows|macos|both|uncategorized)"
     ),
-):
+) -> FeedMeStatsOverviewResponse:
     """Canonical FeedMe stats endpoint backed directly by DB truth."""
     if not settings.feedme_enabled:
         raise HTTPException(
@@ -155,20 +158,24 @@ async def get_feedme_stats_overview(
     p95_latency = _percentile(latencies_ms, 0.95)
 
     assign_audit = await client._exec(
-        lambda: client.client.table("feedme_action_audit")
-        .select("id", count=COUNT_EXACT)
-        .eq("action", "assign_folder")
-        .gte("created_at", start_iso)
-        .lte("created_at", end_iso)
-        .execute()
+        lambda: (
+            client.client.table("feedme_action_audit")
+            .select("id", count=COUNT_EXACT)
+            .eq("action", "assign_folder")
+            .gte("created_at", start_iso)
+            .lte("created_at", end_iso)
+            .execute()
+        )
     )
     kb_ready_audit = await client._exec(
-        lambda: client.client.table("feedme_action_audit")
-        .select("id", count=COUNT_EXACT)
-        .eq("action", "mark_ready_for_kb")
-        .gte("created_at", start_iso)
-        .lte("created_at", end_iso)
-        .execute()
+        lambda: (
+            client.client.table("feedme_action_audit")
+            .select("id", count=COUNT_EXACT)
+            .eq("action", "mark_ready_for_kb")
+            .gte("created_at", start_iso)
+            .lte("created_at", end_iso)
+            .execute()
+        )
     )
 
     assign_throughput = assign_audit.count or 0
@@ -215,9 +222,11 @@ async def get_pdf_storage_analytics():
     try:
         client = get_supabase_client()
         result = await client._exec(
-            lambda: client.client.table("feedme_pdf_storage_analytics")
-            .select("*")
-            .execute()
+            lambda: (
+                client.client.table("feedme_pdf_storage_analytics")
+                .select("*")
+                .execute()
+            )
         )
 
         if result.data and len(result.data) > 0:
@@ -248,11 +257,11 @@ async def get_pdf_storage_analytics():
         )
 
 
-@router.post("/cleanup/pdfs/batch", response_model=Dict[str, Any])
+@router.post("/cleanup/pdfs/batch", response_model=TaskScheduleResponse)
 async def trigger_pdf_cleanup_batch(
     limit: int = 100,
     current_user: TokenPayload = Depends(require_feedme_admin),
-):
+) -> TaskScheduleResponse:
     """Trigger batch cleanup of approved PDFs."""
     if not settings.feedme_enabled:
         raise HTTPException(
@@ -323,12 +332,14 @@ async def get_analytics():
         raise HTTPException(status_code=500, detail="Failed to generate analytics")
 
 
-@router.post("/conversations/{conversation_id}/reprocess")
+@router.post(
+    "/conversations/{conversation_id}/reprocess",
+    response_model=ReprocessResponse,
+)
 async def reprocess_conversation(
     conversation_id: int,
-    background_tasks: BackgroundTasks,
     current_user: TokenPayload = Depends(require_feedme_admin),
-):
+) -> ReprocessResponse:
     """Schedules reprocessing of a conversation to extract examples."""
     if not settings.feedme_enabled:
         raise HTTPException(

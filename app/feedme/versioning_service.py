@@ -23,6 +23,7 @@ from app.feedme.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+_MAX_VERSION_INSERT_RETRIES = 3
 
 
 class VersioningService:
@@ -69,11 +70,13 @@ class VersioningService:
 
     async def _list_version_rows(self, conversation_id: int) -> list[Dict[str, Any]]:
         response = await self.supabase_client._exec(
-            lambda: self.supabase_client.client.table("feedme_conversation_versions")
-            .select("*")
-            .eq("conversation_id", conversation_id)
-            .order("version_number", desc=True)
-            .execute()
+            lambda: (
+                self.supabase_client.client.table("feedme_conversation_versions")
+                .select("*")
+                .eq("conversation_id", conversation_id)
+                .order("version_number", desc=True)
+                .execute()
+            )
         )
         return response.data or []
 
@@ -81,16 +84,43 @@ class VersioningService:
         self, conversation_id: int, version_number: int
     ) -> Optional[Dict[str, Any]]:
         response = await self.supabase_client._exec(
-            lambda: self.supabase_client.client.table("feedme_conversation_versions")
-            .select("*")
-            .eq("conversation_id", conversation_id)
-            .eq("version_number", version_number)
-            .limit(1)
-            .execute()
+            lambda: (
+                self.supabase_client.client.table("feedme_conversation_versions")
+                .select("*")
+                .eq("conversation_id", conversation_id)
+                .eq("version_number", version_number)
+                .limit(1)
+                .execute()
+            )
         )
         if response.data:
             return response.data[0]
         return None
+
+    async def _get_next_version_number(self, conversation_id: int) -> int:
+        latest = await self.supabase_client._exec(
+            lambda: (
+                self.supabase_client.client.table("feedme_conversation_versions")
+                .select("version_number")
+                .eq("conversation_id", conversation_id)
+                .order("version_number", desc=True)
+                .limit(1)
+                .execute()
+            )
+        )
+        if latest.data:
+            return int(latest.data[0].get("version_number", 0)) + 1
+        return 1
+
+    @staticmethod
+    def _is_unique_version_conflict(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "feedme_conversation_versions_conversation_id_version_number_key" in message
+            or "duplicate key" in message
+            or "unique constraint" in message
+            or "23505" in message
+        )
 
     def _row_to_version(self, row: Dict[str, Any]) -> ConversationVersion:
         return ConversationVersion(
@@ -116,42 +146,64 @@ class VersioningService:
         source_version_number: Optional[int] = None,
         force_version_number: Optional[int] = None,
     ) -> ConversationVersion:
-        if force_version_number is not None:
-            next_version = force_version_number
-        else:
-            latest = await self.supabase_client._exec(
-                lambda: self.supabase_client.client.table("feedme_conversation_versions")
-                .select("version_number")
-                .eq("conversation_id", conversation_id)
-                .order("version_number", desc=True)
-                .limit(1)
-                .execute()
-            )
-            if latest.data:
-                next_version = int(latest.data[0].get("version_number", 0)) + 1
-            else:
-                next_version = 1
-
-        payload = {
-            "conversation_id": conversation_id,
-            "version_number": next_version,
-            "transcript_content": transcript_content,
-            "metadata": metadata or {},
-            "change_description": change_description,
-            "created_by": created_by,
-            "is_revert": is_revert,
-            "source_version_number": source_version_number,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        response = await self.supabase_client._exec(
-            lambda: self.supabase_client.client.table("feedme_conversation_versions")
-            .insert(payload)
-            .execute()
+        next_version = (
+            force_version_number
+            if force_version_number is not None
+            else await self._get_next_version_number(conversation_id)
         )
-        if not response.data:
-            raise ValueError("Failed to persist conversation version")
-        return self._row_to_version(response.data[0])
+        max_attempts = (
+            1 if force_version_number is not None else _MAX_VERSION_INSERT_RETRIES
+        )
+
+        for attempt in range(max_attempts):
+            payload = {
+                "conversation_id": conversation_id,
+                "version_number": next_version,
+                "transcript_content": transcript_content,
+                "metadata": metadata or {},
+                "change_description": change_description,
+                "created_by": created_by,
+                "is_revert": is_revert,
+                "source_version_number": source_version_number,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            try:
+                response = await self.supabase_client._exec(
+                    lambda: (
+                        self.supabase_client.client.table(
+                            "feedme_conversation_versions"
+                        )
+                        .insert(payload)
+                        .execute()
+                    )
+                )
+                if not response.data:
+                    raise ValueError("Failed to persist conversation version")
+                return self._row_to_version(response.data[0])
+            except Exception as exc:
+                if not self._is_unique_version_conflict(exc):
+                    raise
+
+                if force_version_number is not None:
+                    existing_row = await self._get_version_row(
+                        conversation_id, next_version
+                    )
+                    if existing_row:
+                        return self._row_to_version(existing_row)
+                    raise
+
+                if attempt >= max_attempts - 1:
+                    logger.warning(
+                        "Failed to persist version after %s attempts for conversation %s",
+                        max_attempts,
+                        conversation_id,
+                    )
+                    raise
+
+                next_version = await self._get_next_version_number(conversation_id)
+
+        raise ValueError("Failed to persist conversation version")
 
     async def _ensure_history_seeded(
         self,

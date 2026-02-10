@@ -557,6 +557,14 @@ export function UnifiedTextCanvas({
     [purify],
   );
 
+  const normalizedExtractedTextMarkdown = useMemo(
+    () =>
+      isLikelyHtml(normalizedExtractedText)
+        ? htmlToMarkdown(normalizedExtractedText)
+        : normalizedExtractedText,
+    [normalizedExtractedText, htmlToMarkdown],
+  );
+
   // Handle auto-save - defined early for editor dependency
   const [isSaving, setIsSaving] = useState(false);
   const saveAbortControllerRef = useRef<AbortController | null>(null);
@@ -569,7 +577,7 @@ export function UnifiedTextCanvas({
   const handleAutoSave = useCallback(
     async (html: string) => {
       const markdown = htmlToMarkdown(html);
-      if (markdown === normalizedExtractedText) return;
+      if (markdown === normalizedExtractedTextMarkdown) return;
 
       // Cancel any pending save request
       if (saveAbortControllerRef.current) {
@@ -607,7 +615,13 @@ export function UnifiedTextCanvas({
         }
       }
     },
-    [normalizedExtractedText, htmlToMarkdown, onTextUpdate, conversationId, metadata],
+    [
+      normalizedExtractedTextMarkdown,
+      htmlToMarkdown,
+      onTextUpdate,
+      conversationId,
+      metadata,
+    ],
   );
 
   // Initialize Tiptap editor (stores HTML)

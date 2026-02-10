@@ -258,6 +258,71 @@ class AnalyticsResponse(BaseModel):
     last_updated: datetime
 
 
+class FeedMeStatsOverviewTimeRange(BaseModel):
+    """Time range information for FeedMe overview stats."""
+
+    start_at: datetime
+    end_at: datetime
+    range_days: int
+
+
+class FeedMeStatsOverviewFilters(BaseModel):
+    """Applied filter values for FeedMe overview stats."""
+
+    folder_id: Optional[int] = None
+    os_category: Optional[str] = None
+
+
+class FeedMeStatsOverviewCards(BaseModel):
+    """Top-level metric cards for FeedMe overview stats."""
+
+    queue_depth: int
+    failure_rate: float
+    p50_latency_ms: float
+    p95_latency_ms: float
+    assign_throughput: int
+    kb_ready_throughput: int
+    sla_warning_count: int
+    sla_breach_count: int
+
+
+class FeedMeStatsOverviewSlaThresholds(BaseModel):
+    """SLA thresholds used for warning/breach calculations."""
+
+    warning_minutes: int
+    breach_minutes: int
+
+
+class FeedMeStatsOverviewResponse(BaseModel):
+    """Canonical response model for FeedMe overview stats."""
+
+    time_range: FeedMeStatsOverviewTimeRange
+    filters: FeedMeStatsOverviewFilters
+    cards: FeedMeStatsOverviewCards
+    os_distribution: Dict[str, int]
+    sla_thresholds: FeedMeStatsOverviewSlaThresholds
+    total_conversations: int
+    generated_at: datetime
+
+
+class TaskScheduleResponse(BaseModel):
+    """Response for asynchronous task scheduling endpoints."""
+
+    task_id: str
+    status: str
+    limit: int
+    message: str
+
+
+class ReprocessResponse(BaseModel):
+    """Response payload when a conversation reprocess job is scheduled."""
+
+    conversation_id: int
+    task_id: str
+    status: str
+    message: str
+
+
 # Approval Workflow Models
 
 

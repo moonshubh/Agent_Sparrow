@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useDebouncedCallback } from "@/shared/lib/utils/debounce";
 import { Card } from "@/shared/ui/card";
 import { Separator } from "@/shared/ui/separator";
@@ -69,6 +69,8 @@ export function ConversationSidebar({
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isNoteFocused, setIsNoteFocused] = useState(false);
   const [hasIncomingNoteConflict, setHasIncomingNoteConflict] = useState(false);
+  const prevAiNoteRef = useRef(aiNote || "");
+  const noteDraftRef = useRef(noteDraft);
 
   useEffect(() => {
     loadFolders().catch(() => {});
@@ -87,16 +89,27 @@ export function ConversationSidebar({
   }, [platform]);
 
   useEffect(() => {
+    noteDraftRef.current = noteDraft;
+  }, [noteDraft]);
+
+  useEffect(() => {
+    const currentAiNote = aiNote || "";
+    const previousAiNote = prevAiNoteRef.current;
+    prevAiNoteRef.current = currentAiNote;
+
     if (!noteTouched) {
-      setNoteDraft(aiNote || "");
+      setNoteDraft(currentAiNote);
       setHasIncomingNoteConflict(false);
       return;
     }
 
-    if ((aiNote || "") !== noteDraft) {
+    if (
+      currentAiNote !== previousAiNote &&
+      currentAiNote !== noteDraftRef.current
+    ) {
       setHasIncomingNoteConflict(true);
     }
-  }, [aiNote, noteDraft, noteTouched]);
+  }, [aiNote, noteTouched]);
 
   const folderOptions = useMemo(
     () =>

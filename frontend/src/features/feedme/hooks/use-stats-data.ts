@@ -60,13 +60,19 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
-  const inFlightFetchRef = useRef<Promise<void> | null>(null);
+  const inFlightFetchRef = useRef<Map<string, Promise<void>>>(new Map());
   const latestFetchIdRef = useRef(0);
 
   const fetchData = useCallback(async () => {
     if (!isMountedRef.current) return;
-    if (inFlightFetchRef.current) {
-      return inFlightFetchRef.current;
+    const fetchKey = JSON.stringify({
+      rangeDays: filters.rangeDays,
+      folderId: filters.folderId,
+      osCategory: filters.osCategory,
+    });
+    const existingRequest = inFlightFetchRef.current.get(fetchKey);
+    if (existingRequest) {
+      return existingRequest;
     }
 
     const fetchId = latestFetchIdRef.current + 1;
@@ -137,13 +143,13 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
       }
     })();
 
-    inFlightFetchRef.current = request;
+    inFlightFetchRef.current.set(fetchKey, request);
 
     try {
       await request;
     } finally {
-      if (inFlightFetchRef.current === request) {
-        inFlightFetchRef.current = null;
+      if (inFlightFetchRef.current.get(fetchKey) === request) {
+        inFlightFetchRef.current.delete(fetchKey);
       }
     }
   }, [filters.folderId, filters.osCategory, filters.rangeDays, onError]);

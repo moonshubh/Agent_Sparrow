@@ -2441,7 +2441,9 @@ class StreamEventHandler:
                     return value.strip()
                 return ""
 
-            def _append(url_value: str, alt_value: str, page_url_value: str = "") -> None:
+            def _append(
+                url_value: str, alt_value: str, page_url_value: str = ""
+            ) -> None:
                 url = _coerce(url_value)
                 if not url or not _is_http_url(url):
                     return
@@ -2567,7 +2569,7 @@ class StreamEventHandler:
                     page_url=image.get("page_url"),
                 )
             logger.info(
-                "article_artifact_emitted: title={}, content_length={}, images={}",
+                "article_artifact_emitted: title=%s, content_length=%d, images=%d",
                 title,
                 len(content or ""),
                 len(normalized_images),
