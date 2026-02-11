@@ -14,6 +14,7 @@ import type {
   SubagentSpawnEvent,
   SubagentEndEvent,
   SubagentThinkingDeltaEvent,
+  ObjectiveHintUpdateEvent,
   TraceStep,
   TimelineOperation,
   TodoItem,
@@ -27,7 +28,7 @@ import type {
 export const TraceStepSchema = z.object({
   id: z.string(),
   timestamp: z.string(),
-  type: z.enum(["thought", "action", "result"]),
+  type: z.enum(["thought", "action", "result", "tool"]),
   content: z.string(),
   metadata: z.record(z.string(), z.unknown()),
 });
@@ -168,6 +169,21 @@ export const SubagentThinkingDeltaEventSchema: z.ZodSchema<SubagentThinkingDelta
     delta: z.string(),
     timestamp: z.string(),
     subagentType: z.string().optional(),
+  });
+
+export const ObjectiveHintUpdateEventSchema: z.ZodSchema<ObjectiveHintUpdateEvent> =
+  z.object({
+    runId: z.string(),
+    laneId: z.string(),
+    objectiveId: z.string(),
+    phase: z.enum(["plan", "gather", "execute", "synthesize"]),
+    title: z.string(),
+    status: z.enum(["pending", "running", "done", "error", "unknown"]),
+    summary: z.string().optional(),
+    toolCallId: z.string().optional(),
+    subagentType: z.string().optional(),
+    startedAt: z.string().optional(),
+    endedAt: z.string().optional(),
   });
 
 // -----------------------------------------------------------------------------
@@ -337,6 +353,16 @@ export function validateSubagentThinkingDelta(
   );
 }
 
+export function validateObjectiveHintUpdate(
+  data: unknown,
+): ObjectiveHintUpdateEvent | null {
+  return validateOrNull(
+    ObjectiveHintUpdateEventSchema,
+    data,
+    "objective_hint_update",
+  );
+}
+
 // -----------------------------------------------------------------------------
 // Event Router
 // -----------------------------------------------------------------------------
@@ -355,6 +381,7 @@ export const eventValidators = {
   subagent_spawn: validateSubagentSpawn,
   subagent_end: validateSubagentEnd,
   subagent_thinking_delta: validateSubagentThinkingDelta,
+  objective_hint_update: validateObjectiveHintUpdate,
 } as const;
 
 /**

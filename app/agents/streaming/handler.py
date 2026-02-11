@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+from datetime import datetime, timezone
 from contextlib import nullcontext
 from typing import Any, TYPE_CHECKING
 
@@ -426,6 +427,8 @@ class StreamEventHandler:
         # Track model runs that appear to be streaming structured tool payloads (JSON contracts).
         self._json_payload_prefix: dict[str, str] = {}
         self._json_payload_runs: set[str] = set()
+        self._objective_hint_started_at: dict[str, str] = {}
+        self._plan_hint_completed = False
 
     @staticmethod
     def _is_google_overloaded_error(error: Exception) -> bool:
@@ -486,8 +489,16 @@ class StreamEventHandler:
             The final agent output, or None if streaming failed.
         """
         try:
+            planning_detail = self._build_planning_phase_detail()
+            self._emit_objective_hint(
+                lane_id="primary",
+                objective_id="phase:plan",
+                phase="plan",
+                title="Plan",
+                status="running",
+                summary=planning_detail or "Planning response strategy.",
+            )
             if settings.trace_mode != "off":
-                planning_detail = self._build_planning_phase_detail()
                 planning_content = "**Planning**"
                 if planning_detail:
                     planning_content = f"{planning_content}\n\n{planning_detail}"
@@ -681,6 +692,38 @@ class StreamEventHandler:
                     },
                 )
 
+                if not self._plan_hint_completed:
+                    self._emit_objective_hint(
+                        lane_id="primary",
+                        objective_id="phase:plan",
+                        phase="plan",
+                        title="Plan",
+                        status="done",
+                        summary="Planning complete. Fallback recovery succeeded.",
+                    )
+                    self._plan_hint_completed = True
+
+                fallback_text = (
+                    ThinkingBlockTracker.sanitize_final_content(
+                        self._extract_final_assistant_text(self.final_output)
+                    )
+                    if self.final_output
+                    else ""
+                )
+                if "phase:synthesize" in self._objective_hint_started_at or fallback_text:
+                    self._emit_objective_hint(
+                        lane_id="primary",
+                        objective_id="phase:synthesize",
+                        phase="synthesize",
+                        title="Synthesize",
+                        status="done",
+                        summary=(
+                            self._truncate_trace_value(fallback_text, max_len=220)
+                            if fallback_text
+                            else "Fallback response generated."
+                        ),
+                    )
+
                 try:
                     scratchpad = getattr(self.state, "scratchpad", None)
                     if isinstance(scratchpad, dict):
@@ -751,6 +794,26 @@ class StreamEventHandler:
                             "also failed. Please try again."
                         )
                     }
+
+                if not self._plan_hint_completed:
+                    self._emit_objective_hint(
+                        lane_id="primary",
+                        objective_id="phase:plan",
+                        phase="plan",
+                        title="Plan",
+                        status="error",
+                        summary="Planning interrupted by stream failure.",
+                    )
+                    self._plan_hint_completed = True
+                if "phase:synthesize" in self._objective_hint_started_at:
+                    self._emit_objective_hint(
+                        lane_id="primary",
+                        objective_id="phase:synthesize",
+                        phase="synthesize",
+                        title="Synthesize",
+                        status="error",
+                        summary="Unable to finalize response after fallback failure.",
+                    )
 
         return self.final_output
 
@@ -1012,6 +1075,47 @@ class StreamEventHandler:
                 )
                 self._phase_emitted.add("work")
 
+        if (
+            not self._plan_hint_completed
+            and tool_name not in {"write_todos", "trace_update"}
+        ):
+            self._emit_objective_hint(
+                lane_id="primary",
+                objective_id="phase:plan",
+                phase="plan",
+                title="Plan",
+                status="done",
+                summary="Plan complete. Executing work.",
+            )
+            self._plan_hint_completed = True
+
+        if tool_name not in {"write_todos", "trace_update"}:
+            tool_phase = self._infer_tool_phase(tool_name)
+            lane_id = (
+                f"subagent:{tool_call_id}"
+                if subagent_type and tool_call_id != "unknown"
+                else "primary"
+            )
+            objective_id = (
+                f"tool:{tool_call_id}"
+                if tool_call_id and tool_call_id != "unknown"
+                else f"tool:{int(time.time() * 1000)}"
+            )
+            self._emit_objective_hint(
+                lane_id=lane_id,
+                objective_id=objective_id,
+                phase=tool_phase,
+                title=self._humanize_tool_name(tool_name),
+                status="running",
+                summary=self._build_tool_phase_detail(
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    tool_goal=tool_goal,
+                ),
+                tool_call_id=tool_call_id if tool_call_id != "unknown" else None,
+                subagent_type=subagent_type,
+            )
+
         self.emitter.start_tool(tool_call_id, tool_name, tool_input, goal=tool_goal)
         # Drive todo status progression when tools start (skip write_todos itself)
         if tool_name not in {"write_todos", "trace_update"} and hasattr(
@@ -1029,6 +1133,7 @@ class StreamEventHandler:
         """Handle tool end event."""
         run_id = event.get("run_id")
         run_id_str: str | None = None
+        tool_meta: dict[str, str] | None = None
         if run_id is not None:
             run_id_str = str(run_id)
             self._tool_run_ids.discard(run_id_str)
@@ -1106,6 +1211,28 @@ class StreamEventHandler:
             output, tool_name, user_query=self.last_user_query, max_items=3
         )
 
+        if tool_name not in {"write_todos", "trace_update"}:
+            subagent_type = tool_meta.get("subagent_type") if tool_meta else None
+            lane_id = (
+                f"subagent:{tool_call_id}"
+                if subagent_type and tool_call_id != "unknown"
+                else "primary"
+            )
+            self._emit_objective_hint(
+                lane_id=lane_id,
+                objective_id=(
+                    f"tool:{tool_call_id}"
+                    if tool_call_id and tool_call_id != "unknown"
+                    else f"tool:{int(time.time() * 1000)}"
+                ),
+                phase=self._infer_tool_phase(tool_name),
+                title=self._humanize_tool_name(tool_name),
+                status="done",
+                summary=summary,
+                tool_call_id=tool_call_id if tool_call_id != "unknown" else None,
+                subagent_type=subagent_type,
+            )
+
         self.emitter.end_tool(tool_call_id, tool_name, output, summary, cards=cards)
 
         # Mark active todo as done when a tool finishes (skip write_todos)
@@ -1124,6 +1251,7 @@ class StreamEventHandler:
         """Handle tool error event."""
         run_id = event.get("run_id")
         run_id_str: str | None = None
+        tool_meta: dict[str, str] | None = None
         if run_id is not None:
             run_id_str = str(run_id)
             self._tool_run_ids.discard(run_id_str)
@@ -1142,6 +1270,28 @@ class StreamEventHandler:
                 self.emitter.flush_subagent_thinking(
                     tool_meta.get("tool_call_id", tool_call_id)
                 )
+
+        if tool_name not in {"write_todos", "trace_update"}:
+            subagent_type = tool_meta.get("subagent_type") if tool_meta else None
+            lane_id = (
+                f"subagent:{tool_call_id}"
+                if subagent_type and tool_call_id != "unknown"
+                else "primary"
+            )
+            self._emit_objective_hint(
+                lane_id=lane_id,
+                objective_id=(
+                    f"tool:{tool_call_id}"
+                    if tool_call_id and tool_call_id != "unknown"
+                    else f"tool:{int(time.time() * 1000)}"
+                ),
+                phase=self._infer_tool_phase(str(tool_name)),
+                title=self._humanize_tool_name(str(tool_name)),
+                status="error",
+                summary=truncate_error_message(raw_error),
+                tool_call_id=tool_call_id if tool_call_id != "unknown" else None,
+                subagent_type=subagent_type,
+            )
 
         self.emitter.error_tool(tool_call_id, tool_name, raw_error)
 
@@ -1162,6 +1312,15 @@ class StreamEventHandler:
         model_name = data.get("model")
         if isinstance(model_name, str) and "gemini-3" in model_name.lower():
             self._gemini_buffer_runs[str(run_id)] = []
+
+        self._emit_objective_hint(
+            lane_id="primary",
+            objective_id=f"thought:{run_id}",
+            phase="gather",
+            title="Reasoning",
+            status="running",
+            summary=prompt_preview or "Analyzing request.",
+        )
 
         if settings.trace_mode != "off":
             self.emitter.start_thought(
@@ -1238,6 +1397,27 @@ class StreamEventHandler:
 
             # Never attach the final user-visible answer to the thought trace step.
             # Thought steps must represent reasoning/narration only.
+            self._emit_objective_hint(
+                lane_id="primary",
+                objective_id=f"thought:{run_id}",
+                phase="gather",
+                title="Reasoning",
+                status="done",
+                summary=(
+                    "Reasoning complete. Dispatching tools."
+                    if has_tool_calls
+                    else "Reasoning complete."
+                ),
+            )
+            if not has_tool_calls:
+                self._emit_objective_hint(
+                    lane_id="primary",
+                    objective_id="phase:synthesize",
+                    phase="synthesize",
+                    title="Synthesize",
+                    status="running",
+                    summary="Drafting final response.",
+                )
             self.emitter.end_thought(run_id, None)
 
         # Track final output
@@ -1272,6 +1452,23 @@ class StreamEventHandler:
                     self.state.todos = todos_dicts  # type: ignore[attr-defined]
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.warning("todo_state_update_failed", error=str(exc))
+            if not has_tool_calls:
+                final_text_summary = self._extract_user_visible_text(final_output)
+                final_text_summary = ThinkingBlockTracker.sanitize_final_content(
+                    final_text_summary
+                )
+                self._emit_objective_hint(
+                    lane_id="primary",
+                    objective_id="phase:synthesize",
+                    phase="synthesize",
+                    title="Synthesize",
+                    status="done",
+                    summary=(
+                        self._truncate_trace_value(final_text_summary, max_len=220)
+                        if final_text_summary.strip()
+                        else "Final response generated."
+                    ),
+                )
 
         # Fallback: ensure we close any open text stream even if output is missing
         if getattr(self.emitter, "_message_started", False) and not final_output:
@@ -1605,6 +1802,37 @@ class StreamEventHandler:
 
         self.emitter.complete_root()
 
+        if not self._plan_hint_completed:
+            self._emit_objective_hint(
+                lane_id="primary",
+                objective_id="phase:plan",
+                phase="plan",
+                title="Plan",
+                status="done",
+                summary="Planning complete.",
+            )
+            self._plan_hint_completed = True
+
+        final_text_summary = ""
+        if output:
+            final_text_summary = ThinkingBlockTracker.sanitize_final_content(
+                self._extract_final_assistant_text(output)
+            )
+
+        if "phase:synthesize" in self._objective_hint_started_at:
+            self._emit_objective_hint(
+                lane_id="primary",
+                objective_id="phase:synthesize",
+                phase="synthesize",
+                title="Synthesize",
+                status="done",
+                summary=(
+                    self._truncate_trace_value(final_text_summary, max_len=220)
+                    if final_text_summary
+                    else "Run completed."
+                ),
+            )
+
         if settings.trace_mode != "off" and output:
             writing_detail = self._build_writing_phase_detail()
             writing_content = "**Writing answer**"
@@ -1629,6 +1857,90 @@ class StreamEventHandler:
     # -------------------------------------------------------------------------
     # Helper methods
     # -------------------------------------------------------------------------
+
+    def _now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _emit_objective_hint(
+        self,
+        *,
+        lane_id: str,
+        objective_id: str,
+        phase: str,
+        title: str,
+        status: str,
+        summary: str | None = None,
+        tool_call_id: str | None = None,
+        subagent_type: str | None = None,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+    ) -> None:
+        """Emit additive objective_hint_update with stable started/ended timestamps."""
+        now_iso = self._now_iso()
+        started_value = started_at or self._objective_hint_started_at.get(objective_id)
+
+        if status in {"pending", "running"}:
+            if not started_value:
+                started_value = now_iso
+            self._objective_hint_started_at[objective_id] = started_value
+            ended_value = None
+        else:
+            if not started_value:
+                started_value = now_iso
+            ended_value = ended_at or now_iso
+            self._objective_hint_started_at.pop(objective_id, None)
+
+        self.emitter.emit_objective_hint(
+            run_id=self.emitter.root_id,
+            lane_id=lane_id,
+            objective_id=objective_id,
+            phase=phase,
+            title=title,
+            status=status,
+            summary=summary,
+            tool_call_id=tool_call_id,
+            subagent_type=subagent_type,
+            started_at=started_value,
+            ended_at=ended_value,
+        )
+
+    def _infer_tool_phase(self, tool_name: str) -> str:
+        """Map tool lifecycle into plan/gather/execute/synthesize hints."""
+        normalized = (tool_name or "").lower().strip()
+        if normalized in {"write_todos", "trace_update"}:
+            return "plan"
+        if any(
+            token in normalized
+            for token in (
+                "search",
+                "retrieve",
+                "grounding",
+                "crawl",
+                "fetch",
+                "scrape",
+                "read",
+                "web",
+            )
+        ):
+            return "gather"
+        if any(
+            token in normalized
+            for token in (
+                "summarize",
+                "synthesize",
+                "write_article",
+                "draft",
+                "compose",
+            )
+        ):
+            return "synthesize"
+        return "execute"
+
+    def _humanize_tool_name(self, tool_name: str) -> str:
+        cleaned = (tool_name or "Tool").replace("_", " ").replace("-", " ").strip()
+        if not cleaned:
+            return "Tool"
+        return " ".join(word.capitalize() for word in cleaned.split())
 
     def _extract_tool_name(self, raw_name: Any, tool_call_id: str) -> str:
         """Extract tool name from event, with fallbacks."""

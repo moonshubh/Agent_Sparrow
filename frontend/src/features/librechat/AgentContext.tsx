@@ -43,6 +43,19 @@ import {
   collapseAssistantMessagesForRun,
   shouldCollapseAssistantMessages,
 } from "./message-dedupe";
+import {
+  usePanelEventAdapter,
+  type PanelObjectiveStatus,
+  type PanelState,
+} from "./panel-event-adapter";
+import {
+  buildEditedProvenance,
+  buildGeneratedProvenance,
+  buildPanelSnapshotV1,
+  buildPanelVersionHistory,
+  seedPanelVersionsFromMetadata,
+  type PanelSnapshotVersionV1,
+} from "./panel-snapshot";
 
 /**
  * Serializable artifact data for persistence in message metadata.
@@ -67,6 +80,9 @@ export interface SerializedArtifact {
 }
 
 export type SubagentStatus = "running" | "success" | "error";
+export type WebSearchMode = "on" | "off";
+export type PromptRelatednessBand = "related" | "uncertain" | "unrelated";
+export type PromptSteeringChoice = "continue" | "new_topic";
 
 export interface SubagentRun {
   toolCallId: string;
@@ -78,6 +94,15 @@ export interface SubagentRun {
   reportPath?: string;
   excerpt?: string;
   thinking?: string;
+}
+
+export interface PendingPromptSteering {
+  id: string;
+  prompt: string;
+  attachments: AttachmentInput[];
+  unresolvedContext: string;
+  unresolvedCount: number;
+  expiresAt: number;
 }
 
 /**
@@ -124,6 +149,8 @@ interface AgentContextValue {
     attachments?: AttachmentInput[],
   ) => Promise<void>;
   abortRun: () => void;
+  pendingPromptSteering: PendingPromptSteering | null;
+  resolvePromptSteering: (choice: PromptSteeringChoice) => void;
   registerDocuments: (documents: DocumentPointer[]) => void;
   interrupt: InterruptPayload | null;
   resolveInterrupt: (value: string) => void;
@@ -135,6 +162,9 @@ interface AgentContextValue {
   thinkingTrace: TraceStep[];
   activeTraceStepId?: string;
   subagentActivity: Map<string, SubagentRun>;
+  panelState: PanelState;
+  webSearchMode: WebSearchMode;
+  setWebSearchMode: (mode: WebSearchMode) => void;
   setActiveTraceStep: (stepId?: string) => void;
   isTraceCollapsed: boolean;
   setTraceCollapsed: (collapsed: boolean) => void;
@@ -161,6 +191,11 @@ interface AgentProviderProps {
   children: React.ReactNode;
   agent: AbstractAgent;
   sessionId?: string;
+  initialWebSearchMode?: WebSearchMode;
+  onWebSearchModeChange?: (
+    mode: WebSearchMode,
+    sessionId?: string,
+  ) => void;
 }
 
 // Utility functions moved to ./utils
@@ -206,6 +241,137 @@ const RESEARCH_PROGRESS_STEP = 10;
 const RESEARCH_PROGRESS_MAX = 90;
 const RESEARCH_PROGRESS_INTERVAL_MS = 12000;
 const RESEARCH_STUCK_MS = 120000;
+const PROMPT_STEERING_TIMEOUT_MS = 5000;
+
+const RELATEDNESS_STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "that",
+  "this",
+  "from",
+  "about",
+  "what",
+  "when",
+  "where",
+  "which",
+  "have",
+  "has",
+  "your",
+  "their",
+  "would",
+  "could",
+  "should",
+  "into",
+  "just",
+  "please",
+  "need",
+  "help",
+  "then",
+  "than",
+  "also",
+  "after",
+  "before",
+  "while",
+  "been",
+  "being",
+  "make",
+  "using",
+  "from",
+  "into",
+]);
+
+type QueuedSubmission = {
+  content: string;
+  attachments: AttachmentInput[];
+  overlapContext?: string;
+  inheritedVersions?: PanelSnapshotVersionV1[];
+  regeneratedFromMessageId?: string;
+};
+
+const isObjectiveUnresolved = (status: PanelObjectiveStatus): boolean =>
+  status === "pending" ||
+  status === "running" ||
+  status === "unknown" ||
+  status === "error";
+
+const extractUnresolvedObjectiveContext = (
+  state: PanelState,
+): { context: string; count: number } => {
+  const unresolved = Object.values(state.objectives)
+    .filter((objective) => isObjectiveUnresolved(objective.status))
+    .sort(
+      (left, right) =>
+        Date.parse(right.updatedAt || right.startedAt || "") -
+        Date.parse(left.updatedAt || left.startedAt || ""),
+    )
+    .slice(0, 6);
+
+  if (!unresolved.length) {
+    return { context: "", count: 0 };
+  }
+
+  const lines = unresolved.map((objective, index) => {
+    const phase = objective.phase ? objective.phase.toUpperCase() : "EXECUTE";
+    const summary =
+      objective.summary?.trim() ||
+      objective.detail?.trim() ||
+      "No summary captured.";
+    const clipped =
+      summary.length > 180 ? `${summary.slice(0, 180).trimEnd()}...` : summary;
+    return `${index + 1}. [${phase}] ${objective.title} — ${clipped}`;
+  });
+  return {
+    context: lines.join("\n"),
+    count: unresolved.length,
+  };
+};
+
+const tokenizeForRelatedness = (value: string): Set<string> => {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter(
+        (token) =>
+          token.length >= 3 && !RELATEDNESS_STOPWORDS.has(token),
+      ),
+  );
+};
+
+const overlapRatio = (left: Set<string>, right: Set<string>): number => {
+  if (!left.size || !right.size) return 0;
+  let intersection = 0;
+  left.forEach((token) => {
+    if (right.has(token)) intersection += 1;
+  });
+  return intersection / Math.min(left.size, right.size);
+};
+
+const classifyPromptRelatedness = (
+  prompt: string,
+  unresolvedContext: string,
+): PromptRelatednessBand => {
+  const normalizedPrompt = prompt.toLowerCase();
+  if (
+    /\b(new topic|different topic|unrelated|switch gears|ignore previous|separate question)\b/.test(
+      normalizedPrompt,
+    )
+  ) {
+    return "unrelated";
+  }
+
+  const promptTokens = tokenizeForRelatedness(prompt);
+  const contextTokens = tokenizeForRelatedness(unresolvedContext);
+  const score = overlapRatio(promptTokens, contextTokens);
+
+  if (score >= 0.42) return "related";
+  if (score <= 0.14) return "unrelated";
+  return "uncertain";
+};
 
 const truncateText = (value: string, maxChars: number): string =>
   value.length > maxChars ? `${value.slice(0, maxChars).trimEnd()}...` : value;
@@ -695,7 +861,10 @@ const stripMetadataForRun = (
     !("attachments" in metadata) &&
     !("artifacts" in metadata) &&
     !("logAnalysisNotes" in metadata) &&
-    !("log_analysis_notes" in metadata)
+    !("log_analysis_notes" in metadata) &&
+    !("panel_snapshot_v1" in metadata) &&
+    !("panel_versions_v1" in metadata) &&
+    !("panel_provenance_v1" in metadata)
   ) {
     return metadata;
   }
@@ -705,6 +874,9 @@ const stripMetadataForRun = (
     artifacts: _artifacts,
     logAnalysisNotes: _logAnalysisNotes,
     log_analysis_notes: _logAnalysisNotesSnake,
+    panel_snapshot_v1: _panelSnapshotV1,
+    panel_versions_v1: _panelVersionsV1,
+    panel_provenance_v1: _panelProvenanceV1,
     ...rest
   } = metadata;
   return Object.keys(rest).length > 0 ? rest : undefined;
@@ -1051,6 +1223,8 @@ export function AgentProvider({
   children,
   agent,
   sessionId,
+  initialWebSearchMode = "off",
+  onWebSearchModeChange,
 }: AgentProviderProps) {
   const [messages, setMessages] = useState<Message[]>(agent.messages || []);
   const messagesRef = useRef<Message[]>(agent.messages || []);
@@ -1072,6 +1246,18 @@ export function AgentProvider({
   const [subagentActivity, setSubagentActivity] = useState<
     Map<string, SubagentRun>
   >(new Map());
+  const {
+    panelState,
+    resetPanelState,
+    applyCustomEvent: applyPanelCustomEvent,
+    applyToolCallStart: applyPanelToolCallStart,
+    applyToolCallResult: applyPanelToolCallResult,
+    syncTodosSnapshot: syncPanelTodosSnapshot,
+  } = usePanelEventAdapter({ batchMs: 200 });
+  const [webSearchMode, setWebSearchModeState] =
+    useState<WebSearchMode>(initialWebSearchMode);
+  const [pendingPromptSteering, setPendingPromptSteering] =
+    useState<PendingPromptSteering | null>(null);
   const [activeTraceStepId, setActiveTraceStepId] = useState<
     string | undefined
   >(undefined);
@@ -1092,6 +1278,12 @@ export function AgentProvider({
   >({});
   const interruptResolverRef = useRef<((value: string) => void) | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const queuedSubmissionRef = useRef<QueuedSubmission | null>(null);
+  const pendingOverlapContextRef = useRef<string | null>(null);
+  const pendingVersionSeedRef = useRef<PanelSnapshotVersionV1[] | null>(null);
+  const pendingRegenerateSourceMessageIdRef = useRef<string | undefined>(
+    undefined,
+  );
   const toolNameByIdRef = useRef<Record<string, string>>({});
   const assistantPersistedRef = useRef(false);
   const lastPersistedAssistantIdBySessionRef = useRef<Record<string, string>>(
@@ -1136,6 +1328,31 @@ export function AgentProvider({
   useEffect(() => {
     articleArtifactKeysRef.current = new Set();
   }, [sessionId]);
+
+  useEffect(() => {
+    resetPanelState(
+      sessionId ? `session-${sessionId}-${Date.now()}` : `session-${Date.now()}`,
+    );
+    syncPanelTodosSnapshot([]);
+  }, [resetPanelState, sessionId, syncPanelTodosSnapshot]);
+
+  useEffect(() => {
+    setWebSearchModeState(initialWebSearchMode);
+    setPendingPromptSteering(null);
+    queuedSubmissionRef.current = null;
+    pendingOverlapContextRef.current = null;
+    pendingVersionSeedRef.current = null;
+    pendingRegenerateSourceMessageIdRef.current = undefined;
+  }, [initialWebSearchMode, sessionId]);
+
+  const setWebSearchMode = useCallback(
+    (mode: WebSearchMode) => {
+      const normalized: WebSearchMode = mode === "on" ? "on" : "off";
+      setWebSearchModeState(normalized);
+      onWebSearchModeChange?.(normalized, sessionId);
+    },
+    [onWebSearchModeChange, sessionId],
+  );
 
   const clearResearchTimer = useCallback(() => {
     if (researchTimerRef.current) {
@@ -1454,7 +1671,56 @@ export function AgentProvider({
   }, [isResearching, clearResearchTimer]);
   const sendMessage = useCallback(
     async (content: string, attachments?: AttachmentInput[]) => {
-      if (!agent || isStreaming) return;
+      if (!agent) return;
+
+      const trimmedForSubmit = content.trim();
+      const pendingAttachments = attachments ? [...attachments] : [];
+      if (!trimmedForSubmit && pendingAttachments.length === 0) return;
+
+      if (isStreaming) {
+        const { context: unresolvedContext, count: unresolvedCount } =
+          extractUnresolvedObjectiveContext(panelState);
+        const relatedness = classifyPromptRelatedness(
+          trimmedForSubmit,
+          unresolvedContext,
+        );
+
+        if (relatedness === "uncertain") {
+          setPendingPromptSteering({
+            id: crypto.randomUUID(),
+            prompt: trimmedForSubmit,
+            attachments: pendingAttachments,
+            unresolvedContext,
+            unresolvedCount,
+            expiresAt: Date.now() + PROMPT_STEERING_TIMEOUT_MS,
+          });
+          return;
+        }
+
+        queuedSubmissionRef.current = {
+          content: trimmedForSubmit,
+          attachments: pendingAttachments,
+          overlapContext:
+            relatedness === "related" ? unresolvedContext : undefined,
+        };
+        setPendingPromptSteering(null);
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          setIsStreaming(false);
+        }
+        agent.abortRun();
+        setActiveTools([]);
+        return;
+      }
+
+      setPendingPromptSteering(null);
+
+      const overlapContext = pendingOverlapContextRef.current;
+      pendingOverlapContextRef.current = null;
+      const inheritedPanelVersions = pendingVersionSeedRef.current ?? [];
+      pendingVersionSeedRef.current = null;
+      const regeneratedFromMessageId = pendingRegenerateSourceMessageIdRef.current;
+      pendingRegenerateSourceMessageIdRef.current = undefined;
 
       clearResearchTimer();
       researchProgressRef.current = 0;
@@ -1469,6 +1735,8 @@ export function AgentProvider({
       setIsStreaming(true);
       setError(null);
       // Reset per-run UI state
+      const panelRunId = crypto.randomUUID();
+      resetPanelState(panelRunId);
       setTimelineOperations([]);
       setCurrentOperationId(undefined);
       setToolEvidence({});
@@ -1488,7 +1756,20 @@ export function AgentProvider({
         abortControllerRef.current = new AbortController();
         try {
           const sanitizedMessages = sanitizeMessagesForRun(messagesRef.current);
-          agent.messages = sanitizedMessages;
+          if (overlapContext?.trim()) {
+            const steeringMessage: Message = {
+              id: `overlap-context-${crypto.randomUUID()}`,
+              role: "system",
+              content: [
+                "Interrupted run context (carry forward unresolved objectives if still relevant):",
+                overlapContext.trim(),
+              ].join("\n\n"),
+              created_at: new Date().toISOString(),
+            };
+            agent.messages = [...sanitizedMessages, steeringMessage];
+          } else {
+            agent.messages = sanitizedMessages;
+          }
         } catch (err) {
           console.warn("[Context] Failed to sanitize messages for run:", err);
         }
@@ -1504,6 +1785,7 @@ export function AgentProvider({
           role: "user",
           content,
           created_at: new Date().toISOString(),
+          metadata: { web_search_mode: webSearchMode },
         };
         lastRunUserMessageIdRef.current = userMessage.id;
 
@@ -1525,7 +1807,9 @@ export function AgentProvider({
 
         // Persist user message to backend database (best-effort)
         if (sessionId && (trimmedContent || hasPersistableAttachments)) {
-          const metadata: Record<string, unknown> = {};
+          const metadata: Record<string, unknown> = {
+            web_search_mode: webSearchMode,
+          };
           if (hasPersistableAttachments) {
             metadata.attachments = persistableAttachments;
           }
@@ -1588,9 +1872,10 @@ export function AgentProvider({
         const stateProvider = getStringFromRecord(agent.state, "provider");
         const stateModel = getStringFromRecord(agent.state, "model");
         const stateAgentType = getAgentTypeFromState(agent.state);
+        const webSearchEnabled = webSearchMode === "on";
         const forwardedProps: Record<string, unknown> = {
-          // Prefer richer answers by default
-          force_websearch: true,
+          force_websearch: webSearchEnabled,
+          web_search_mode: webSearchMode,
           // Pass through provider/model to avoid backend defaulting to Gemini
           provider: stateProvider || "google",
           model: stateModel || "gemini-3-flash-preview",
@@ -1599,6 +1884,9 @@ export function AgentProvider({
             : stateAgentType,
           attachments: attachments || [],
         };
+        if (overlapContext?.trim()) {
+          forwardedProps.overlap_objective_context = overlapContext.trim();
+        }
 
         // Run agent with streaming updates
         await agent.runAgent(
@@ -2104,6 +2392,7 @@ export function AgentProvider({
                 value: payloadValue,
               };
               if (isAgentCustomEvent(maybeAgentEvent)) {
+                applyPanelCustomEvent(maybeAgentEvent);
                 if (maybeAgentEvent.name === "agent_timeline_update") {
                   const operations = Array.isArray(
                     maybeAgentEvent.value.operations,
@@ -2129,6 +2418,7 @@ export function AgentProvider({
                     .filter((todo): todo is TodoItem => Boolean(todo));
                   if (timelineTodos.length) {
                     setTodos(timelineTodos);
+                    syncPanelTodosSnapshot(timelineTodos);
                   }
                 } else if (maybeAgentEvent.name === "tool_evidence_update") {
                   const normalizedEvidence = normalizeToolEvidenceUpdateEvent(
@@ -2151,6 +2441,7 @@ export function AgentProvider({
                     const nextTodos = normalizeTodoItems(extracted);
                     if (nextTodos.length) {
                       setTodos(nextTodos);
+                      syncPanelTodosSnapshot(nextTodos);
                     }
                   }
                 } else if (maybeAgentEvent.name === "agent_thinking_trace") {
@@ -2190,6 +2481,7 @@ export function AgentProvider({
                     "items",
                   );
                   setTodos(nextTodos);
+                  syncPanelTodosSnapshot(nextTodos);
                 } else if (maybeAgentEvent.name === "subagent_spawn") {
                   const value = maybeAgentEvent.value;
                   const toolCallId = value.toolCallId;
@@ -2470,6 +2762,18 @@ export function AgentProvider({
               setActiveTools((prev) =>
                 prev.includes(toolCallName) ? prev : [...prev, toolCallName],
               );
+              applyPanelToolCallStart({
+                toolCallId,
+                toolName: toolCallName,
+                timestamp:
+                  isRecord(event) && typeof event.timestamp === "string"
+                    ? event.timestamp
+                    : new Date().toISOString(),
+                args:
+                  isRecord(event)
+                    ? (event.input ?? event.args ?? event.arguments)
+                    : undefined,
+              });
             },
 
             onToolCallResultEvent: ({ event }: { event: unknown }) => {
@@ -2507,10 +2811,28 @@ export function AgentProvider({
               const output = isRecord(event)
                 ? (event.result ?? event.output ?? event.data ?? {})
                 : {};
+              const resultStatus: "done" | "error" =
+                isRecord(event) &&
+                (event.error || event.status === "error" || event.status === "failed")
+                  ? "error"
+                  : "done";
+              applyPanelToolCallResult({
+                toolCallId: id,
+                toolName: name,
+                timestamp:
+                  isRecord(event) && typeof event.timestamp === "string"
+                    ? event.timestamp
+                    : new Date().toISOString(),
+                result: output,
+                status: resultStatus,
+              });
               const extracted = extractTodosFromPayload(output);
               if (name === "write_todos") {
                 const nextTodos = normalizeTodoItems(extracted);
-                if (nextTodos.length) setTodos(nextTodos);
+                if (nextTodos.length) {
+                  setTodos(nextTodos);
+                  syncPanelTodosSnapshot(nextTodos);
+                }
               }
 
               if (name) {
@@ -2693,9 +3015,28 @@ export function AgentProvider({
 
                 return trimmed ? "Response generated." : "";
               })();
+              const panelCapturedAt = new Date().toISOString();
+              const panelSnapshot = buildPanelSnapshotV1(panelState);
+              const panelVersions = buildPanelVersionHistory({
+                inherited: inheritedPanelVersions,
+                currentSnapshot: panelSnapshot,
+                createdAt: panelCapturedAt,
+              });
+              const panelProvenance = buildGeneratedProvenance({
+                generatedAt: panelCapturedAt,
+                versions: panelVersions,
+                regeneratedFromMessageId,
+              });
+              const baseMetadata = {
+                ...(candidate.metadata ?? {}),
+                web_search_mode: webSearchMode,
+                panel_snapshot_v1: panelSnapshot,
+                panel_versions_v1: panelVersions,
+                panel_provenance_v1: panelProvenance,
+              };
               const mergedMetadata = artifacts
-                ? { ...(candidate.metadata ?? {}), artifacts }
-                : candidate.metadata;
+                ? { ...baseMetadata, artifacts }
+                : baseMetadata;
               const logNotes = pendingLogAnalysisNotesRef.current;
               const logNotesCount = Object.keys(logNotes).length;
               const withLogNotes =
@@ -2790,24 +3131,105 @@ export function AgentProvider({
             }
           }
         }
+
+        const queuedSubmission = queuedSubmissionRef.current;
+        if (queuedSubmission) {
+          queuedSubmissionRef.current = null;
+          pendingOverlapContextRef.current =
+            queuedSubmission.overlapContext ?? null;
+          pendingVersionSeedRef.current =
+            queuedSubmission.inheritedVersions ?? null;
+          pendingRegenerateSourceMessageIdRef.current =
+            queuedSubmission.regeneratedFromMessageId;
+          window.setTimeout(() => {
+            void sendMessage(
+              queuedSubmission.content,
+              queuedSubmission.attachments,
+            );
+          }, 0);
+        }
       }
     },
     [
       agent,
       isStreaming,
       sessionId,
+      webSearchMode,
+      applyPanelCustomEvent,
+      applyPanelToolCallResult,
+      applyPanelToolCallStart,
       bumpResearchProgress,
       clearResearchTimer,
       completeResearchTracking,
       failResearchTracking,
       hydrateArticleArtifactsFromMessages,
       markResearchActivity,
+      panelState,
+      resetPanelState,
       registerArticleArtifact,
+      syncPanelTodosSnapshot,
       startResearchTracking,
     ],
   );
 
+  const resolvePromptSteering = useCallback(
+    (choice: PromptSteeringChoice) => {
+      const queued: QueuedSubmission | null = pendingPromptSteering
+        ? {
+            content: pendingPromptSteering.prompt,
+            attachments: pendingPromptSteering.attachments,
+            overlapContext:
+              choice === "continue"
+                ? pendingPromptSteering.unresolvedContext
+                : undefined,
+          }
+        : null;
+      setPendingPromptSteering(null);
+
+      if (!queued) return;
+      queuedSubmissionRef.current = queued;
+
+      if (isStreaming) {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          setIsStreaming(false);
+        }
+        agent?.abortRun();
+        setActiveTools([]);
+        return;
+      }
+
+      const nextSubmission = queuedSubmissionRef.current;
+      if (!nextSubmission) return;
+      queuedSubmissionRef.current = null;
+      pendingOverlapContextRef.current = nextSubmission.overlapContext ?? null;
+      pendingVersionSeedRef.current = nextSubmission.inheritedVersions ?? null;
+      pendingRegenerateSourceMessageIdRef.current =
+        nextSubmission.regeneratedFromMessageId;
+      window.setTimeout(() => {
+        void sendMessage(nextSubmission.content, nextSubmission.attachments);
+      }, 0);
+    },
+    [agent, isStreaming, pendingPromptSteering, sendMessage],
+  );
+
+  useEffect(() => {
+    if (!pendingPromptSteering) return;
+    const timeoutMs = Math.max(0, pendingPromptSteering.expiresAt - Date.now());
+    const timeoutId = window.setTimeout(() => {
+      resolvePromptSteering("new_topic");
+    }, timeoutMs);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [pendingPromptSteering, resolvePromptSteering]);
+
   const abortRun = useCallback(() => {
+    queuedSubmissionRef.current = null;
+    pendingOverlapContextRef.current = null;
+    pendingVersionSeedRef.current = null;
+    pendingRegenerateSourceMessageIdRef.current = undefined;
+    setPendingPromptSteering(null);
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       setIsStreaming(false);
@@ -2918,6 +3340,20 @@ export function AgentProvider({
 
     // Get any attachments for that message
     const attachments = messageAttachments[lastUserMessage.id] || [];
+    const nextAssistant = [...messagesRef.current]
+      .slice(lastUserMsgIndex + 1)
+      .reverse()
+      .find((msg) => msg.role === "assistant");
+
+    if (nextAssistant && isRecord(nextAssistant.metadata)) {
+      pendingVersionSeedRef.current = seedPanelVersionsFromMetadata(
+        nextAssistant.metadata,
+      );
+      pendingRegenerateSourceMessageIdRef.current = nextAssistant.id;
+    } else {
+      pendingVersionSeedRef.current = null;
+      pendingRegenerateSourceMessageIdRef.current = undefined;
+    }
 
     // Truncate messages to only include messages up to (and including) the user message
     const truncatedMessages = messagesRef.current.slice(
@@ -2961,6 +3397,8 @@ export function AgentProvider({
         error,
         sendMessage,
         abortRun,
+        pendingPromptSteering,
+        resolvePromptSteering,
         registerDocuments,
         interrupt,
         resolveInterrupt,
@@ -2972,6 +3410,9 @@ export function AgentProvider({
         thinkingTrace,
         activeTraceStepId,
         subagentActivity,
+        panelState,
+        webSearchMode,
+        setWebSearchMode,
         setActiveTraceStep,
         isTraceCollapsed,
         setTraceCollapsed: setTraceCollapsedState,

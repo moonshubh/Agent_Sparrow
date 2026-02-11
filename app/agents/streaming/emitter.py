@@ -24,6 +24,7 @@ from .event_types import (
     AgentThinkingTraceEvent,
     AgentTimelineUpdateEvent,
     AgentTodosUpdateEvent,
+    ObjectiveHintUpdateEvent,
     TimelineOperation,
     TodoItem,
     ToolEvidenceUpdateEvent,
@@ -150,6 +151,7 @@ class StreamEventEmitter:
         self._subagent_thinking_buffer: Dict[str, str] = {}
         self._subagent_thinking_last_flush: Dict[str, float] = {}
         self._subagent_thinking_type: Dict[str, Optional[str]] = {}
+        self._objective_hint_fingerprints: Dict[str, str] = {}
 
     # -------------------------------------------------------------------------
     # Low-level emission
@@ -196,6 +198,65 @@ class StreamEventEmitter:
                 "data": sanitized_payload,
             }
         )
+
+    def emit_objective_hint(
+        self,
+        *,
+        run_id: str,
+        lane_id: str,
+        objective_id: str,
+        phase: str,
+        title: str,
+        status: str,
+        summary: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        subagent_type: Optional[str] = None,
+        started_at: Optional[str] = None,
+        ended_at: Optional[str] = None,
+    ) -> None:
+        """Emit additive objective_hint_update event with lightweight deduplication."""
+        normalized_phase = (
+            phase.lower().strip() if isinstance(phase, str) else "execute"
+        )
+        if normalized_phase not in {"plan", "gather", "execute", "synthesize"}:
+            normalized_phase = "execute"
+
+        normalized_status = (
+            status.lower().strip() if isinstance(status, str) else "unknown"
+        )
+        if normalized_status not in {"pending", "running", "done", "error", "unknown"}:
+            normalized_status = "unknown"
+
+        summary_value: Optional[str] = None
+        if isinstance(summary, str):
+            trimmed = summary.strip()
+            if trimmed:
+                summary_value = trimmed[:500]
+
+        payload = ObjectiveHintUpdateEvent(
+            run_id=run_id,
+            lane_id=lane_id,
+            objective_id=objective_id,
+            phase=normalized_phase,  # type: ignore[arg-type]
+            title=title.strip() if isinstance(title, str) and title.strip() else "Objective",
+            status=normalized_status,  # type: ignore[arg-type]
+            summary=summary_value,
+            tool_call_id=tool_call_id,
+            subagent_type=subagent_type,
+            started_at=started_at,
+            ended_at=ended_at,
+        ).to_dict()
+
+        fingerprint = (
+            f"{payload.get('status')}|{payload.get('summary') or ''}|"
+            f"{payload.get('startedAt') or ''}|{payload.get('endedAt') or ''}"
+        )
+        existing = self._objective_hint_fingerprints.get(objective_id)
+        if existing == fingerprint:
+            return
+        self._objective_hint_fingerprints[objective_id] = fingerprint
+
+        self.emit_custom_event("objective_hint_update", payload)
 
     def emit_tool_call_start(self, tool_call_id: str, tool_name: str) -> None:
         """Emit TOOL_CALL_START event."""
