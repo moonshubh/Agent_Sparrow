@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/moonshubh/Agent_Sparrow/compare/v0.2.4...v0.2.5) (2026-02-11)
+
+
+### Bug Fixes
+
+* **memory:** prevent edit 502s from unnecessary embedding refresh ([1193143](https://github.com/moonshubh/Agent_Sparrow/commit/1193143388b5100da399ca72bb399c1ebb16f3e8))
+
 ## [0.2.4](https://github.com/moonshubh/Agent_Sparrow/compare/v0.2.3...v0.2.4) (2026-02-11)
 
 
