@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import React, { useMemo, useState, useCallback, useEffect } from "react";
 import type { User } from "@supabase/supabase-js";
 import { motion, AnimatePresence } from "framer-motion";
 import { MemoryTipTapEditor } from "./MemoryTipTapEditor";
@@ -96,24 +96,10 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const [metadataError, setMetadataError] = useState<string | null>(null);
   const [metadataExpanded, setMetadataExpanded] = useState(false);
   const [editor, setEditor] = useState<Editor | null>(null);
-  const metadataPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setContent(initialContent);
   }, [initialContent]);
-
-  useEffect(() => {
-    if (!metadataExpanded) return;
-
-    const frame = window.requestAnimationFrame(() => {
-      metadataPanelRef.current?.scrollIntoView({
-        block: "nearest",
-        inline: "nearest",
-      });
-    });
-
-    return () => window.cancelAnimationFrame(frame);
-  }, [metadataExpanded]);
 
   const addMemory = useAddMemory();
   const updateMemory = useUpdateMemory();
@@ -512,56 +498,47 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
               </div>
             </div>
 
-            {/* Collapsible Metadata Panel */}
-            <AnimatePresence initial={false}>
-              {metadataExpanded ? (
-                <motion.div
-                  id="memory-metadata-panel"
-                  ref={metadataPanelRef}
-                  className="add-memory-meta-panel"
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 8 }}
-                  transition={{ duration: 0.16 }}
-                >
-                  <div className="add-memory-meta-panel-inner">
-                    <div className="add-memory-meta-toolbar">
-                      <button
-                        type="button"
-                        className="add-memory-meta-btn"
-                        onClick={handlePrettifyMetadata}
-                      >
-                        Prettify
-                      </button>
-                      <button
-                        type="button"
-                        className="add-memory-meta-btn"
-                        onClick={handleClearMetadata}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                    <textarea
-                      value={metadata}
-                      onChange={(e) => {
-                        setMetadata(e.target.value);
-                        setMetadataError(null);
-                      }}
-                      placeholder='{"ticket_id": "12345", "source": "zendesk"}'
-                      className="add-memory-textarea add-memory-code add-memory-metadata-textarea"
-                      rows={3}
-                    />
-                    {metadataError && (
-                      <div className="add-memory-field-error">
-                        <AlertCircle size={14} />
-                        <span>{metadataError}</span>
-                      </div>
-                    )}
-                  </div>
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
           </div>
+
+          {/* Metadata Drawer */}
+          {metadataExpanded ? (
+            <div id="memory-metadata-panel" className="add-memory-meta-panel">
+              <div className="add-memory-meta-panel-inner">
+                <div className="add-memory-meta-toolbar">
+                  <button
+                    type="button"
+                    className="add-memory-meta-btn"
+                    onClick={handlePrettifyMetadata}
+                  >
+                    Prettify
+                  </button>
+                  <button
+                    type="button"
+                    className="add-memory-meta-btn"
+                    onClick={handleClearMetadata}
+                  >
+                    Clear
+                  </button>
+                </div>
+                <textarea
+                  value={metadata}
+                  onChange={(e) => {
+                    setMetadata(e.target.value);
+                    setMetadataError(null);
+                  }}
+                  placeholder='{"ticket_id": "12345", "source": "zendesk"}'
+                  className="add-memory-textarea add-memory-code add-memory-metadata-textarea"
+                  rows={8}
+                />
+                {metadataError && (
+                  <div className="add-memory-field-error">
+                    <AlertCircle size={14} />
+                    <span>{metadataError}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
 
           {/* Compact Footer */}
           <div className="add-memory-footer">

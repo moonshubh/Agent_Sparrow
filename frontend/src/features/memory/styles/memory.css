@@ -5093,7 +5093,9 @@
 /* Collapsible Metadata Panel */
 .add-memory-meta-panel {
   flex-shrink: 0;
-  scroll-margin-bottom: 16px;
+  padding: 0 24px 12px;
+  background: var(--memory-surface);
+  border-top: 1px solid var(--memory-border);
 }
 
 .add-memory-meta-panel-inner {
@@ -5109,7 +5111,9 @@
 }
 
 .add-memory-meta-panel .add-memory-metadata-textarea {
-  min-height: 60px;
+  min-height: 140px;
+  max-height: min(34vh, 320px);
+  overflow-y: auto;
 }
 
 .add-memory-meta-toolbar {
@@ -5864,6 +5868,10 @@
     flex-direction: column;
     gap: 16px;
     padding: 16px;
+  }
+
+  .add-memory-meta-panel {
+    padding: 0 16px 12px;
   }
 
   .memory-header-left,
