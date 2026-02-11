@@ -12,6 +12,7 @@ export const serializeArtifact = (artifact: Artifact): SerializedArtifact => ({
   imageUrl: artifact.imageUrl,
   mimeType: artifact.mimeType,
   altText: artifact.altText,
+  pageUrl: artifact.pageUrl,
   aspectRatio: artifact.aspectRatio,
   resolution: artifact.resolution,
 });

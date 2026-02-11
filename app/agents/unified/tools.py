@@ -14,7 +14,7 @@ from functools import lru_cache
 import json
 import uuid
 from typing import Any, Dict, List, Optional, Annotated, Callable, Literal, cast
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -4972,134 +4972,263 @@ _MARKDOWN_IMAGE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_SUSPECT_IMAGE_URL_FRAGMENTS = (
-    "oaidalleapiprodscus.blob.core.windows.net/private/",
-    "oaidalleapiprodscus.blob.core.windows.net",
-    "/private/org-",
-    "org-abc123",
-    "user-xyz789",
-)
+_ARTICLE_IMAGE_VALIDATE_TIMEOUT_SECONDS = 12.0
+_ARTICLE_IMAGE_VALIDATE_MAX_REDIRECTS = 5
+_ARTICLE_IMAGE_VALIDATE_MAX_IMAGES = 12
+_ARTICLE_IMAGE_PROBE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    ),
+    "Accept": "image/*,*/*;q=0.8",
+}
 
 
-def _is_suspect_article_image_url(url: str) -> bool:
-    if not url:
+def _is_http_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except Exception:
         return False
-    lowered = url.lower()
-    if any(fragment in lowered for fragment in _SUSPECT_IMAGE_URL_FRAGMENTS):
-        return True
-    return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def _build_generated_image_prompt(
+def _coerce_page_url(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    return candidate if _is_http_url(candidate) else None
+
+
+def _resolve_redirect_url(base_url: str, location: str) -> str:
+    try:
+        return str(httpx.URL(base_url).join(location))
+    except Exception:
+        return urljoin(base_url, location)
+
+
+def _build_image_reference_block(
     *,
     alt_text: str,
-    title: str,
-    nearby_caption: str | None,
+    image_url: str,
+    page_url: Optional[str],
+    resolved_url: Optional[str],
 ) -> str:
-    base = alt_text.strip() or "Illustration for the article"
-    caption = (nearby_caption or "").strip()
-    if caption:
-        return (
-            f"{base}\n\n"
-            f"Caption/context: {caption}\n\n"
-            f"Create a high-quality, professional illustration for the article titled: {title}."
-        )
-    return (
-        f"{base}\n\n"
-        f"Create a high-quality, professional illustration for the article titled: {title}."
-    )
+    display_label = alt_text.strip() or "Referenced image"
+    resolved = (resolved_url or "").strip()
+    original = image_url.strip()
+    source_page = page_url or None
+    primary_target = source_page or resolved or original
+
+    lines = ["> **Image reference**"]
+    if _is_http_url(primary_target):
+        lines.append(f"> {display_label}: [{display_label}]({primary_target})")
+    else:
+        lines.append(f"> {display_label}")
+
+    if source_page and _is_http_url(source_page):
+        lines.append(f"> Source page: [{source_page}]({source_page})")
+
+    if original and _is_http_url(original):
+        lines.append(f"> Linked URL: [{original}]({original})")
+    elif resolved and _is_http_url(resolved):
+        lines.append(f"> Linked URL: [{resolved}]({resolved})")
+
+    return "\n".join(lines)
 
 
-def _extract_nearby_caption(content: str, start_index: int) -> str | None:
-    window = content[start_index : start_index + 400]
-    match = re.search(r"\*?Figure\s*\d+:[^\n]*", window, re.IGNORECASE)
-    if match:
-        return match.group(0).strip()
-    return None
+async def _validate_article_image_markdown_url(
+    image_url: str,
+) -> tuple[bool, str | None, str, str]:
+    current_url = image_url.strip()
+    if not current_url:
+        return False, None, "", "empty_url"
+
+    async with httpx.AsyncClient(
+        timeout=_ARTICLE_IMAGE_VALIDATE_TIMEOUT_SECONDS,
+        follow_redirects=False,
+    ) as client:
+        for _ in range(_ARTICLE_IMAGE_VALIDATE_MAX_REDIRECTS + 1):
+            safe, reason = _is_safe_url(current_url)
+            if not safe:
+                return False, current_url, "", f"ssrf_blocked:{reason}"
+
+            response: httpx.Response | None = None
+            head_error: Exception | None = None
+
+            try:
+                response = await client.request(
+                    "HEAD",
+                    current_url,
+                    headers=_ARTICLE_IMAGE_PROBE_HEADERS,
+                )
+            except Exception as exc:
+                head_error = exc
+                response = None
+
+            head_content_type = (
+                (response.headers.get("content-type") or "").strip().lower()
+                if response is not None
+                else ""
+            )
+            head_redirect = (
+                response is not None and 300 <= response.status_code < 400
+            )
+            needs_get_fallback = (
+                response is None
+                or response.status_code in {405, 501}
+                or (response.status_code >= 400 and not head_redirect)
+                or not head_content_type
+            )
+
+            if needs_get_fallback:
+                get_headers = dict(_ARTICLE_IMAGE_PROBE_HEADERS)
+                get_headers["Range"] = "bytes=0-0"
+                try:
+                    response = await client.request(
+                        "GET",
+                        current_url,
+                        headers=get_headers,
+                    )
+                except Exception as exc:
+                    if head_error is not None:
+                        logger.debug(
+                            "write_article_image_head_failed",
+                            url=current_url,
+                            error=type(head_error).__name__,
+                        )
+                    return (
+                        False,
+                        current_url,
+                        "",
+                        f"request_failed:{type(exc).__name__}",
+                    )
+
+            if response is None:
+                return False, current_url, "", "request_failed"
+
+            if 300 <= response.status_code < 400:
+                location = (response.headers.get("location") or "").strip()
+                if not location:
+                    return False, current_url, "", "redirect_missing_location"
+                current_url = _resolve_redirect_url(current_url, location)
+                continue
+
+            if response.status_code >= 400:
+                return False, current_url, "", f"http_{response.status_code}"
+
+            content_type = (
+                (response.headers.get("content-type") or "")
+                .split(";")[0]
+                .strip()
+                .lower()
+            )
+            resolved_url = str(response.url) if response.url else current_url
+
+            if content_type.startswith("image/"):
+                return True, resolved_url, content_type, ""
+
+            return False, resolved_url, content_type, "content_type_not_image"
+
+    return False, current_url, "", "redirect_limit_exceeded"
 
 
-async def _rewrite_suspect_article_images(
+async def _sanitize_article_markdown_images(
     *,
     title: str,
     content: str,
-    runtime: Optional[Any],
-    max_images: int = 6,
-) -> str:
+) -> tuple[str, int]:
     matches = list(_MARKDOWN_IMAGE_RE.finditer(content))
     if not matches:
-        return content
+        return content, 0
 
-    targets: list[dict[str, Any]] = []
-    for match in matches:
-        alt_text = match.group(1) or "Generated image"
-        url = match.group(2) or ""
-        image_title = match.group(3)
-        if not _is_suspect_article_image_url(url):
-            continue
-        targets.append(
-            {
-                "span": match.span(2),  # url span
-                "alt_text": alt_text,
-                "image_title": image_title,
-            }
-        )
+    rewritten_parts: list[str] = []
+    filtered_count = 0
+    cursor = 0
 
-    if not targets:
-        return content
+    for idx, match in enumerate(matches):
+        rewritten_parts.append(content[cursor : match.start()])
+        cursor = match.end()
 
-    if len(targets) > max_images:
-        targets = targets[:max_images]
+        alt_text = (match.group(1) or "").strip() or "Image"
+        image_url = (match.group(2) or "").strip()
+        title_attr = (match.group(3) or "").strip()
+        page_url = _coerce_page_url(title_attr)
 
-    rewritten = content
-    offset = 0
-
-    for target in targets:
-        url_start, url_end = target["span"]
-        url_start += offset
-        url_end += offset
-
-        caption = _extract_nearby_caption(rewritten, url_end)
-        prompt = _build_generated_image_prompt(
-            alt_text=str(target["alt_text"] or ""),
-            title=title,
-            nearby_caption=caption,
-        )
-
-        result = await generate_image_tool.coroutine(  # type: ignore[attr-defined]
-            prompt=prompt,
-            aspect_ratio="16:9",
-            resolution="2K",
-            model="gemini-3-pro-image-preview",
-            runtime=runtime,
-        )
-        if isinstance(result, dict) and not result.get("success"):
-            error = str(result.get("error") or "").lower()
-            if "text only" in error or "returned text" in error or "no image" in error:
-                result = await generate_image_tool.coroutine(  # type: ignore[attr-defined]
-                    prompt=prompt,
-                    aspect_ratio="16:9",
-                    resolution="2K",
-                    model="gemini-3-pro-image-preview",
-                    runtime=runtime,
+        if idx >= _ARTICLE_IMAGE_VALIDATE_MAX_IMAGES:
+            filtered_count += 1
+            rewritten_parts.append(
+                _build_image_reference_block(
+                    alt_text=alt_text,
+                    image_url=image_url,
+                    page_url=page_url,
+                    resolved_url=image_url,
                 )
-
-        if not isinstance(result, dict) or not result.get("success"):
-            logger.warning(
-                "write_article_image_rewrite_failed",
-                title=title,
-                prompt_preview=prompt[:120],
-                error=(result or {}).get("error"),
+            )
+            logger.info(
+                "write_article_image_validation_limit_reached",
+                article_title=title,
+                image_index=idx + 1,
+                max_images=_ARTICLE_IMAGE_VALIDATE_MAX_IMAGES,
             )
             continue
 
-        image_url = result.get("image_url")
-        if not isinstance(image_url, str) or not image_url:
+        if not _is_http_url(image_url):
+            filtered_count += 1
+            rewritten_parts.append(
+                _build_image_reference_block(
+                    alt_text=alt_text,
+                    image_url=image_url,
+                    page_url=page_url,
+                    resolved_url=image_url,
+                )
+            )
+            logger.info(
+                "write_article_non_http_image_rewritten",
+                article_title=title,
+                image_index=idx + 1,
+                image_url=image_url,
+            )
             continue
 
-        rewritten = rewritten[:url_start] + image_url + rewritten[url_end:]
-        offset += len(image_url) - (url_end - url_start)
+        (
+            is_valid_image,
+            resolved_url,
+            content_type,
+            invalid_reason,
+        ) = await _validate_article_image_markdown_url(image_url)
 
-    return rewritten
+        if is_valid_image:
+            final_url = (resolved_url or image_url).strip()
+            if final_url and final_url != image_url:
+                title_suffix = f' "{title_attr}"' if title_attr else ""
+                rewritten_parts.append(f"![{alt_text}]({final_url}{title_suffix})")
+            else:
+                rewritten_parts.append(match.group(0))
+            continue
+
+        filtered_count += 1
+        rewritten_parts.append(
+            _build_image_reference_block(
+                alt_text=alt_text,
+                image_url=image_url,
+                page_url=page_url,
+                resolved_url=resolved_url,
+            )
+        )
+        logger.info(
+            "write_article_non_image_url_rewritten",
+            article_title=title,
+            image_index=idx + 1,
+            image_url=image_url,
+            resolved_url=resolved_url,
+            content_type=content_type,
+            reason=invalid_reason,
+        )
+
+    rewritten_parts.append(content[cursor:])
+    return "".join(rewritten_parts), filtered_count
 
 
 @tool("write_article", args_schema=ArticleInput)
@@ -5153,11 +5282,16 @@ async def write_article_tool(
 
     try:
         if isinstance(content, str) and _MARKDOWN_IMAGE_RE.search(content):
-            content = await _rewrite_suspect_article_images(
+            content, filtered_non_image_urls = await _sanitize_article_markdown_images(
                 title=title,
                 content=content,
-                runtime=runtime,
             )
+            if filtered_non_image_urls:
+                logger.info(
+                    "write_article_filtered_non_image_urls",
+                    article_title=title,
+                    filtered_count=filtered_non_image_urls,
+                )
 
         # Return the content - the handler will emit the artifact
         # This is consistent with how generate_image_tool works

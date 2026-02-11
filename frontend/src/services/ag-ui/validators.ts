@@ -128,6 +128,16 @@ export const ArticleArtifactEventSchema = z.object({
   title: z.string(),
   content: z.string(),
   messageId: z.string(),
+  images: z
+    .array(
+      z.object({
+        url: z.string().url().optional(),
+        alt: z.string().optional(),
+        pageUrl: z.string().url().optional(),
+        page_url: z.string().url().optional(),
+      }),
+    )
+    .optional(),
 });
 
 // -----------------------------------------------------------------------------

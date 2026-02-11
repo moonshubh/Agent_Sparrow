@@ -209,6 +209,12 @@ export interface ArticleArtifactEvent {
   title: string;
   content: string;
   messageId: string;
+  images?: Array<{
+    url?: string;
+    alt?: string;
+    pageUrl?: string;
+    page_url?: string;
+  }>;
 }
 
 // -----------------------------------------------------------------------------

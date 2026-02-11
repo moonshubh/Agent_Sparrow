@@ -39,6 +39,10 @@ import {
   stripInternalSearchPayloads,
   hasInternalToolPayload,
 } from "./utils";
+import {
+  collapseAssistantMessagesForRun,
+  shouldCollapseAssistantMessages,
+} from "./message-dedupe";
 
 /**
  * Serializable artifact data for persistence in message metadata.
@@ -57,6 +61,7 @@ export interface SerializedArtifact {
   imageUrl?: string;
   mimeType?: string;
   altText?: string;
+  pageUrl?: string;
   aspectRatio?: string;
   resolution?: string;
 }
@@ -225,7 +230,7 @@ const buildArticleKey = (title: string, content: string): string =>
 type WriteArticleResult = {
   title: string;
   content: string;
-  images?: Array<{ url?: string; alt?: string }>;
+  images?: Array<{ url?: string; alt?: string; pageUrl?: string }>;
 };
 
 const parseWriteArticleResult = (raw: string): WriteArticleResult | null => {
@@ -255,7 +260,7 @@ const parseWriteArticleResult = (raw: string): WriteArticleResult | null => {
     if (!imageLines.length) return null;
     return {
       title,
-      content: `# ${title}\n\n## Images\n\n${imageLines.join("\n\n")}`,
+      content: imageLines.join("\n\n"),
       images,
     };
   } catch (err) {
@@ -1340,6 +1345,12 @@ export function AgentProvider({
             typeof rawArtifact.imageData === "string"
               ? rawArtifact.imageData
               : "";
+          const pageUrl =
+            typeof rawArtifact.pageUrl === "string"
+              ? rawArtifact.pageUrl
+              : typeof rawArtifact.page_url === "string"
+                ? rawArtifact.page_url
+                : "";
           if (!imageUrl && !imageData) continue;
 
           const fallbackId = `img-hydrated-${hashText(`${title}:${imageUrl || imageData.slice(0, 256)}`)}`;
@@ -1363,6 +1374,7 @@ export function AgentProvider({
               typeof rawArtifact.altText === "string"
                 ? rawArtifact.altText
                 : undefined,
+            pageUrl: pageUrl || undefined,
             aspectRatio:
               typeof rawArtifact.aspectRatio === "string"
                 ? rawArtifact.aspectRatio
@@ -2016,6 +2028,32 @@ export function AgentProvider({
                 }
               }
 
+              const persistedRunUserId = runUserMessageId
+                ? persistedMessageIdRef.current[runUserMessageId]
+                : undefined;
+              const runBoundaryIndex = runUserMessageId
+                ? findLastIndex(
+                    nextMessages,
+                    (m) =>
+                      m.id === runUserMessageId ||
+                      (persistedRunUserId ? m.id === persistedRunUserId : false),
+                  )
+                : -1;
+
+              if (shouldCollapseAssistantMessages(explicitAgentType) && runBoundaryIndex >= 0) {
+                const collapsed = collapseAssistantMessagesForRun(
+                  nextMessages,
+                  runBoundaryIndex,
+                );
+                if (collapsed.deduped) {
+                  nextMessages = collapsed.messages;
+                  console.info("[AG-UI] Collapsed duplicate assistant messages", {
+                    dropped: collapsed.droppedCount,
+                    runBoundaryIndex,
+                  });
+                }
+              }
+
               try {
                 agent.messages = nextMessages;
               } catch (err) {
@@ -2245,6 +2283,10 @@ export function AgentProvider({
                   }
                 } else if (maybeAgentEvent.name === "image_artifact") {
                   const payload = maybeAgentEvent.value;
+                  const payloadRecord = payload as unknown as Record<
+                    string,
+                    unknown
+                  >;
                   const imageUrl =
                     typeof payload?.imageUrl === "string"
                       ? payload.imageUrl
@@ -2253,6 +2295,12 @@ export function AgentProvider({
                     typeof payload?.imageData === "string"
                       ? payload.imageData
                       : "";
+                  const pageUrl =
+                    typeof payloadRecord.pageUrl === "string"
+                      ? payloadRecord.pageUrl
+                      : typeof payloadRecord.page_url === "string"
+                        ? payloadRecord.page_url
+                        : "";
 
                   // Log summary only (avoid logging large base64 imageData)
                   console.debug(
@@ -2280,6 +2328,7 @@ export function AgentProvider({
                         imageData: imageData || undefined,
                         mimeType: payload.mimeType || "image/png",
                         altText: payload.altText,
+                        pageUrl: pageUrl || undefined,
                         aspectRatio: payload.aspectRatio,
                         resolution: payload.resolution,
                       });
@@ -2296,6 +2345,7 @@ export function AgentProvider({
                       imageData: imageData || undefined,
                       mimeType: payload.mimeType || "image/png",
                       altText: payload.altText,
+                      pageUrl: pageUrl || undefined,
                       aspectRatio: payload.aspectRatio,
                       resolution: payload.resolution,
                     });
@@ -2514,15 +2564,40 @@ export function AgentProvider({
         if (sessionId && !assistantPersistedRef.current) {
           const sessionKey = String(sessionId);
           let currentMessages = messagesRef.current;
+          const explicitAgentType = getAgentTypeFromState(agent.state);
 
           // Only persist an assistant message if it happened AFTER the user message in this run.
           const runUserMessageId = lastRunUserMessageIdRef.current;
+          const persistedRunUserId = runUserMessageId
+            ? persistedMessageIdRef.current[runUserMessageId]
+            : undefined;
           const runUserIndex = runUserMessageId
             ? findLastIndex(
                 currentMessages,
-                (msg) => msg.id === runUserMessageId,
+                (msg) =>
+                  msg.id === runUserMessageId ||
+                  (persistedRunUserId ? msg.id === persistedRunUserId : false),
               )
             : -1;
+
+          if (
+            shouldCollapseAssistantMessages(explicitAgentType) &&
+            runUserIndex >= 0
+          ) {
+            const collapsed = collapseAssistantMessagesForRun(
+              currentMessages,
+              runUserIndex,
+            );
+            if (collapsed.deduped) {
+              currentMessages = collapsed.messages;
+              messagesRef.current = collapsed.messages;
+              setMessages(collapsed.messages);
+              console.info(
+                "[Persistence] Collapsed duplicate assistant candidates",
+                { dropped: collapsed.droppedCount },
+              );
+            }
+          }
 
           let candidateIndex = findLastIndex(
             currentMessages,
