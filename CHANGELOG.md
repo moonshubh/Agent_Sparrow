@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.2.4](https://github.com/moonshubh/Agent_Sparrow/compare/v0.2.3...v0.2.4) (2026-02-11)
+
+
+### Bug Fixes
+
+* add zendesk scheduler watchdog ([19a7a5c](https://github.com/moonshubh/Agent_Sparrow/commit/19a7a5c6370a06576c5d7e3b957e1b9983b37161))
+* address devin and coderabbit review feedback ([6bcd679](https://github.com/moonshubh/Agent_Sparrow/commit/6bcd6792e90d84911a49481fd8bfa062709cf82a))
+* address devin and coderabbit review feedback ([bf3657c](https://github.com/moonshubh/Agent_Sparrow/commit/bf3657c9e0110ac43e0dc2a43d3c67a11efc06f6))
+* address Devin and CodeRabbit review findings ([442f7b2](https://github.com/moonshubh/Agent_Sparrow/commit/442f7b29d576a99f3f95399641cae230762307cf))
+* **ci:** provide test env for API key encryption ([13add29](https://github.com/moonshubh/Agent_Sparrow/commit/13add298ed3806986ed34409fa823aab3271bfc9))
+* guard feedme examples and enforce service key ([248f17b](https://github.com/moonshubh/Agent_Sparrow/commit/248f17b6383d56c94371ab66192f9a20f713b7ec))
+* harden minimax mcp timeouts ([af55ef9](https://github.com/moonshubh/Agent_Sparrow/commit/af55ef925ebec4c185286dfe1683183ebd737d60))
+* **memory:** prevent admin freeze on image-backed mb_playbook edits ([339a598](https://github.com/moonshubh/Agent_Sparrow/commit/339a59844eed5fd565110d71300b915e2af590e6))
+* persist memory image sizing ([524bd28](https://github.com/moonshubh/Agent_Sparrow/commit/524bd28bd077e02e999a3f67fcf207d486ba81ba))
+* **release:** add manual Slack dispatch and guard fromJSON ([5f77fe5](https://github.com/moonshubh/Agent_Sparrow/commit/5f77fe5ac8831ce98962c0b9f9dd2d540c651c1b))
+* **release:** guard fromJSON against empty pr output ([bdd58e6](https://github.com/moonshubh/Agent_Sparrow/commit/bdd58e654da0d338bb6be655504d6531b9dd9d89))
+* remove agent timeouts and harden fallback ([cd2ffde](https://github.com/moonshubh/Agent_Sparrow/commit/cd2ffdeb5cf1da15fa5e0f8aef851c404ad847ae))
+* render memory metadata in dedicated visible drawer ([96d89e9](https://github.com/moonshubh/Agent_Sparrow/commit/96d89e9084550b3d87dc974d73d8152de294f420))
+* restore metadata visibility in memory table edit modal ([5d03b15](https://github.com/moonshubh/Agent_Sparrow/commit/5d03b15164cd53426dc0357dd317b002ba09ec86))
+* scheduler note logging and memory quick fixes ([6ba543f](https://github.com/moonshubh/Agent_Sparrow/commit/6ba543f0a81cde8a49467e5b3b1ee0d8bfd2495c))
+* skip zendesk import without credentials ([ac97f44](https://github.com/moonshubh/Agent_Sparrow/commit/ac97f442a4fb396e902cf072a56c510facc2aa40))
+* stabilize feedme + update deps ([9cb2260](https://github.com/moonshubh/Agent_Sparrow/commit/9cb22603de55bd26a3aab0d8930f05ab99957e68))
+* unblock zendesk + feedme processing ([1683168](https://github.com/moonshubh/Agent_Sparrow/commit/16831687dc00b3bd793d1eb5476bcfae13a006a9))
+
+
+### Performance
+
+* **db:** add HNSW vector indexes, optimize RPCs, and tune autovacuum ([fe7eae8](https://github.com/moonshubh/Agent_Sparrow/commit/fe7eae8063f757eba077e4f78398d371eded125e))
+* **db:** HNSW vector indexes, RPC optimization, autovacuum tuning ([a158bbe](https://github.com/moonshubh/Agent_Sparrow/commit/a158bbea78a1174c30e5350d46893c23a2c8dde9))
+
 ## [0.2.3](https://github.com/moonshubh/Agent_Sparrow/compare/v0.2.2...v0.2.3) (2026-02-02)
 
 
