@@ -5092,8 +5092,8 @@
 
 /* Collapsible Metadata Panel */
 .add-memory-meta-panel {
-  overflow: hidden;
   flex-shrink: 0;
+  scroll-margin-bottom: 16px;
 }
 
 .add-memory-meta-panel-inner {

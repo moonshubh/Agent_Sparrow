@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useCallback, useEffect } from "react";
+import React, { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import type { User } from "@supabase/supabase-js";
 import { motion, AnimatePresence } from "framer-motion";
 import { MemoryTipTapEditor } from "./MemoryTipTapEditor";
@@ -96,10 +96,24 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const [metadataError, setMetadataError] = useState<string | null>(null);
   const [metadataExpanded, setMetadataExpanded] = useState(false);
   const [editor, setEditor] = useState<Editor | null>(null);
+  const metadataPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setContent(initialContent);
   }, [initialContent]);
+
+  useEffect(() => {
+    if (!metadataExpanded) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      metadataPanelRef.current?.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [metadataExpanded]);
 
   const addMemory = useAddMemory();
   const updateMemory = useUpdateMemory();
@@ -499,14 +513,16 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
             </div>
 
             {/* Collapsible Metadata Panel */}
-            <AnimatePresence>
-              {metadataExpanded && (
+            <AnimatePresence initial={false}>
+              {metadataExpanded ? (
                 <motion.div
+                  id="memory-metadata-panel"
+                  ref={metadataPanelRef}
                   className="add-memory-meta-panel"
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 8 }}
+                  transition={{ duration: 0.16 }}
                 >
                   <div className="add-memory-meta-panel-inner">
                     <div className="add-memory-meta-toolbar">
@@ -543,7 +559,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
                     )}
                   </div>
                 </motion.div>
-              )}
+              ) : null}
             </AnimatePresence>
           </div>
 
@@ -580,6 +596,8 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
               type="button"
               className={`add-memory-meta-toggle ${metadataExpanded ? "expanded" : ""} ${metadataKeyCount > 0 ? "has-data" : ""}`}
               onClick={() => setMetadataExpanded(!metadataExpanded)}
+              aria-expanded={metadataExpanded}
+              aria-controls="memory-metadata-panel"
             >
               <Code size={14} />
               <span>
