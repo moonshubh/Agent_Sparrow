@@ -20,7 +20,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useAddMemory, useUpdateMemory } from "../hooks";
-import type { Memory, SourceType } from "../types";
+import type { Memory, SourceType, UpdateMemoryRequest } from "../types";
 import { SourceBadge } from "./SourceBadge";
 import { useAuth } from "@/shared/contexts/AuthContext";
 import { normalizeLegacyMemoryContent } from "../lib/legacyMemoryFormatting";
@@ -50,6 +50,34 @@ const toInitialMetadataText = (value: unknown): string => {
   }
   try {
     return JSON.stringify(value, null, 2);
+  } catch {
+    return "";
+  }
+};
+
+const normalizeForComparison = (value: string): string =>
+  value.replace(/\r\n/g, "\n");
+
+const sortJsonValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => sortJsonValue(item));
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.keys(value as Record<string, unknown>)
+      .sort((a, b) => a.localeCompare(b))
+      .reduce<Record<string, unknown>>((acc, key) => {
+        acc[key] = sortJsonValue((value as Record<string, unknown>)[key]);
+        return acc;
+      }, {});
+  }
+
+  return value;
+};
+
+const stableJsonStringify = (value: unknown): string => {
+  try {
+    return JSON.stringify(sortJsonValue(value));
   } catch {
     return "";
   }
@@ -245,12 +273,34 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
             : parsedMetadata;
 
         if (isEditMode && memory) {
+          const existingContent = normalizeForComparison(memory.content ?? "");
+          const nextContent = normalizeForComparison(trimmedContent);
+          const contentChanged = existingContent !== nextContent;
+
+          const existingMetadata = isPlainMetadata(memory.metadata)
+            ? memory.metadata
+            : {};
+          const metadataChanged =
+            stableJsonStringify(existingMetadata) !==
+            stableJsonStringify(metadataWithEditor);
+
+          if (!contentChanged && !metadataChanged) {
+            toast.info("No changes to save");
+            onClose();
+            return;
+          }
+
+          const updateRequest: UpdateMemoryRequest = {};
+          if (contentChanged) {
+            updateRequest.content = trimmedContent;
+          }
+          if (metadataChanged) {
+            updateRequest.metadata = metadataWithEditor;
+          }
+
           const updated = await updateMemory.mutateAsync({
             memoryId: memory.id,
-            request: {
-              content: trimmedContent,
-              metadata: metadataWithEditor,
-            },
+            request: updateRequest,
           });
           toast.success("Memory updated");
           onSuccess?.(updated?.id || memory.id);

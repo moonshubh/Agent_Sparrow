@@ -29,6 +29,8 @@ logger = get_logger(__name__)
 
 COUNT_EXACT: CountMethod = CountMethod.exact
 ZERO_UUID = UUID("00000000-0000-0000-0000-000000000000")
+EMBEDDING_SYNC_TIMEOUT_SECONDS = 12.0
+EMBEDDING_DEFERRED_TIMEOUT_SECONDS = 45.0
 
 
 class MemoryUIService:
@@ -50,6 +52,7 @@ class MemoryUIService:
         self._supabase: Optional[SupabaseClient] = None
         self._embedding_model = None
         self._lock = asyncio.Lock()
+        self._embedding_refresh_tasks: dict[str, asyncio.Task[None]] = {}
 
     def _get_supabase(self) -> SupabaseClient:
         """Get or initialize Supabase client."""
@@ -133,6 +136,94 @@ class MemoryUIService:
         except Exception as exc:
             logger.error("Failed to generate embedding: %s", exc)
             raise
+
+    def _schedule_embedding_refresh(
+        self,
+        memory_id: str,
+        content: str,
+        expected_updated_at: str | None,
+    ) -> None:
+        """Schedule a best-effort background embedding refresh for a memory."""
+        active_task = self._embedding_refresh_tasks.get(memory_id)
+        if active_task and not active_task.done():
+            active_task.cancel()
+
+        async def _runner() -> None:
+            await self._refresh_embedding_for_memory(
+                memory_id=memory_id,
+                content=content,
+                expected_updated_at=expected_updated_at,
+            )
+
+        try:
+            task = asyncio.create_task(_runner())
+        except RuntimeError as exc:
+            logger.warning(
+                "Failed to schedule deferred embedding refresh for memory %s: %s",
+                memory_id,
+                exc,
+            )
+            return
+
+        self._embedding_refresh_tasks[memory_id] = task
+        task.add_done_callback(
+            lambda completed_task: self._clear_embedding_refresh_task(
+                memory_id, completed_task
+            )
+        )
+
+    def _clear_embedding_refresh_task(
+        self, memory_id: str, completed_task: asyncio.Task[None]
+    ) -> None:
+        current_task = self._embedding_refresh_tasks.get(memory_id)
+        if current_task is completed_task:
+            self._embedding_refresh_tasks.pop(memory_id, None)
+
+    async def _refresh_embedding_for_memory(
+        self,
+        memory_id: str,
+        content: str,
+        expected_updated_at: str | None,
+    ) -> None:
+        """Regenerate and persist embedding in the background (best effort)."""
+        try:
+            embedding = await asyncio.wait_for(
+                self.generate_embedding(content),
+                timeout=EMBEDDING_DEFERRED_TIMEOUT_SECONDS,
+            )
+            supabase = self._get_supabase()
+            response = await supabase._exec(
+                lambda: (
+                    supabase.client.table("memories")
+                    .update({"embedding": embedding})
+                    .eq("id", memory_id)
+                    .eq("updated_at", expected_updated_at)
+                    .execute()
+                    if expected_updated_at
+                    else supabase.client.table("memories")
+                    .update({"embedding": embedding})
+                    .eq("id", memory_id)
+                    .execute()
+                )
+            )
+            if not response.data:
+                logger.info(
+                    "Skipped deferred embedding refresh for memory %s because a newer update exists",
+                    memory_id,
+                )
+                return
+            logger.info(
+                "Deferred embedding refresh completed for memory %s", memory_id
+            )
+        except asyncio.CancelledError:
+            logger.debug("Deferred embedding refresh cancelled for memory %s", memory_id)
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Deferred embedding refresh failed for memory %s: %s",
+                memory_id,
+                exc,
+            )
 
     async def add_memory(
         self,
@@ -291,13 +382,28 @@ class MemoryUIService:
                     reviewer_id_str,
                 )
 
+        defer_embedding_refresh = False
+
         # Regenerate embedding if content changed
         if content != existing_content:
-            embedding = await self.generate_embedding(content)
-            update_payload["embedding"] = embedding
-            logger.info(
-                "Content changed for memory %s, regenerated embedding", memory_id_str
-            )
+            try:
+                embedding = await asyncio.wait_for(
+                    self.generate_embedding(content),
+                    timeout=EMBEDDING_SYNC_TIMEOUT_SECONDS,
+                )
+                update_payload["embedding"] = embedding
+                logger.info(
+                    "Content changed for memory %s, regenerated embedding",
+                    memory_id_str,
+                )
+            except Exception as exc:
+                # Fail open for edit durability; refresh embedding in background.
+                defer_embedding_refresh = True
+                logger.warning(
+                    "Embedding regeneration deferred for memory %s after sync failure: %s",
+                    memory_id_str,
+                    exc,
+                )
 
         try:
             response = await supabase._exec(
@@ -310,6 +416,21 @@ class MemoryUIService:
             if response.data:
                 memory = response.data[0]
                 logger.info("Updated memory: %s", memory_id_str)
+                if defer_embedding_refresh:
+                    expected_updated_at = (
+                        memory.get("updated_at")
+                        if isinstance(memory.get("updated_at"), str)
+                        else update_payload.get("updated_at")
+                    )
+                    self._schedule_embedding_refresh(
+                        memory_id=memory_id_str,
+                        content=content,
+                        expected_updated_at=(
+                            str(expected_updated_at)
+                            if expected_updated_at is not None
+                            else None
+                        ),
+                    )
                 return memory
 
             raise RuntimeError(f"Memory {memory_id_str} not found for update")
