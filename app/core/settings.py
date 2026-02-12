@@ -26,9 +26,11 @@ else:
 ENV_PATH = project_root / ".env"
 ENV_LOCAL_PATH = project_root / ".env.local"
 
-# Load .env first, then .env.local to allow overrides
+# Load .env first, then .env.local for local defaults.
+# Never override real process environment variables (deployment/runtime config
+# must take precedence over checked-in/local files).
 load_dotenv(ENV_PATH)
-load_dotenv(ENV_LOCAL_PATH, override=True)  # .env.local overrides .env
+load_dotenv(ENV_LOCAL_PATH, override=False)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,17 @@ class Settings(BaseSettings):
         if self.minimax_api_host.rstrip("/") != default_host:
             if self.minimax_base_url == default_base:
                 self.minimax_base_url = f"{self.minimax_api_host.rstrip('/')}/v1"
+        return self
+
+    @model_validator(mode="after")
+    def hydrate_langsmith_sampling_rate(self) -> "Settings":
+        # Backward compatibility: older deployments may still set the legacy
+        # LANGCHAIN_TRACING_SAMPLING_RATE variable.
+        if (
+            self.langsmith_tracing_sampling_rate is None
+            and self.langchain_tracing_sampling_rate is not None
+        ):
+            self.langsmith_tracing_sampling_rate = self.langchain_tracing_sampling_rate
         return self
 
     # XAI/Grok Configuration
@@ -109,6 +122,13 @@ class Settings(BaseSettings):
     langsmith_api_key: Optional[str] = Field(default=None, alias="LANGSMITH_API_KEY")
     langsmith_endpoint: Optional[str] = Field(default=None, alias="LANGSMITH_ENDPOINT")
     langsmith_project: Optional[str] = Field(default=None, alias="LANGSMITH_PROJECT")
+    langsmith_tracing_sampling_rate: Optional[float] = Field(
+        default=None, alias="LANGSMITH_TRACING_SAMPLING_RATE"
+    )
+    # Legacy alias preserved for compatibility with older LangChain examples.
+    langchain_tracing_sampling_rate: Optional[float] = Field(
+        default=None, alias="LANGCHAIN_TRACING_SAMPLING_RATE"
+    )
 
     # In-Memory Session Store Configuration (replaces Redis for small deployments)
     session_store_max_sessions: int = Field(
@@ -215,10 +235,42 @@ class Settings(BaseSettings):
     )
     # Thinking trace mode: narrated | hybrid | provider_reasoning | off
     trace_mode: str = Field(default="narrated", alias="TRACE_MODE")
-    # Agent timeouts: disabled by default for quality-first processing
-    agent_disable_timeouts: bool = Field(default=True, alias="AGENT_DISABLE_TIMEOUTS")
+    # Agent timeouts: enabled by default for production stability.
+    # Set AGENT_DISABLE_TIMEOUTS=true only for explicit debugging sessions.
+    agent_disable_timeouts: bool = Field(default=False, alias="AGENT_DISABLE_TIMEOUTS")
     agent_helper_timeout_sec: Optional[float] = Field(
-        default=None, alias="AGENT_HELPER_TIMEOUT_SEC"
+        default=8.0, alias="AGENT_HELPER_TIMEOUT_SEC"
+    )
+    agent_model_timeout_sec: Optional[float] = Field(
+        default=120.0, alias="AGENT_MODEL_TIMEOUT_SEC"
+    )
+    agent_minimax_model_timeout_sec: Optional[float] = Field(
+        default=180.0, alias="AGENT_MINIMAX_MODEL_TIMEOUT_SEC"
+    )
+    agui_stream_idle_timeout_sec: Optional[float] = Field(
+        default=90.0, alias="AGUI_STREAM_IDLE_TIMEOUT_SEC"
+    )
+    agui_stream_total_timeout_sec: Optional[float] = Field(
+        default=300.0, alias="AGUI_STREAM_TOTAL_TIMEOUT_SEC"
+    )
+    langgraph_recursion_limit: Optional[int] = Field(
+        default=None, alias="LANGGRAPH_RECURSION_LIMIT"
+    )
+    agui_recursion_limit: int = Field(default=120, alias="AGUI_RECURSION_LIMIT")
+    agui_max_recursion_limit: int = Field(
+        default=260, alias="AGUI_MAX_RECURSION_LIMIT"
+    )
+    agent_default_recursion_limit: int = Field(
+        default=120, alias="AGENT_DEFAULT_RECURSION_LIMIT"
+    )
+    agent_max_recursion_limit: int = Field(
+        default=220, alias="AGENT_MAX_RECURSION_LIMIT"
+    )
+    minimax_mcp_circuit_breaker_failures: int = Field(
+        default=3, alias="MINIMAX_MCP_CIRCUIT_BREAKER_FAILURES"
+    )
+    minimax_mcp_circuit_breaker_cooldown_sec: float = Field(
+        default=180.0, alias="MINIMAX_MCP_CIRCUIT_BREAKER_COOLDOWN_SEC"
     )
 
     @field_validator("trace_mode")

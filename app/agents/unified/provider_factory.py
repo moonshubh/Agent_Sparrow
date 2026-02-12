@@ -54,18 +54,41 @@ GROK_CONFIG = {
 }
 
 # =============================================================================
-# TIMEOUT CONFIGURATION - Allow long-running tasks (manual stop)
+# TIMEOUT CONFIGURATION - bounded by settings for production stability
 # =============================================================================
 
-# Request timeout in seconds for LLM API calls.
-# Set to None to rely on manual stop instead of hard timeouts.
-REQUEST_TIMEOUT_SECONDS: float | None = None
-
-# Minimax M2.1 synthesis can run long; allow unbounded requests when using Minimax.
-MINIMAX_REQUEST_TIMEOUT_SECONDS: float | None = None
-
-# Transport timeout for opening connections (httpx/aiohttp)
+# Transport timeout for opening connections (httpx/aiohttp).
 CONNECT_TIMEOUT_SECONDS = 30
+
+
+def _resolve_request_timeout() -> float | None:
+    """Resolve coordinator LLM timeout in seconds."""
+    if settings.agent_disable_timeouts:
+        return None
+    timeout = settings.agent_model_timeout_sec
+    if timeout is None:
+        return None
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _resolve_minimax_request_timeout() -> float | None:
+    """Resolve Minimax LLM timeout in seconds."""
+    if settings.agent_disable_timeouts:
+        return None
+    timeout = settings.agent_minimax_model_timeout_sec
+    if timeout is None:
+        timeout = settings.agent_model_timeout_sec
+    if timeout is None:
+        return None
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def _is_gemini_3_model(model: str) -> bool:
@@ -244,13 +267,13 @@ def _build_google_model(model: str, temperature: float) -> BaseChatModel:
         "temperature": temperature,
         "google_api_key": settings.gemini_api_key,
         "include_thoughts": include_thoughts,
-        "timeout": REQUEST_TIMEOUT_SECONDS,  # None disables request timeouts
+        "timeout": _resolve_request_timeout(),
     }
 
     if include_thoughts:
         if is_gemini_3:
-            # Gemini 3: request high thinking depth when supported.
-            kwargs["thinking_level"] = "high"
+            # Gemini 3: prefer medium thinking depth for coordinator stability.
+            kwargs["thinking_level"] = "medium"
         else:
             # Gemini 2.5: optional thinking budget (tokens).
             if settings.primary_agent_thinking_budget is not None:
@@ -329,7 +352,7 @@ def _build_xai_model(
         temperature=temperature,
         api_key=_to_secret(settings.xai_api_key),
         extra_body=extra_body,
-        timeout=REQUEST_TIMEOUT_SECONDS,
+        timeout=_resolve_request_timeout(),
     )
 
 
@@ -397,7 +420,7 @@ def _build_openrouter_model(
 
         # Minimax recommended parameters: temperature=1.0, top_p=0.95, top_k=40.
         # We respect the per-model config for sampling values.
-        timeout = MINIMAX_REQUEST_TIMEOUT_SECONDS
+        timeout = _resolve_minimax_request_timeout()
         kwargs = {
             "model": actual_model,
             "temperature": temperature,
@@ -465,7 +488,7 @@ def _build_openrouter_model(
         "base_url": base_url,
         "default_headers": headers,
         "extra_body": extra_body,
-        "timeout": REQUEST_TIMEOUT_SECONDS,
+        "timeout": _resolve_request_timeout(),
     }
     if top_p is not None:
         kwargs["top_p"] = top_p

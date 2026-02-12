@@ -406,6 +406,9 @@ class StreamEventHandler:
         # stays in the reasoning pane while the main chat only receives the
         # final, sanitized answer.
         self._gemini_buffer_runs: dict[str, list[str]] = {}
+        # Best-effort aggregate of user-visible text emitted on the main stream.
+        # Used to backfill final content when model stream events terminate early.
+        self._visible_text_buffer: str = ""
 
         # Get tracer if available
         self._tracer = trace.get_tracer(__name__) if OTEL_AVAILABLE else None
@@ -424,6 +427,7 @@ class StreamEventHandler:
         # user-visible text into the main chat transcript.
         self._tool_run_ids: set[str] = set()
         self._tool_run_metadata: dict[str, dict[str, str]] = {}
+        self._model_runs_with_tool_calls: set[str] = set()
         # Track model runs that appear to be streaming structured tool payloads (JSON contracts).
         self._json_payload_prefix: dict[str, str] = {}
         self._json_payload_runs: set[str] = set()
@@ -437,7 +441,12 @@ class StreamEventHandler:
             return True
         if "deadline expired" in message:
             return True
+        if "high demand" in message and "unavailable" in message:
+            return True
         if "503" in message and "service unavailable" in message:
+            return True
+        # google-genai async error parsing bug observed under transient upstream failures.
+        if "clientresponse" in message and "subscriptable" in message:
             return True
         return False
 
@@ -509,6 +518,32 @@ class StreamEventHandler:
                 )
             async for event in self._event_generator():
                 await self._handle_event(event)
+
+            # Flush any trailing non-thinking text that remained in trackers.
+            # Without this, short tail fragments can be dropped if a model run ends
+            # without another chunk to trigger emission.
+            trackers = getattr(self, "_thinking_trackers", None)
+            if isinstance(trackers, dict):
+                for pending_run_id in list(trackers.keys()):
+                    self._flush_tracker_tail(
+                        pending_run_id,
+                        has_tool_calls=pending_run_id in self._model_runs_with_tool_calls,
+                    )
+            if getattr(self.emitter, "_message_started", False):
+                self.emitter.end_text_message()
+
+            # Some runs terminate without a root chain-end event even though the
+            # graph has completed. Recover a canonical final output here so the
+            # client does not get stuck with only a short prefix chunk.
+            if self.final_output is None or self._is_suspect_final_output(
+                self.final_output
+            ):
+                await self._recover_missing_final_output()
+
+            # Even when final output exists, ensure the user-visible stream reflects
+            # the best extracted terminal answer rather than an internal/partial delta.
+            self._reconcile_visible_output_with_final()
+            self._ensure_user_visible_output()
 
             # Some LangChain/LangGraph versions do not reliably emit `on_graph_end`
             # for the top-level graph, and nested graphs/tools may emit their own
@@ -710,6 +745,18 @@ class StreamEventHandler:
                     if self.final_output
                     else ""
                 )
+                if fallback_text:
+                    # Ensure fallback recovery still emits a user-visible answer
+                    # on the main chat stream even when normal model streaming aborted.
+                    if not getattr(self.emitter, "_message_started", False):
+                        self.emitter.start_text_message()
+                    self.emitter.emit_text_content(fallback_text)
+                    self.emitter.end_text_message()
+                    self._visible_text_buffer = fallback_text
+
+                    if hasattr(self.emitter, "mark_all_todos_done"):
+                        self.emitter.mark_all_todos_done()
+
                 if "phase:synthesize" in self._objective_hint_started_at or fallback_text:
                     self._emit_objective_hint(
                         lane_id="primary",
@@ -794,6 +841,17 @@ class StreamEventHandler:
                             "also failed. Please try again."
                         )
                     }
+
+                failure_text = ThinkingBlockTracker.sanitize_final_content(
+                    self._extract_final_assistant_text(self.final_output)
+                ).strip()
+                if failure_text:
+                    if getattr(self.emitter, "_message_started", False):
+                        self.emitter.end_text_message()
+                    self.emitter.start_text_message()
+                    self.emitter.emit_text_content(failure_text)
+                    self.emitter.end_text_message()
+                    self._visible_text_buffer = failure_text
 
                 if not self._plan_hint_completed:
                     self._emit_objective_hint(
@@ -1324,7 +1382,7 @@ class StreamEventHandler:
 
         if settings.trace_mode != "off":
             self.emitter.start_thought(
-                run_id=run_id,
+                run_id=str(run_id),
                 model=data.get("model"),
                 prompt_preview=prompt_preview,
             )
@@ -1348,8 +1406,29 @@ class StreamEventHandler:
 
         final_output = data.get("output")
         has_tool_calls, invalid_tool_calls = self._detect_tool_calls(final_output)
+        if run_id_str and has_tool_calls:
+            self._model_runs_with_tool_calls.add(run_id_str)
 
-        if run_id and run_id in self.emitter.operations:
+        parent_run_id = event.get("parent_run_id")
+        parent_run_id_str = (
+            str(parent_run_id) if parent_run_id is not None else None
+        )
+        is_subagent_stream = False
+        subagent_meta: dict[str, str] | None = None
+        if parent_run_id_str and parent_run_id_str in self._tool_run_ids:
+            subagent_meta = self._tool_run_metadata.get(parent_run_id_str)
+            if subagent_meta and subagent_meta.get("tool_name") == "task":
+                is_subagent_stream = True
+
+        if run_id_str:
+            self._flush_tracker_tail(
+                run_id_str,
+                has_tool_calls=has_tool_calls,
+                is_subagent_stream=is_subagent_stream,
+                subagent_meta=subagent_meta,
+            )
+
+        if run_id_str:
             content = ""
             if final_output:
                 reasoning_content = self._extract_reasoning_content(final_output)
@@ -1389,11 +1468,22 @@ class StreamEventHandler:
                 )
 
                 if not has_tool_calls:
-                    final_visible = content or buffered_text
+                    content_clean = (content or "").strip()
+                    buffered_clean = (buffered_text or "").strip()
+                    # Gemini model-end payloads can occasionally contain a shortened
+                    # summary while the buffered stream has the full final answer.
+                    # Prefer the richer buffered text when available.
+                    if buffered_clean and (
+                        not content_clean or len(buffered_clean) > len(content_clean)
+                    ):
+                        final_visible = buffered_clean
+                    else:
+                        final_visible = content_clean
                     if final_visible:
                         self.emitter.start_text_message()
                         self.emitter.emit_text_content(final_visible)
                         self.emitter.end_text_message()
+                        self._visible_text_buffer = final_visible
 
             # Never attach the final user-visible answer to the thought trace step.
             # Thought steps must represent reasoning/narration only.
@@ -1418,7 +1508,7 @@ class StreamEventHandler:
                     status="running",
                     summary="Drafting final response.",
                 )
-            self.emitter.end_thought(run_id, None)
+            self.emitter.end_thought(run_id_str, None)
 
         # Track final output
         if final_output:
@@ -1478,6 +1568,7 @@ class StreamEventHandler:
         if run_id_str and hasattr(self, "_thinking_trackers"):
             self._thinking_trackers.pop(run_id_str, None)
         if run_id_str:
+            self._model_runs_with_tool_calls.discard(run_id_str)
             self._json_payload_prefix.pop(run_id_str, None)
             self._json_payload_runs.discard(run_id_str)
 
@@ -1519,6 +1610,8 @@ class StreamEventHandler:
             has_tool_calls = True
         elif hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
             has_tool_calls = True
+        if has_tool_calls:
+            self._model_runs_with_tool_calls.add(run_id_str)
 
         # Extract and separate thinking from content (Gemini 3 format)
         raw_content = getattr(chunk, "content", chunk)
@@ -1749,6 +1842,7 @@ class StreamEventHandler:
             # and not inside a dedicated thinking block.
             if not has_tool_calls and visible_content and not is_thinking_chunk:
                 self.emitter.emit_text_content(visible_content)
+                self._visible_text_buffer += visible_content
         else:
             # Empty chunk (no text, no tool calls) — log for diagnostics (common with some providers)
             logger.trace(
@@ -1818,6 +1912,26 @@ class StreamEventHandler:
             final_text_summary = ThinkingBlockTracker.sanitize_final_content(
                 self._extract_final_assistant_text(output)
             )
+            emitted_so_far = ThinkingBlockTracker.sanitize_final_content(
+                self._visible_text_buffer
+            ).strip()
+            final_trimmed = final_text_summary.strip()
+            if final_trimmed:
+                missing_or_truncated = (
+                    not emitted_so_far
+                    or (
+                        emitted_so_far not in final_trimmed
+                        and final_trimmed not in emitted_so_far
+                    )
+                    or len(final_trimmed) > len(emitted_so_far) + 24
+                )
+                if missing_or_truncated:
+                    if getattr(self.emitter, "_message_started", False):
+                        self.emitter.end_text_message()
+                    self.emitter.start_text_message()
+                    self.emitter.emit_text_content(final_trimmed)
+                    self.emitter.end_text_message()
+                    self._visible_text_buffer = final_trimmed
 
         if "phase:synthesize" in self._objective_hint_started_at:
             self._emit_objective_hint(
@@ -1860,6 +1974,312 @@ class StreamEventHandler:
 
     def _now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def _is_suspect_final_output(self, output: Any) -> bool:
+        """Heuristic for low-quality terminal outputs that are likely prompt echoes."""
+        text = ThinkingBlockTracker.sanitize_final_content(
+            self._extract_final_assistant_text(output)
+        ).strip()
+        if not text:
+            return True
+        if len(text) >= 180:
+            return False
+
+        user_query = ThinkingBlockTracker.sanitize_final_content(
+            self.last_user_query or ""
+        ).strip()
+        if not user_query:
+            return False
+
+        text_lower = text.lower()
+        query_lower = user_query.lower()
+        if text_lower in query_lower or query_lower.startswith(text_lower):
+            return True
+
+        text_tokens = {token for token in re.findall(r"[a-z0-9]+", text_lower)}
+        query_tokens = {token for token in re.findall(r"[a-z0-9]+", query_lower)}
+        if not text_tokens or not query_tokens:
+            return False
+        overlap = len(text_tokens & query_tokens) / max(1, len(text_tokens))
+        return overlap >= 0.7
+
+    def _reconcile_visible_output_with_final(self) -> None:
+        """Backfill visible stream text from best-effort final output extraction."""
+        if self.final_output is None:
+            return
+
+        final_text = ThinkingBlockTracker.sanitize_final_content(
+            self._extract_final_assistant_text(self.final_output)
+        ).strip()
+        if not final_text:
+            return
+
+        current_visible = ThinkingBlockTracker.sanitize_final_content(
+            self._visible_text_buffer
+        ).strip()
+        needs_reconcile = (
+            not current_visible
+            or (
+                current_visible not in final_text and final_text not in current_visible
+            )
+            or len(final_text) > len(current_visible) + 24
+        )
+        if not needs_reconcile:
+            return
+
+        if getattr(self.emitter, "_message_started", False):
+            self.emitter.end_text_message()
+        self.emitter.start_text_message()
+        self.emitter.emit_text_content(final_text)
+        self.emitter.end_text_message()
+        self._visible_text_buffer = final_text
+
+        if "phase:synthesize" in self._objective_hint_started_at or final_text:
+            self._emit_objective_hint(
+                lane_id="primary",
+                objective_id="phase:synthesize",
+                phase="synthesize",
+                title="Synthesize",
+                status="done",
+                summary=self._truncate_trace_value(final_text, max_len=220),
+            )
+
+    def _ensure_user_visible_output(self) -> None:
+        """Guarantee a user-visible message even on degraded stream termination."""
+        visible = ThinkingBlockTracker.sanitize_final_content(self._visible_text_buffer).strip()
+        if visible:
+            return
+
+        had_final_output = self.final_output is not None
+        final_text = ""
+        if self.final_output is not None:
+            final_text = ThinkingBlockTracker.sanitize_final_content(
+                self._extract_final_assistant_text(self.final_output)
+            ).strip()
+
+        if not final_text:
+            logger.warning(
+                "stream_missing_visible_text_emitting_fallback",
+                had_final_output=had_final_output,
+                final_output_type=(
+                    type(self.final_output).__name__
+                    if self.final_output is not None
+                    else None
+                ),
+            )
+            final_text = (
+                "I couldn't finalize a stable response due to transient model/provider issues. "
+                "Please retry this request."
+            )
+            self.final_output = {"output": final_text}
+            self._emit_objective_hint(
+                lane_id="primary",
+                objective_id="phase:synthesize",
+                phase="synthesize",
+                title="Synthesize",
+                status="error",
+                summary="Response finalization failed; emitted retry guidance.",
+            )
+        else:
+            logger.warning(
+                "stream_missing_visible_text_backfilled_from_final_output",
+                final_chars=len(final_text),
+            )
+
+        if getattr(self.emitter, "_message_started", False):
+            self.emitter.end_text_message()
+        self.emitter.start_text_message()
+        self.emitter.emit_text_content(final_text)
+        self.emitter.end_text_message()
+        self._visible_text_buffer = final_text
+
+    async def _recover_missing_final_output(self) -> None:
+        """Recover final output when stream ends without terminal graph output.
+
+        This path is intentionally conservative:
+        - Try one bounded non-streaming invoke on the same agent.
+        - On Google overload errors, try the configured fallback agent factory.
+        - Always preserve any already streamed visible text as a last-resort output.
+        """
+        logger.warning(
+            "stream_missing_final_output_recovery_started",
+            visible_chars=len(self._visible_text_buffer),
+        )
+
+        retryable_exceptions: list[type] = [
+            ConnectionError,
+            TimeoutError,
+            OSError,
+            httpx.ReadTimeout,
+        ]
+        if ChatGoogleGenerativeAIError is not None:
+            retryable_exceptions.append(ChatGoogleGenerativeAIError)
+        if GoogleGenaiServerError is not None:
+            retryable_exceptions.append(GoogleGenaiServerError)
+
+        retry_config = RetryConfig(
+            max_attempts=2,
+            initial_interval=0.8,
+            max_interval=4.0,
+            backoff_factor=2.0,
+            jitter=0.4,
+            retry_exceptions=tuple(retryable_exceptions),
+        )
+
+        recovered_output: Any | None = None
+        inputs = self._agent_inputs()
+
+        async def _invoke_primary() -> Any:
+            return await self.agent.ainvoke(inputs, config=self.config)
+
+        try:
+            recovered_output = await retry_with_backoff(
+                _invoke_primary,
+                config=retry_config,
+            )
+        except Exception as primary_exc:
+            # Provider overloads should opportunistically use the fallback chain.
+            if self.fallback_agent_factory and self._is_google_overloaded_error(
+                primary_exc
+            ):
+                try:
+                    built = self.fallback_agent_factory()
+                except Exception as build_exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "missing_final_output_fallback_build_failed",
+                        error=str(build_exc),
+                    )
+                    built = None
+
+                if built:
+                    fallback_agent, fallback_config, _fallback_runtime = built
+
+                    async def _invoke_fallback() -> Any:
+                        try:
+                            return await fallback_agent.ainvoke(
+                                inputs,
+                                config=fallback_config,
+                            )
+                        except Exception as inner_exc:
+                            if not self._is_invalid_system_role_error(inner_exc):
+                                raise
+                            coerced = {
+                                **inputs,
+                                "messages": self._coerce_system_messages_to_user(
+                                    list(inputs.get("messages") or [])
+                                ),
+                            }
+                            return await fallback_agent.ainvoke(
+                                coerced,
+                                config=fallback_config,
+                            )
+
+                    try:
+                        recovered_output = await retry_with_backoff(
+                            _invoke_fallback,
+                            config=retry_config,
+                        )
+                    except Exception as fallback_exc:
+                        logger.warning(
+                            "missing_final_output_fallback_failed",
+                            error=str(fallback_exc),
+                        )
+            else:
+                logger.warning(
+                    "missing_final_output_primary_recovery_failed",
+                    error=str(primary_exc),
+                )
+
+        if recovered_output is not None:
+            self.final_output = recovered_output
+            recovered_text = ThinkingBlockTracker.sanitize_final_content(
+                self._extract_final_assistant_text(recovered_output)
+            ).strip()
+            current_visible = ThinkingBlockTracker.sanitize_final_content(
+                self._visible_text_buffer
+            ).strip()
+            if recovered_text and (
+                not current_visible or len(recovered_text) > len(current_visible) + 24
+            ):
+                if getattr(self.emitter, "_message_started", False):
+                    self.emitter.end_text_message()
+                self.emitter.start_text_message()
+                self.emitter.emit_text_content(recovered_text)
+                self.emitter.end_text_message()
+                self._visible_text_buffer = recovered_text
+
+                self._emit_objective_hint(
+                    lane_id="primary",
+                    objective_id="phase:synthesize",
+                    phase="synthesize",
+                    title="Synthesize",
+                    status="done",
+                    summary=self._truncate_trace_value(recovered_text, max_len=220),
+                )
+                return
+            logger.warning("missing_final_output_recovery_empty_text")
+
+        # Last resort: preserve already-emitted text to avoid returning None.
+        fallback_visible = ThinkingBlockTracker.sanitize_final_content(
+            self._visible_text_buffer
+        ).strip()
+        if fallback_visible:
+            self.final_output = {"output": fallback_visible}
+
+    def _flush_tracker_tail(
+        self,
+        run_id_str: str,
+        *,
+        has_tool_calls: bool,
+        is_subagent_stream: bool = False,
+        subagent_meta: dict[str, str] | None = None,
+    ) -> None:
+        """Flush trailing buffered text from a run's thinking tracker.
+
+        ThinkingBlockTracker keeps a short tail buffer to safely detect block
+        delimiters that can span chunks. We flush this tail on model completion
+        to avoid dropping user-visible text and stalling stream activity.
+        """
+        if not run_id_str:
+            return
+
+        trackers = getattr(self, "_thinking_trackers", None)
+        if not isinstance(trackers, dict):
+            return
+        tracker = trackers.get(run_id_str)
+        if not isinstance(tracker, ThinkingBlockTracker):
+            return
+
+        tail = tracker.flush()
+        if not tail:
+            return
+
+        tail_clean = ThinkingBlockTracker.sanitize_final_content(tail)
+        if not tail_clean.strip():
+            return
+
+        if run_id_str in self._json_payload_runs:
+            return
+
+        if run_id_str in self._gemini_buffer_runs:
+            # Gemini buffered mode emits one consolidated text response at model_end.
+            if not has_tool_calls:
+                self._gemini_buffer_runs[run_id_str].append(tail_clean)
+            return
+
+        if is_subagent_stream and subagent_meta and settings.trace_mode != "off":
+            self.emitter.stream_subagent_thinking_delta(
+                tool_call_id=subagent_meta.get("tool_call_id", "unknown"),
+                delta=tail_clean,
+                subagent_type=subagent_meta.get("subagent_type"),
+            )
+            return
+
+        if has_tool_calls:
+            return
+
+        self.emitter.emit_text_content(tail_clean)
+        self._visible_text_buffer += tail_clean
 
     def _emit_objective_hint(
         self,

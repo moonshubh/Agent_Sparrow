@@ -54,6 +54,16 @@ class GemmaHelper:
             return 1_000_000_000
         return max(self.max_calls - self._calls, 0)
 
+    @staticmethod
+    def _hidden_helper_config() -> dict[str, Any]:
+        """Prevent helper calls from emitting user-visible AG-UI stream events."""
+        return {
+            "metadata": {
+                "emit-messages": False,
+                "emit-tool-calls": False,
+            }
+        }
+
     async def summarize(self, text: str, *, budget_tokens: int = 1024) -> Optional[str]:
         if not text or self._remaining() <= 0:
             return None
@@ -65,7 +75,7 @@ class GemmaHelper:
         )
         try:
             self._calls += 1
-            resp = await client.ainvoke(prompt)
+            resp = await client.ainvoke(prompt, config=self._hidden_helper_config())
             return str(getattr(resp, "content", "")) or None
         except Exception as exc:  # pragma: no cover - network/runtime failures
             logger.warning("gemma_summarize_failed", error=str(exc))
@@ -85,7 +95,7 @@ class GemmaHelper:
         )
         try:
             self._calls += 1
-            resp = await client.ainvoke(prompt)
+            resp = await client.ainvoke(prompt, config=self._hidden_helper_config())
             content = str(getattr(resp, "content", "") or "")
             if not content.strip():
                 return None
@@ -106,7 +116,7 @@ class GemmaHelper:
         )
         try:
             self._calls += 1
-            resp = await client.ainvoke(prompt)
+            resp = await client.ainvoke(prompt, config=self._hidden_helper_config())
             rewritten = str(getattr(resp, "content", "") or "").strip()
             if not rewritten or rewritten.lower() == query.lower():
                 return None

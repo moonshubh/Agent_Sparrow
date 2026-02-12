@@ -13,7 +13,16 @@ import logging
 import threading
 from typing import Any, AsyncGenerator
 
-from ag_ui.core.events import CustomEvent, EventType
+from ag_ui.core.events import (
+    CustomEvent,
+    EventType,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
+    ToolCallStartEvent,
+)
 from ag_ui_langgraph.agent import LangGraphAgent  # type: ignore[import-untyped]
 from ag_ui_langgraph.types import LangGraphEventTypes, State  # type: ignore[import-untyped]
 from langchain_core.messages import ToolMessage
@@ -216,8 +225,135 @@ def _patch_handle_single_event() -> None:
         safe_event = _normalize_tool_end_output(_sanitize_event_for_json(event))
 
         # Detect writer-emitted custom events coming through custom stream_mode.
-        if safe_event.get("event") == LangGraphEventTypes.OnChainStream:
+        # Important: do not short-circuit the original handler. Some providers
+        # may attach additional lifecycle semantics to the same chunk stream; if
+        # we return early here we can accidentally suppress terminal completion.
+        if isinstance(safe_event, dict) and safe_event.get(
+            "event"
+        ) == LangGraphEventTypes.OnChainStream:
             chunk = safe_event.get("data", {}).get("chunk")
+            if isinstance(chunk, dict):
+                chunk_type = chunk.get("type")
+                if isinstance(chunk_type, str):
+                    normalized_type = chunk_type.upper().strip()
+                    if normalized_type == EventType.TEXT_MESSAGE_START.value:
+                        message_id = (
+                            chunk.get("messageId")
+                            or chunk.get("message_id")
+                            or chunk.get("id")
+                            or self.active_run.get("id")
+                        )
+                        if isinstance(message_id, str) and message_id:
+                            role = chunk.get("role") or "assistant"
+                            yield self._dispatch_event(
+                                TextMessageStartEvent(
+                                    type=EventType.TEXT_MESSAGE_START,
+                                    role=role,
+                                    message_id=message_id,
+                                    raw_event=safe_event,
+                                )
+                            )
+                            self.set_message_in_progress(
+                                self.active_run["id"],
+                                {
+                                    "id": message_id,
+                                    "tool_call_id": None,
+                                    "tool_call_name": None,
+                                },
+                            )
+                            return
+
+                    if normalized_type == EventType.TEXT_MESSAGE_CONTENT.value:
+                        message_id = (
+                            chunk.get("messageId")
+                            or chunk.get("message_id")
+                            or (self.get_message_in_progress(self.active_run["id"]) or {}).get("id")
+                            or self.active_run.get("id")
+                        )
+                        delta = chunk.get("delta")
+                        if isinstance(message_id, str) and message_id and isinstance(delta, str):
+                            yield self._dispatch_event(
+                                TextMessageContentEvent(
+                                    type=EventType.TEXT_MESSAGE_CONTENT,
+                                    message_id=message_id,
+                                    delta=delta,
+                                    raw_event=safe_event,
+                                )
+                            )
+                            return
+
+                    if normalized_type == EventType.TEXT_MESSAGE_END.value:
+                        message_id = (
+                            chunk.get("messageId")
+                            or chunk.get("message_id")
+                            or (self.get_message_in_progress(self.active_run["id"]) or {}).get("id")
+                            or self.active_run.get("id")
+                        )
+                        if isinstance(message_id, str) and message_id:
+                            yield self._dispatch_event(
+                                TextMessageEndEvent(
+                                    type=EventType.TEXT_MESSAGE_END,
+                                    message_id=message_id,
+                                    raw_event=safe_event,
+                                )
+                            )
+                            self.messages_in_process[self.active_run["id"]] = None
+                            return
+
+                    if normalized_type == EventType.TOOL_CALL_START.value:
+                        tool_call_id = chunk.get("toolCallId") or chunk.get("tool_call_id")
+                        tool_name = chunk.get("toolCallName") or chunk.get("tool_call_name") or "tool"
+                        if isinstance(tool_call_id, str) and tool_call_id:
+                            yield self._dispatch_event(
+                                ToolCallStartEvent(
+                                    type=EventType.TOOL_CALL_START,
+                                    tool_call_id=tool_call_id,
+                                    tool_call_name=str(tool_name),
+                                    parent_message_id=str(
+                                        chunk.get("parentMessageId")
+                                        or chunk.get("parent_message_id")
+                                        or tool_call_id
+                                    ),
+                                    raw_event=safe_event,
+                                )
+                            )
+                            self.set_message_in_progress(
+                                self.active_run["id"],
+                                {
+                                    "id": str(chunk.get("messageId") or self.active_run.get("id")),
+                                    "tool_call_id": tool_call_id,
+                                    "tool_call_name": str(tool_name),
+                                },
+                            )
+                            return
+
+                    if normalized_type == EventType.TOOL_CALL_ARGS.value:
+                        tool_call_id = chunk.get("toolCallId") or chunk.get("tool_call_id")
+                        delta = chunk.get("delta")
+                        if isinstance(tool_call_id, str) and tool_call_id and isinstance(delta, str):
+                            yield self._dispatch_event(
+                                ToolCallArgsEvent(
+                                    type=EventType.TOOL_CALL_ARGS,
+                                    tool_call_id=tool_call_id,
+                                    delta=delta,
+                                    raw_event=safe_event,
+                                )
+                            )
+                            return
+
+                    if normalized_type == EventType.TOOL_CALL_END.value:
+                        tool_call_id = chunk.get("toolCallId") or chunk.get("tool_call_id")
+                        if isinstance(tool_call_id, str) and tool_call_id:
+                            yield self._dispatch_event(
+                                ToolCallEndEvent(
+                                    type=EventType.TOOL_CALL_END,
+                                    tool_call_id=tool_call_id,
+                                    raw_event=safe_event,
+                                )
+                            )
+                            self.messages_in_process[self.active_run["id"]] = None
+                            return
+
             if (
                 isinstance(chunk, dict)
                 and chunk.get("event") == LangGraphEventTypes.OnCustomEvent.value
@@ -232,7 +368,6 @@ def _patch_handle_single_event() -> None:
                         raw_event=safe_event,
                     )
                 )
-                return
 
         async for ev in original(self, safe_event, state):
             yield ev

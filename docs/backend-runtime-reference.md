@@ -138,6 +138,19 @@ See `docs/feedme-hardening-notes.md` for the full FeedMe hardening sprint detail
 
 Response: Server-Sent Events (SSE) stream with AG-UI protocol events.
 
+#### AG-UI Stream Reliability Guards (2026-02-12)
+
+To reduce partial/empty assistant replies during provider or stream-edge failures, the AG-UI endpoint includes additive recovery behavior:
+
+- **Missing-text degraded fallback**: if a stream closes without any `TEXT_MESSAGE_CONTENT`, the endpoint performs a bounded direct `ainvoke` against the selected coordinator model and emits a synthetic AG-UI text triplet:
+  - `TEXT_MESSAGE_START`
+  - `TEXT_MESSAGE_CONTENT`
+  - `TEXT_MESSAGE_END`
+- **Hidden helper output**: internal helper-model calls (rewrite/rerank/summarize) set stream metadata to avoid leaking helper text/tool activity into user-visible output.
+- **Terminal recovery signal**: when terminal events are missing, the stream path still emits completion and logs recovery markers for incident analysis.
+
+These guards are additive and do not change the request contract for `/api/v1/agui/stream`.
+
 ### Chat Sessions
 
 | Endpoint | Method | Auth | Description |

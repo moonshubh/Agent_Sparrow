@@ -11,6 +11,7 @@ Phase 1 goals:
 from __future__ import annotations
 
 import json
+import asyncio
 import re
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -729,6 +730,7 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware):
         report_text: Optional[str] = None
         status: str = "error"
         excerpt: str = ""
+        failure_excerpt: str = ""
 
         _emit_custom_event(
             stream_writer,
@@ -742,7 +744,29 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware):
         )
 
         try:
-            result = await handler(request)
+            try:
+                result = await handler(request)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "subagent_task_execution_failed",
+                    subagent_type=subagent_type,
+                    tool_call_id=tool_call_id,
+                    error=str(exc),
+                )
+                failure_excerpt = (
+                    f"Subagent '{subagent_type}' failed with "
+                    f"{type(exc).__name__}: {str(exc)}"
+                )[:500]
+
+                fallback_message = ToolMessage(
+                    content=failure_excerpt,
+                    tool_call_id=tool_call_id,
+                )
+                if LangGraphCommand is None:
+                    return fallback_message
+                return LangGraphCommand(update={"messages": [fallback_message]})
 
             # Persist and replace tool output (Command update from DeepAgents task tool).
             if LangGraphCommand is None:
@@ -842,6 +866,8 @@ class SubagentWorkspaceBridgeMiddleware(AgentMiddleware):
             if report_text:
                 status = "success"
                 excerpt = report_text[:500]
+            elif failure_excerpt:
+                excerpt = failure_excerpt
             _emit_custom_event(
                 stream_writer,
                 name="subagent_end",

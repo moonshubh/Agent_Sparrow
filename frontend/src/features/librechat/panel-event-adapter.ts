@@ -105,15 +105,18 @@ export type PanelAdapterEvent =
   | ToolCallResultEvent
   | TodosSnapshotEvent;
 
+// "unknown" is a soft terminal fallback that should be recoverable if new
+// backend events arrive after a transient disconnect or delayed flush.
 const TERMINAL_STATUSES: ReadonlySet<PanelObjectiveStatus> = new Set([
   "done",
   "error",
-  "unknown",
 ]);
 const MAX_EVENT_KEYS = 1200;
 const MAX_OBJECTIVE_SUMMARY = 900;
 const MAX_OBJECTIVE_DETAIL = 1800;
 const DEFAULT_BATCH_MS = 200;
+const STALE_OBJECTIVE_TIMEOUT_MS = 30_000;
+const STALE_OBJECTIVE_SWEEP_MS = 2_500;
 
 const toIsoTimestamp = (value: unknown): string => {
   if (typeof value !== "string" && typeof value !== "number") {
@@ -394,11 +397,11 @@ const computeLaneStatus = (
   if (laneObjectives.some((objective) => objective.status === "running")) {
     return "running";
   }
-  if (laneObjectives.some((objective) => objective.status === "pending")) {
-    return "pending";
-  }
   if (laneObjectives.some((objective) => objective.status === "unknown")) {
     return "unknown";
+  }
+  if (laneObjectives.some((objective) => objective.status === "pending")) {
+    return "pending";
   }
   return "done";
 };
@@ -408,8 +411,8 @@ const computeRunStatus = (lanes: Record<string, PanelLane>): PanelObjectiveStatu
   if (!laneStatuses.length) return "pending";
   if (laneStatuses.some((status) => status === "error")) return "error";
   if (laneStatuses.some((status) => status === "running")) return "running";
-  if (laneStatuses.some((status) => status === "pending")) return "pending";
   if (laneStatuses.some((status) => status === "unknown")) return "unknown";
+  if (laneStatuses.some((status) => status === "pending")) return "pending";
   return "done";
 };
 
@@ -885,6 +888,73 @@ const applyTodos = (state: PanelState, todos: TodoItem[]): PanelState => {
   };
 };
 
+const transitionObjectivesToUnknown = (
+  state: PanelState,
+  options?: {
+    nowMs?: number;
+    includePending?: boolean;
+    force?: boolean;
+    reason?: string;
+  },
+): PanelState => {
+  const nowMs = options?.nowMs ?? Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const includePending = options?.includePending ?? false;
+  const force = options?.force ?? false;
+  const reasonSummary = clampText(options?.reason, MAX_OBJECTIVE_SUMMARY);
+  const reasonDetail = clampText(options?.reason, MAX_OBJECTIVE_DETAIL);
+
+  const nextObjectives: Record<string, PanelObjective> = { ...state.objectives };
+  const touchedLaneIds = new Set<string>();
+  let didChange = false;
+
+  Object.values(state.objectives).forEach((objective) => {
+    const eligible =
+      objective.status === "running" ||
+      (includePending && objective.status === "pending");
+    if (!eligible) return;
+
+    const lastUpdateMs = toTimestampMs(objective.updatedAt || objective.startedAt);
+    const isStale = force || (lastUpdateMs > 0 && nowMs - lastUpdateMs >= STALE_OBJECTIVE_TIMEOUT_MS);
+    if (!isStale) return;
+
+    didChange = true;
+    touchedLaneIds.add(objective.laneId);
+    nextObjectives[objective.id] = {
+      ...objective,
+      status: "unknown",
+      summary:
+        objective.summary ??
+        reasonSummary ??
+        "No completion event received before timeout.",
+      detail: objective.detail ?? reasonDetail,
+      updatedAt: nowIso,
+      endedAt: objective.endedAt ?? nowIso,
+      sourceEvent: force ? "run_incomplete" : "stale_timeout",
+    };
+  });
+
+  if (!didChange) return state;
+
+  const replacementActiveObjective = Object.values(nextObjectives)
+    .filter((objective) => objective.status === "running")
+    .sort(
+      (left, right) =>
+        toTimestampMs(right.updatedAt || right.startedAt) -
+        toTimestampMs(left.updatedAt || left.startedAt),
+    )[0];
+
+  const next: PanelState = {
+    ...state,
+    objectives: nextObjectives,
+    activeObjectiveId: replacementActiveObjective?.id,
+    activeLaneId: replacementActiveObjective?.laneId ?? state.activeLaneId,
+    updatedAt: nowIso,
+  };
+
+  return recomputeStatuses(next, [...touchedLaneIds]);
+};
+
 export const reducePanelEvent = (
   state: PanelState,
   event: PanelAdapterEvent,
@@ -1019,9 +1089,27 @@ const buildEventKey = (event: PanelAdapterEvent): string => {
     case "agent_todos_update":
       return `agent_todos_update:${buildTodosKey(event.value.todos)}`;
     case "agent_timeline_update":
-      return `agent_timeline_update:${event.value.operations
-        .map((operation) => `${operation.id}:${operation.status}`)
-        .join("|")}:${event.value.currentOperationId ?? ""}`;
+      return `agent_timeline_update:${stableHash(
+        event.value.operations
+          .map((operation) => {
+            const metadata =
+              operation.metadata && typeof operation.metadata === "object"
+                ? (operation.metadata as Record<string, unknown>)
+                : {};
+            const summary =
+              typeof metadata.summary === "string" ? metadata.summary : "";
+            const detail =
+              typeof metadata.detail === "string" ? metadata.detail : "";
+            return [
+              operation.id,
+              operation.status,
+              operation.startTime ?? "",
+              operation.endTime ?? "",
+              stableHash(`${summary}|${detail}`),
+            ].join(":");
+          })
+          .join("|"),
+      )}:${event.value.currentOperationId ?? ""}`;
     case "subagent_spawn":
       return `subagent_spawn:${event.value.toolCallId}:${event.value.timestamp}`;
     case "subagent_end":
@@ -1066,6 +1154,7 @@ export interface UsePanelEventAdapterResult {
     status?: "done" | "error";
   }) => void;
   syncTodosSnapshot: (todos: TodoItem[]) => void;
+  markRunIncomplete: (reason?: string) => void;
 }
 
 export function usePanelEventAdapter(
@@ -1203,6 +1292,28 @@ export function usePanelEventAdapter(
     [dispatchEvent],
   );
 
+  const markRunIncomplete = useCallback((reason?: string) => {
+    setPanelState((prev) =>
+      transitionObjectivesToUnknown(prev, {
+        includePending: true,
+        force: true,
+        reason,
+      }),
+    );
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setPanelState((prev) =>
+        transitionObjectivesToUnknown(prev, { nowMs: Date.now() }),
+      );
+    }, STALE_OBJECTIVE_SWEEP_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
   return {
     panelState,
     resetPanelState,
@@ -1210,5 +1321,6 @@ export function usePanelEventAdapter(
     applyToolCallStart,
     applyToolCallResult,
     syncTodosSnapshot,
+    markRunIncomplete,
   };
 }

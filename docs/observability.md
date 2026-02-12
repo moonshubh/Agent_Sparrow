@@ -157,6 +157,13 @@ Check that LangSmith is properly configured:
 - `attachments:true` (when attachments present)
 - `task_type:log_analysis` or `task_type:primary`
 
+**AG-UI Recovery Log Signals** (backend structured logs):
+- `agui_stream_missing_terminal_event_recovered`: stream finished after missing terminal event reconciliation.
+- `agui_stream_degraded_fallback_emitted`: endpoint emitted degraded direct-response text after zero visible streamed text.
+- `stream_missing_visible_text_emitting_fallback`: handler forced user-visible fallback text due to empty visible buffer.
+
+Use these signals with latency and provider/model tags to isolate stream-completion defects from model-quality defects.
+
 ---
 
 ## Using the LangSmith UI

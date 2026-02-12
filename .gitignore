@@ -46,6 +46,12 @@ tests/*
 !tests/agents/**
 !tests/conftest.py
 
+# Allow curated LibreChat phase-9 frontend tests
+!frontend/src/features/librechat/*.test.ts
+!frontend/src/features/librechat/*.test.tsx
+!frontend/src/features/librechat/components/*.test.ts
+!frontend/src/features/librechat/components/*.test.tsx
+
 # Python byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

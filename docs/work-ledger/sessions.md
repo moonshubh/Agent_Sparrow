@@ -490,3 +490,77 @@ All 7 phases of the Context Engineering Improvements plan are now complete:
 
 ### Notes
 - Apply these migrations before using workspace search, issue resolution similarity, or learned playbook features. Policies are service-role scoped to avoid accidental exposure.
+
+## 2026-02-12 - LibreChat Thinking Overhaul (Phases 7-9)
+
+### Completed
+- Implemented resilience safeguards for streaming runs in LibreChat:
+  - Missing end-event fallback marks stale running objectives as `unknown` after 30s.
+  - Network retry loop retries disconnect-class failures up to 3 times over 15s.
+  - Retry exhaustion marks panel state as limited/incomplete and surfaces user-facing recovery messaging.
+  - Added long-run soft timeout warning at 120s with explicit "Continue waiting" affordance.
+- Implemented accessibility and keyboard improvements for the thinking panel:
+  - Added modifier shortcuts for panel toggle, filter cycling, and auto-follow toggle.
+  - Added discoverable shortcut hints and stronger focus-visible states.
+  - Added reduced-motion handling for panel autoscroll and animation transitions.
+- Added phase-9 automated coverage for adapter behavior, snapshot/versioning helpers, AgentContext integration flows, and MessageItem version/provenance smoke paths.
+
+### Files Modified
+- `frontend/src/features/librechat/panel-event-adapter.ts`
+- `frontend/src/features/librechat/AgentContext.tsx`
+- `frontend/src/features/librechat/components/ChatInput.tsx`
+- `frontend/src/features/librechat/components/ThinkingPanel.tsx`
+- `frontend/src/features/librechat/components/MessageItem.tsx`
+- `frontend/src/features/librechat/styles/chat.css`
+- `frontend/src/features/librechat/panel-event-adapter.test.ts`
+- `frontend/src/features/librechat/panel-snapshot.test.ts`
+- `frontend/src/features/librechat/AgentContext.integration.test.tsx`
+- `frontend/src/features/librechat/components/MessageItem.test.tsx`
+- `.gitignore`
+- `frontend/tsconfig.json`
+- `docs/frontend-reference.md`
+- `docs/work-ledger/sessions.md`
+
+### Validation
+- `cd frontend && pnpm lint` ✅
+- `cd frontend && pnpm typecheck` ✅
+- `cd frontend && pnpm vitest run src/features/librechat/panel-event-adapter.test.ts src/features/librechat/panel-snapshot.test.ts src/features/librechat/AgentContext.integration.test.tsx src/features/librechat/components/MessageItem.test.tsx` ✅ (16 tests passed)
+
+### Review Loop
+- Ran iterative 2-subagent review/fix cycle.
+- Initial review surfaced one high-severity issue: stale-timeout `unknown` states could become sticky and block later backend recovery updates.
+- Applied fix by treating `unknown` as a soft terminal fallback (recoverable by newer backend updates) and added regression coverage.
+- Final dual-subagent pass: both reviewers reported no findings.
+
+## 2026-02-12 - AG-UI Stream RCA + Gemini/Grok Hardening
+
+### Completed
+- Performed root-cause-driven debugging for empty/partial AG-UI responses across Gemini (base) and Grok (`grok-4-1-fast-reasoning`) scenarios.
+- Isolated and fixed helper-output leakage into user streams by forcing helper calls to run with hidden stream metadata.
+- Added endpoint-level degraded direct-response fallback when a stream ends with zero user-visible text.
+- Preserved terminal recovery semantics and improved stream resilience signals for operational debugging.
+- Regenerated model-derived documentation after model config updates.
+
+### Files Modified
+- `app/agents/helpers/gemma_helper.py`
+- `app/agents/streaming/handler.py`
+- `app/agents/streaming/emitter.py`
+- `app/api/v1/endpoints/agui_endpoints.py`
+- `app/patches/agui_custom_events.py`
+- `scripts/agui_scenario_runner.py`
+- `tests/helpers/test_gemma_helper.py`
+- `tests/agents/test_stream_event_handler_tracker_flush.py`
+- `docs/backend-runtime-reference.md`
+- `docs/observability.md`
+- `docs/model-catalog.md`
+- `docs/work-ledger/sessions.md`
+
+### Validation
+- `python scripts/validate_docs_consistency.py` ✅
+- `python scripts/refresh_ref_docs.py` ✅ (updated `docs/model-catalog.md`)
+- `pytest -q tests/helpers/test_gemma_helper.py tests/agents/test_stream_event_handler_tracker_flush.py tests/agents/test_stream_event_handler_fallback.py tests/agents/test_task_classification_fast_path.py tests/core/config/test_model_registry_fallback_chain.py` ✅
+- Scenario matrix (7 Gemini base + 3 Grok 4.1 fast reasoning): `system_logs/qa_runs/agui_scenarios_1770918161.json` ✅ (`10/10` passed)
+
+### Notes
+- Failed-only rerun policy was used for follow-up validation to control external API cost.
+- LangSmith 429 traces remained observable noise in some runs but were not the primary cause of zero-text user responses.

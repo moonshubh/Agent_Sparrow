@@ -84,6 +84,15 @@ export type WebSearchMode = "on" | "off";
 export type PromptRelatednessBand = "related" | "uncertain" | "unrelated";
 export type PromptSteeringChoice = "continue" | "new_topic";
 
+export interface StreamRecoveryState {
+  attemptsUsed: number;
+  maxRetries: number;
+  isRetrying: boolean;
+  nextRetryAt?: number;
+  exhausted: boolean;
+  incomplete: boolean;
+}
+
 export interface SubagentRun {
   toolCallId: string;
   subagentType: string;
@@ -144,6 +153,7 @@ interface AgentContextValue {
   messages: Message[];
   isStreaming: boolean;
   error: Error | null;
+  streamRecovery: StreamRecoveryState;
   sendMessage: (
     content: string,
     attachments?: AttachmentInput[],
@@ -242,6 +252,21 @@ const RESEARCH_PROGRESS_MAX = 90;
 const RESEARCH_PROGRESS_INTERVAL_MS = 12000;
 const RESEARCH_STUCK_MS = 120000;
 const PROMPT_STEERING_TIMEOUT_MS = 5000;
+const STREAM_RETRY_DELAYS_MS = [2500, 5000, 7500] as const;
+const STREAM_MAX_RETRIES = STREAM_RETRY_DELAYS_MS.length;
+const STREAM_TOTAL_RETRY_WINDOW_MS = STREAM_RETRY_DELAYS_MS.reduce(
+  (sum, delayMs) => sum + delayMs,
+  0,
+);
+
+const INITIAL_STREAM_RECOVERY: StreamRecoveryState = {
+  attemptsUsed: 0,
+  maxRetries: STREAM_MAX_RETRIES,
+  isRetrying: false,
+  nextRetryAt: undefined,
+  exhausted: false,
+  incomplete: false,
+};
 
 const RELATEDNESS_STOPWORDS = new Set([
   "the",
@@ -599,6 +624,84 @@ const normalizeUnknownError = (value: unknown): Error => {
   return new Error(resolved);
 };
 
+const isAbortError = (value: unknown): boolean => {
+  if (!value || typeof value !== "object") return false;
+  const maybe = value as { name?: unknown };
+  if (maybe.name === "AbortError" || maybe.name === "CanceledError") {
+    return true;
+  }
+  return (
+    typeof DOMException !== "undefined" &&
+    value instanceof DOMException &&
+    value.name === "AbortError"
+  );
+};
+
+const extractHttpStatus = (message: string): number | null => {
+  const match = message.match(/status:\s*(\d{3})/i);
+  if (!match) return null;
+  const status = Number.parseInt(match[1], 10);
+  return Number.isFinite(status) ? status : null;
+};
+
+const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_NETWORK_PATTERNS = [
+  "failed to fetch",
+  "networkerror",
+  "network request failed",
+  "fetch failed",
+  "connection reset",
+  "connection closed",
+  "connection lost",
+  "timeout",
+  "socket hang up",
+  "econnreset",
+  "enotfound",
+] as const;
+
+const isRetryableNetworkError = (value: unknown): boolean => {
+  if (value instanceof TypeError) {
+    return true;
+  }
+  const message =
+    value instanceof Error
+      ? value.message
+      : typeof value === "string"
+        ? value
+        : normalizeUnknownError(value).message;
+  const normalized = message.toLowerCase();
+  const status = extractHttpStatus(normalized);
+  if (status !== null && RETRYABLE_HTTP_STATUSES.has(status)) {
+    return true;
+  }
+  return RETRYABLE_NETWORK_PATTERNS.some((pattern) =>
+    normalized.includes(pattern),
+  );
+};
+
+const waitForRetryDelay = (
+  delayMs: number,
+  signal: AbortSignal,
+): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+
+    const onAbort = () => {
+      window.clearTimeout(timeoutId);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+
 const getStringFromRecord = (
   record: Record<string, unknown>,
   key: string,
@@ -750,9 +853,9 @@ const hasLogAttachment = (attachments?: AttachmentInput[]): boolean => {
 const looksLikeJsonPayload = (text: string): boolean => {
   const trimmed = stripCodeFence(text).trim();
   if (!trimmed) return false;
-  if (hasInternalToolPayload(trimmed)) return true;
   if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return false;
-  return trimmed.length > 80;
+  // Only suppress true internal payloads; valid JSON responses must remain visible.
+  return hasInternalToolPayload(trimmed);
 };
 
 const estimateAttachmentSizeFromDataUrl = (dataUrl: string): number | null => {
@@ -1230,6 +1333,9 @@ export function AgentProvider({
   const messagesRef = useRef<Message[]>(agent.messages || []);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [streamRecovery, setStreamRecovery] = useState<StreamRecoveryState>(
+    INITIAL_STREAM_RECOVERY,
+  );
   const [interrupt, setInterrupt] = useState<InterruptPayload | null>(null);
   const [activeTools, setActiveTools] = useState<string[]>([]);
   const [timelineOperations, setTimelineOperations] = useState<
@@ -1253,6 +1359,7 @@ export function AgentProvider({
     applyToolCallStart: applyPanelToolCallStart,
     applyToolCallResult: applyPanelToolCallResult,
     syncTodosSnapshot: syncPanelTodosSnapshot,
+    markRunIncomplete,
   } = usePanelEventAdapter({ batchMs: 200 });
   const [webSearchMode, setWebSearchModeState] =
     useState<WebSearchMode>(initialWebSearchMode);
@@ -1308,6 +1415,7 @@ export function AgentProvider({
   const isResearchingRef = useRef(false);
   const streamingRafRef = useRef<number | null>(null);
   const pendingStreamMessagesRef = useRef<Message[] | null>(null);
+  const activeRunWebSearchModeRef = useRef<WebSearchMode>(initialWebSearchMode);
 
   useEffect(() => {
     researchProgressRef.current = researchProgress;
@@ -1343,6 +1451,7 @@ export function AgentProvider({
   useEffect(() => {
     setWebSearchModeState(initialWebSearchMode);
     setPendingPromptSteering(null);
+    setStreamRecovery(INITIAL_STREAM_RECOVERY);
     queuedSubmissionRef.current = null;
     pendingOverlapContextRef.current = null;
     pendingVersionSeedRef.current = null;
@@ -1719,6 +1828,7 @@ export function AgentProvider({
           abortControllerRef.current.abort();
           setIsStreaming(false);
         }
+        setStreamRecovery(INITIAL_STREAM_RECOVERY);
         agent.abortRun();
         setActiveTools([]);
         return;
@@ -1748,6 +1858,9 @@ export function AgentProvider({
 
       setIsStreaming(true);
       setError(null);
+      setStreamRecovery(INITIAL_STREAM_RECOVERY);
+      const runWebSearchMode = webSearchMode;
+      activeRunWebSearchModeRef.current = runWebSearchMode;
       // Reset per-run UI state
       const panelRunId = crypto.randomUUID();
       resetPanelState(panelRunId);
@@ -1799,7 +1912,7 @@ export function AgentProvider({
           role: "user",
           content,
           created_at: new Date().toISOString(),
-          metadata: { web_search_mode: webSearchMode },
+          metadata: { web_search_mode: runWebSearchMode },
         };
         lastRunUserMessageIdRef.current = userMessage.id;
 
@@ -1822,7 +1935,7 @@ export function AgentProvider({
         // Persist user message to backend database (best-effort)
         if (sessionId && (trimmedContent || hasPersistableAttachments)) {
           const metadata: Record<string, unknown> = {
-            web_search_mode: webSearchMode,
+            web_search_mode: runWebSearchMode,
           };
           if (hasPersistableAttachments) {
             metadata.attachments = persistableAttachments;
@@ -1886,10 +1999,10 @@ export function AgentProvider({
         const stateProvider = getStringFromRecord(agent.state, "provider");
         const stateModel = getStringFromRecord(agent.state, "model");
         const stateAgentType = getAgentTypeFromState(agent.state);
-        const webSearchEnabled = webSearchMode === "on";
+        const webSearchEnabled = runWebSearchMode === "on";
         const forwardedProps: Record<string, unknown> = {
           force_websearch: webSearchEnabled,
-          web_search_mode: webSearchMode,
+          web_search_mode: runWebSearchMode,
           // Pass through provider/model to avoid backend defaulting to Gemini
           provider: stateProvider || "google",
           model: stateModel || "gemini-3-flash-preview",
@@ -1902,13 +2015,33 @@ export function AgentProvider({
           forwardedProps.overlap_objective_context = overlapContext.trim();
         }
 
-        // Run agent with streaming updates
-        await agent.runAgent(
-          {
-            forwardedProps,
-          },
-          {
-            signal: abortControllerRef.current.signal,
+        // Run agent with streaming updates (includes network reconnect retries).
+        let runCompleted = false;
+        let runAborted = false;
+        let finalRunError: Error | null = null;
+        let finalRunErrorRaw: unknown = null;
+        let exhaustedRetryWindow = false;
+
+        for (
+          let retryAttempt = 0;
+          retryAttempt <= STREAM_MAX_RETRIES;
+          retryAttempt += 1
+        ) {
+          const attemptController = new AbortController();
+          abortControllerRef.current = attemptController;
+          let attemptRunError: Error | null = null;
+          let attemptRunErrorRaw: unknown = null;
+
+          try {
+            await agent.runAgent(
+              {
+                forwardedProps:
+                  retryAttempt > 0
+                    ? { ...forwardedProps, stream_retry_attempt: retryAttempt }
+                    : forwardedProps,
+              },
+              {
+                signal: attemptController.signal,
 
             // Handle streaming text content
             onTextMessageContentEvent: ({
@@ -1957,8 +2090,6 @@ export function AgentProvider({
                 const formatted = formatIfStructuredLog(buffer);
                 if (formatted) {
                   buffer = formatted;
-                } else if (looksLikeJsonPayload(buffer)) {
-                  buffer = "";
                 }
               }
               const prevMessages = messagesRef.current;
@@ -1976,6 +2107,9 @@ export function AgentProvider({
                   role: "assistant",
                   content: buffer,
                   created_at: new Date().toISOString(),
+                  metadata: {
+                    web_search_mode: activeRunWebSearchModeRef.current,
+                  },
                 };
                 return [...prevMessages, assistantMessage];
               })();
@@ -2857,21 +2991,114 @@ export function AgentProvider({
               }
             },
 
-            // Handle errors
-            onRunFailed: ({ error: runError }: { error: unknown }) => {
-              const normalized = normalizeUnknownError(runError);
-              console.error(
-                "[AG-UI] Run failed:",
-                normalized.message,
-                runError,
-              );
-              if (isResearchingRef.current) {
-                failResearchTracking();
+                // Handle errors
+                onRunFailed: ({ error: runError }: { error: unknown }) => {
+                  const normalized = normalizeUnknownError(runError);
+                  console.error(
+                    "[AG-UI] Run failed:",
+                    normalized.message,
+                    runError,
+                  );
+                  attemptRunError = normalized;
+                  attemptRunErrorRaw = runError;
+                },
+              },
+            );
+
+            if (attemptRunError) {
+              throw attemptRunError;
+            }
+
+            runCompleted = true;
+            setStreamRecovery({
+              attemptsUsed: retryAttempt,
+              maxRetries: STREAM_MAX_RETRIES,
+              isRetrying: false,
+              nextRetryAt: undefined,
+              exhausted: false,
+              incomplete: false,
+            });
+            break;
+          } catch (runErr) {
+            if (isAbortError(runErr)) {
+              runAborted = true;
+              break;
+            }
+
+            const normalized = attemptRunError ?? normalizeUnknownError(runErr);
+            const rawErrorForRetry = attemptRunErrorRaw ?? runErr;
+            const retryableFailure = isRetryableNetworkError(rawErrorForRetry);
+            const hasRetryLeft = retryableFailure && retryAttempt < STREAM_MAX_RETRIES;
+
+            if (hasRetryLeft) {
+              const delayMs =
+                STREAM_RETRY_DELAYS_MS[retryAttempt] ??
+                STREAM_RETRY_DELAYS_MS[STREAM_RETRY_DELAYS_MS.length - 1];
+              const nextRetryAt = Date.now() + delayMs;
+
+              setStreamRecovery({
+                attemptsUsed: retryAttempt + 1,
+                maxRetries: STREAM_MAX_RETRIES,
+                isRetrying: true,
+                nextRetryAt,
+                exhausted: false,
+                incomplete: false,
+              });
+
+              try {
+                await waitForRetryDelay(delayMs, attemptController.signal);
+              } catch (delayErr) {
+                if (isAbortError(delayErr)) {
+                  runAborted = true;
+                  break;
+                }
               }
-              setError(normalized);
-            },
-          },
-        );
+              continue;
+            }
+
+            finalRunError = normalized;
+            finalRunErrorRaw = rawErrorForRetry;
+            exhaustedRetryWindow =
+              retryableFailure && retryAttempt >= STREAM_MAX_RETRIES;
+            break;
+          }
+        }
+
+        if (!runCompleted && !runAborted && finalRunError) {
+          if (isResearchingRef.current) {
+            failResearchTracking();
+          }
+
+          if (exhaustedRetryWindow) {
+            const retryWindowSeconds = Math.round(STREAM_TOTAL_RETRY_WINDOW_MS / 1000);
+            markRunIncomplete(
+              `Connection interrupted before completion after ${STREAM_MAX_RETRIES} retries.`,
+            );
+            setStreamRecovery({
+              attemptsUsed: STREAM_MAX_RETRIES,
+              maxRetries: STREAM_MAX_RETRIES,
+              isRetrying: false,
+              nextRetryAt: undefined,
+              exhausted: true,
+              incomplete: true,
+            });
+            setError(
+              new Error(
+                `Connection interrupted after ${STREAM_MAX_RETRIES} retries over ${retryWindowSeconds}s. Partial output may be incomplete.`,
+              ),
+            );
+          } else {
+            setStreamRecovery((prev) => ({
+              ...prev,
+              isRetrying: false,
+              nextRetryAt: undefined,
+              exhausted: false,
+              incomplete: false,
+            }));
+            setError(finalRunError);
+          }
+          console.error("[AG-UI] Error sending message:", finalRunErrorRaw);
+        }
 
         // Clear attachments after sending
         if (attachments && attachments.length > 0) {
@@ -3043,7 +3270,7 @@ export function AgentProvider({
               });
               const baseMetadata = {
                 ...(candidate.metadata ?? {}),
-                web_search_mode: webSearchMode,
+                web_search_mode: runWebSearchMode,
                 panel_snapshot_v1: panelSnapshot,
                 panel_versions_v1: panelVersions,
                 panel_provenance_v1: panelProvenance,
@@ -3179,6 +3406,7 @@ export function AgentProvider({
       completeResearchTracking,
       failResearchTracking,
       hydrateArticleArtifactsFromMessages,
+      markRunIncomplete,
       markResearchActivity,
       panelState,
       resetPanelState,
@@ -3215,6 +3443,7 @@ export function AgentProvider({
           abortControllerRef.current.abort();
           setIsStreaming(false);
         }
+        setStreamRecovery(INITIAL_STREAM_RECOVERY);
         agent?.abortRun();
         setActiveTools([]);
         return;
@@ -3257,6 +3486,7 @@ export function AgentProvider({
       abortControllerRef.current.abort();
       setIsStreaming(false);
     }
+    setStreamRecovery(INITIAL_STREAM_RECOVERY);
     if (agent) {
       agent.abortRun();
     }
@@ -3418,6 +3648,7 @@ export function AgentProvider({
         messages,
         isStreaming,
         error,
+        streamRecovery,
         sendMessage,
         abortRun,
         pendingPromptSteering,

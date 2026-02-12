@@ -584,7 +584,7 @@ export const MessageItem = memo(function MessageItem({
       ? "on"
       : metadata?.web_search_mode === "off"
         ? "off"
-        : webSearchMode;
+        : "off";
   const panelProvenance = coercePanelProvenanceV1(metadata?.panel_provenance_v1);
   const isPanelEdited = panelProvenance?.edited === true;
   const showVersionSelector = !isUserMessage && persistedVersions.length > 1;
@@ -759,6 +759,7 @@ export const MessageItem = memo(function MessageItem({
               researchProgress={researchProgress}
               researchStatus={researchStatus}
               webSearchMode={messageWebMode ?? "off"}
+              enableKeyboardShortcuts={isLast}
             />
           </div>
         )}

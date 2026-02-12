@@ -250,7 +250,40 @@ class ModelRegistry:
 
         if provider_lower == "google":
             google_id = self.coordinator_google.id
-            chain.setdefault(google_id, None)
+            # Prefer same-provider degradations before cross-provider failover.
+            # This keeps coordinator behavior predictable under transient Gemini 3
+            # overload events while still providing a robust fallback path.
+            candidates: list[str] = []
+
+            summarizer_cfg = self._config.internal.get("summarizer")
+            grounding_cfg = self._config.internal.get("grounding")
+            helper_cfg = self._config.internal.get("helper")
+            if summarizer_cfg and summarizer_cfg.model_id:
+                candidates.append(summarizer_cfg.model_id)
+            if grounding_cfg and grounding_cfg.model_id:
+                candidates.append(grounding_cfg.model_id)
+            if helper_cfg and helper_cfg.model_id:
+                candidates.append(helper_cfg.model_id)
+
+            filtered: list[str] = []
+            seen: set[str] = {google_id}
+            for candidate in candidates:
+                if (
+                    candidate
+                    and candidate not in seen
+                    and candidate in self._specs_by_id
+                ):
+                    filtered.append(candidate)
+                    seen.add(candidate)
+
+            if filtered:
+                cursor = google_id
+                for next_model in filtered:
+                    chain[cursor] = next_model
+                    cursor = next_model
+                chain.setdefault(cursor, None)
+            else:
+                chain.setdefault(google_id, None)
         elif provider_lower == "openrouter":
             openrouter_id = self.coordinator_openrouter.id
             default_subagent = self._config.subagents.get("_default")

@@ -75,6 +75,7 @@ from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.harness.observability import AgentLoopState
 from app.agents.harness.middleware import get_state_tracking_middleware
 from app.core.config import (
+    canonicalize_model_id,
     coordinator_bucket_name,
     find_bucket_for_model,
     find_model_config,
@@ -133,6 +134,16 @@ BASE_AGENT_PROMPT = (
 DEFAULT_RECURSION_LIMIT = 400
 HELPER_TIMEOUT_SECONDS = 8.0
 
+try:
+    DEFAULT_RECURSION_LIMIT = max(25, int(settings.agent_default_recursion_limit))
+except Exception:
+    DEFAULT_RECURSION_LIMIT = 120
+
+try:
+    MAX_RECURSION_LIMIT = max(DEFAULT_RECURSION_LIMIT, int(settings.agent_max_recursion_limit))
+except Exception:
+    MAX_RECURSION_LIMIT = max(DEFAULT_RECURSION_LIMIT, 220)
+
 # Best-effort LLM cache to reduce repeat costs; safe to ignore failures.
 configure_llm_cache()
 
@@ -185,11 +196,22 @@ TASK_TYPE_PATTERNS: dict[str, list[str]] = {
         r"\.log\b",
         r"\.txt\b.*log",
         r"log\s*file",
+        r"debug\s*log",
+        r"error\s*log",
+        r"traceback",
+        r"stack\s*trace",
+        r"\[error\]",
+        r"\[warn",
+        r"\d{4}-\d{2}-\d{2}.*(?:error|warn|info)",
+        r"paste(?:d)?\s+log",
+        r"upload(?:ed)?\s+log",
+        r"log\s+snippet",
+        r"full\s+logs?",
+    ],
+    "log_analysis_weak": [
         # Error/debug indicators
         r"\berror\b",
         r"\bexception\b",
-        r"traceback",
-        r"stack\s*trace",
         r"\bcrash",
         r"\bfail(?:ed|ure)?\b",
         r"\bdebug\b",
@@ -202,10 +224,6 @@ TASK_TYPE_PATTERNS: dict[str, list[str]] = {
         r"ssl.*(?:error|fail)",
         r"sync.*(?:error|fail)",
         r"authentication.*fail",
-        # Log-like patterns
-        r"\d{4}-\d{2}-\d{2}.*(?:error|warn|info)",
-        r"\[error\]",
-        r"\[warn",
     ],
     "data_retrieval": [
         r"\bquery\b.*\b(?:database|table|sql|record)s?\b",
@@ -228,6 +246,16 @@ _COMPILED_TASK_PATTERNS: dict[str, list[re.Pattern]] = {
     for task, patterns in TASK_TYPE_PATTERNS.items()
 }
 
+_LOG_CONTEXT_HINTS = (
+    "log",
+    "trace",
+    "stack",
+    "debug",
+    "exception",
+    "stderr",
+    "stdout",
+)
+
 
 def _fast_classify_task(message: str) -> Optional[str]:
     """Fast O(n) keyword classification - no LLM/attachment scan needed.
@@ -238,7 +266,31 @@ def _fast_classify_task(message: str) -> Optional[str]:
     if not message:
         return None
 
+    strong_log_patterns = _COMPILED_TASK_PATTERNS.get("log_analysis", [])
+    for pattern in strong_log_patterns:
+        if pattern.search(message):
+            logger.debug(
+                "fast_task_classification",
+                task_type="log_analysis",
+                pattern=pattern.pattern[:30],
+            )
+            return "log_analysis"
+
+    weak_log_patterns = _COMPILED_TASK_PATTERNS.get("log_analysis_weak", [])
+    weak_hits = sum(1 for pattern in weak_log_patterns if pattern.search(message))
+    message_lower = message.lower()
+    has_log_context = any(hint in message_lower for hint in _LOG_CONTEXT_HINTS)
+    if weak_hits >= 2 and has_log_context:
+        logger.debug(
+            "fast_task_classification",
+            task_type="log_analysis",
+            pattern=f"weak_hits={weak_hits}",
+        )
+        return "log_analysis"
+
     for task_type, patterns in _COMPILED_TASK_PATTERNS.items():
+        if task_type in {"log_analysis", "log_analysis_weak"}:
+            continue
         for pattern in patterns:
             if pattern.search(message):
                 logger.debug(
@@ -290,6 +342,15 @@ def _normalize_runtime_overrides(state: GraphState) -> str:
     provider = (state.provider or "").strip().lower()
 
     if state.model:
+        requested_model = str(state.model)
+        canonical_model = canonicalize_model_id(requested_model) or requested_model
+        if canonical_model != requested_model:
+            logger.info(
+                "model_alias_normalized",
+                requested=requested_model,
+                canonical=canonical_model,
+            )
+        state.model = canonical_model
         match = find_model_config(config, state.model)
         if match is None:
             logger.warning("unknown_model_override", model=state.model)
@@ -577,19 +638,11 @@ def _build_task_system_prompt(state: GraphState) -> Optional[str]:
 
 
 def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str:
-    """Build skills context with auto-detection from message content.
+    """Build skills context for the coordinator.
 
-    This function:
-    1. Always injects writing/empathy skills for user-facing responses
-    2. Auto-detects additional skills based on message keywords (e.g., "pdf", "excel")
-    3. Limits total skills to prevent prompt bloat
-
-    Skills auto-detection triggers on keywords like:
-    - Document types: pdf, docx, xlsx, pptx, csv
-    - Actions: brainstorm, root cause, enhance image, create poster
-    - Tasks: research company, write article, analyze data
-
-    Maximum 3 additional skills are injected beyond writing/empathy.
+    We keep non-Zendesk coordinator runs deterministic by defaulting to baseline
+    writing/empathy skills only. Zendesk runs retain auto-detection because ticket
+    flows benefit from domain-specific skill triggers.
     """
     try:
         skills_registry = get_skills_registry()
@@ -625,8 +678,11 @@ def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str
             "is_zendesk_ticket": forwarded_props.get("is_zendesk_ticket", False),
         }
 
-        # Use enhanced auto-detection
-        skills_content = skills_registry.get_context_skills_content(skill_context)
+        is_zendesk_ticket = bool(skill_context.get("is_zendesk_ticket"))
+        if is_zendesk_ticket:
+            skills_content = skills_registry.get_context_skills_content(skill_context)
+        else:
+            skills_content = skills_registry.get_default_skills_content(skill_context)
 
         if skills_content:
             logger.debug(
@@ -952,7 +1008,7 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         middleware=middleware_stack,
     )
 
-    return agent.with_config({"recursion_limit": 1000})
+    return agent.with_config({"recursion_limit": DEFAULT_RECURSION_LIMIT})
 
 
 def _build_runnable_config(
@@ -974,6 +1030,8 @@ def _build_runnable_config(
     # Prevent upstream configs (e.g., adapters) from lowering recursion_limit too far.
     if resolved_limit < DEFAULT_RECURSION_LIMIT:
         resolved_limit = DEFAULT_RECURSION_LIMIT
+    if resolved_limit > MAX_RECURSION_LIMIT:
+        resolved_limit = MAX_RECURSION_LIMIT
     base_config["recursion_limit"] = resolved_limit
 
     configurable = dict(base_config.get("configurable") or {})
@@ -2394,10 +2452,23 @@ async def run_unified_agent(
                 if fallback_provider and fallback_provider not in candidates:
                     candidates.append(fallback_provider)
 
-                if not candidates:
+                candidate_configs: list[tuple[str, str]] = []
+
+                # First preference: stay on Google provider but walk the configured
+                # model fallback chain (Gemini 3 -> Gemini 2.5 variants) before
+                # switching providers. This preserves coordinator behavior quality.
+                seen_google_models: set[str] = {runtime.model}
+                next_google_model = model_router.fallback_chain.get(runtime.model)
+                while next_google_model and next_google_model not in seen_google_models:
+                    candidate_configs.append(("google", next_google_model))
+                    seen_google_models.add(next_google_model)
+                    next_google_model = model_router.fallback_chain.get(
+                        next_google_model
+                    )
+
+                if not candidates and not candidate_configs:
                     return None
 
-                last_error: Exception | None = None
                 for provider in candidates:
                     try:
                         coordinator_cfg = resolve_coordinator_config(
@@ -2406,9 +2477,24 @@ async def run_unified_agent(
                             with_subagents=with_subagents,
                             zendesk=is_zendesk,
                         )
+                        candidate_configs.append((provider, coordinator_cfg.model_id))
+                    except Exception as exc:
+                        logger.info(
+                            "fallback_provider_not_configured_for_context",
+                            provider=provider,
+                            zendesk=is_zendesk,
+                            error=str(exc),
+                        )
+
+                if not candidate_configs:
+                    return None
+
+                last_error: Exception | None = None
+                for provider, model_id in candidate_configs:
+                    try:
                         fallback_runtime = AgentRuntimeConfig(
                             provider=provider,
-                            model=coordinator_cfg.model_id,
+                            model=model_id,
                             task_type=runtime.task_type,
                         )
 

@@ -148,7 +148,7 @@ Before taking any action (tool calls OR responses), you MUST reason through:
 
 4. **FORMAT**: Structure the response:
    - Brief empathetic acknowledgment (1 sentence)
-   - Use clear section headers when multi-part (e.g., "The Diagnosis", "How to Fix It", "Next Steps")
+   - Use clear section headers when multi-part unless channel-specific rules prohibit headings
    - Clear actionable guidance (numbered if procedural)
    - Next step or ONE follow-up question
 </instructions>
@@ -344,8 +344,8 @@ You have access to a virtual filesystem for organizing investigations.
 - `append_workspace_file(path, content)` - Append with timestamp (for history)
 
 **Workflow for Complex Tasks:**
-1. **Start**: Read `/context/similar_scenarios.md` for matched scenario patterns
-2. **Reference**: If `/context/ticket_playbook.md` exists, follow that playbook; treat `/playbooks/` as the verified procedure source
+1. **Start**: Call `read_workspace_file("/context/similar_scenarios.md")` for matched scenario patterns (if not found, continue without it)
+2. **Reference**: If `/context/ticket_playbook.md` exists, call `read_workspace_file` on it and then open the referenced `/playbooks/*.md`; treat `/playbooks/` as the verified procedure source
 3. **Investigate**: Write findings to `/scratch/notes.md` as you work
 4. **Cache**: Save large KB/tool results to `/knowledge/` to avoid re-fetching
 5. **Complete**: Produce a customer-ready Suggested Reply only (do not mention internal files/tools)
@@ -561,6 +561,26 @@ When a user requests a feature that does not exist:
 </zendesk_ticket_guidance>
 """.strip()
 
+GENERAL_COORDINATOR_STYLE_OVERRIDE = """
+<general_mode_guardrails>
+For non-Zendesk requests:
+- Prioritize technical correctness and determinism over conversational flourish.
+- Do NOT use scripted customer-support greetings/sign-offs unless the user asks for that style.
+- Avoid emojis unless the user explicitly asks for them.
+- Keep formatting practical: headings are optional and only for clarity.
+</general_mode_guardrails>
+""".strip()
+
+ZENDESK_CONFLICT_RESOLUTION_ADDENDUM = """
+<zendesk_conflict_resolution>
+When `zendesk_ticket_guidance` is present, it overrides conflicting generic persona/format rules.
+If instructions conflict, prioritize:
+1) Zendesk policy constraints
+2) Retrieved macro/playbook procedures
+3) Generic coordinator style guidance
+</zendesk_conflict_resolution>
+""".strip()
+
 # Dynamic role section (appended LAST for cache efficiency)
 # This small section contains the only variable content ({model_name})
 COORDINATOR_PROMPT_DYNAMIC = """
@@ -632,6 +652,9 @@ def get_coordinator_prompt(
 
     if zendesk:
         prompt_parts.append(ZENDESK_TICKET_GUIDANCE)
+        prompt_parts.append(ZENDESK_CONFLICT_RESOLUTION_ADDENDUM)
+    else:
+        prompt_parts.append(GENERAL_COORDINATOR_STYLE_OVERRIDE)
 
     # 2. [NOT CACHED] Dynamic role with model name LAST
     model_name = _format_model_name(model, provider)

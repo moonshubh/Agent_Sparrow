@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
+import asyncio
+import time
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -35,6 +37,11 @@ from ag_ui.core import (
     RunErrorEvent,
     RunFinishedEvent,
     RunStartedEvent,
+)
+from ag_ui.core.events import (
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
 )
 from ag_ui.encoder import EventEncoder
 from ag_ui_langgraph.types import LangGraphEventTypes  # type: ignore[import-untyped]
@@ -55,6 +62,7 @@ from app.agents.orchestration.orchestration.graph import app as compiled_graph
 # Import for context merge and attachment validation
 from app.agents.orchestration.orchestration.state import Attachment
 from app.core.config import (
+    canonicalize_model_id,
     find_model_config,
     get_models_config,
     resolve_coordinator_config,
@@ -81,6 +89,42 @@ tracer = trace.get_tracer(__name__)
 # This wraps our compiled graph with AG-UI protocol support
 _langgraph_agent: Optional[LangGraphAgent] = None
 DEFAULT_LANGGRAPH_RECURSION_LIMIT = 120
+
+
+def _resolve_agui_recursion_limit(settings_obj: Any | None = None) -> int:
+    """Resolve a bounded recursion limit for AG-UI graph execution."""
+
+    settings = settings_obj or get_settings()
+
+    def _as_int(value: Any) -> int | None:
+        try:
+            if value is None:
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    resolved = (
+        _as_int(getattr(settings, "langgraph_recursion_limit", None))
+        or _as_int(getattr(settings, "agui_recursion_limit", None))
+        or _as_int(getattr(settings, "agent_default_recursion_limit", None))
+        or DEFAULT_LANGGRAPH_RECURSION_LIMIT
+    )
+
+    max_limit = (
+        _as_int(getattr(settings, "agui_max_recursion_limit", None))
+        or _as_int(getattr(settings, "agent_max_recursion_limit", None))
+        or max(DEFAULT_LANGGRAPH_RECURSION_LIMIT, resolved)
+    )
+
+    min_limit = 25
+    if max_limit < min_limit:
+        max_limit = min_limit
+    if resolved < min_limit:
+        resolved = min_limit
+    if resolved > max_limit:
+        resolved = max_limit
+    return resolved
 
 
 class SparrowLangGraphAgent(LangGraphAgent):
@@ -262,22 +306,39 @@ class SparrowLangGraphAgent(LangGraphAgent):
 
 def get_langgraph_agent() -> LangGraphAgent:
     """Get or create the AG-UI LangGraph agent wrapper."""
+    # Defensive: ensure AG-UI monkey patches are present in this worker process.
+    # In reload/multiprocess environments, relying only on app startup hooks can
+    # leave some workers with unpatched ag_ui_langgraph behavior.
+    try:
+        from app.patches.agui_custom_events import apply_patch as _apply_agui_patch
+
+        _apply_agui_patch()
+        try:
+            from ag_ui_langgraph.agent import LangGraphAgent
+
+            if (
+                getattr(LangGraphAgent.set_message_in_progress, "__name__", "")
+                != "patched_set_message_in_progress"
+            ):
+                logging.warning("agui_patch_not_effective_set_message_in_progress")
+        except Exception:
+            logging.exception("agui_patch_verification_failed")
+    except Exception:
+        logging.exception("agui_patch_apply_failed")
+
+    try:
+        from app.patches.agui_json_safe import apply_patch as _apply_json_safe_patch
+
+        _apply_json_safe_patch()
+    except Exception:
+        logging.exception("agui_json_patch_apply_failed")
+
     global _langgraph_agent
     if _langgraph_agent is None:
         if compiled_graph is None:
             raise RuntimeError("Compiled graph not available")
         settings = get_settings()
-        recur_limit = getattr(settings, "langgraph_recursion_limit", None) or getattr(
-            settings, "agui_recursion_limit", None
-        )
-        try:
-            recur_limit = (
-                int(recur_limit)
-                if recur_limit is not None
-                else DEFAULT_LANGGRAPH_RECURSION_LIMIT
-            )
-        except Exception:
-            recur_limit = DEFAULT_LANGGRAPH_RECURSION_LIMIT
+        recur_limit = _resolve_agui_recursion_limit(settings)
         _langgraph_agent = SparrowLangGraphAgent(
             name="sparrow",
             graph=compiled_graph,
@@ -302,6 +363,63 @@ def _coerce_text(content: Any) -> str:
                 pieces.append(str(part))
         return "".join(pieces)
     return str(content)
+
+
+def _extract_last_user_text(messages: List[BaseMessage]) -> str:
+    """Best-effort extraction of the latest user utterance for degraded fallback."""
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            text = _coerce_text(getattr(message, "content", "")).strip()
+            if text:
+                return text
+    return ""
+
+
+async def _degraded_direct_response_fallback(
+    *,
+    provider: str,
+    model: str,
+    user_query: str,
+) -> str:
+    """Generate a direct fallback response when AG-UI stream yields no text."""
+    if not user_query:
+        return ""
+
+    from app.agents.unified.provider_factory import build_chat_model
+
+    fallback_model = build_chat_model(provider=provider, model=model, role="coordinator")
+    fallback_messages: List[BaseMessage] = [
+        SystemMessage(
+            content=(
+                "You are Agent Sparrow handling a production support incident. "
+                "Provide a complete response with: customer update, internal triage owners/ETA, "
+                "risk assessment, and immediate next actions."
+            )
+        ),
+        HumanMessage(content=user_query),
+    ]
+
+    try:
+        response = await asyncio.wait_for(
+            fallback_model.ainvoke(
+                fallback_messages,
+                config={
+                    "metadata": {
+                        "emit-messages": False,
+                        "emit-tool-calls": False,
+                    }
+                },
+            ),
+            timeout=45.0,
+        )
+    except Exception:
+        logging.exception("agui_degraded_direct_fallback_failed")
+        return ""
+
+    content = _coerce_text(getattr(response, "content", "")).strip()
+    if content:
+        return content
+    return ""
 
 
 def _strip_reasoning_details(value: Any) -> Any:
@@ -668,6 +786,15 @@ def _merge_agui_context(
 
     # Validate model override (must exist in models.yaml)
     if model:
+        requested_model = str(model)
+        canonical_model = canonicalize_model_id(requested_model)
+        if canonical_model and canonical_model != requested_model:
+            logging.info(
+                "agui_model_alias_normalized: %s -> %s",
+                requested_model,
+                canonical_model,
+            )
+        model = canonical_model or requested_model
         model_cfg = find_model_config(models_config, str(model))
         if model_cfg is None:
             logging.warning("agui_unknown_model_override: %s", model)
@@ -1091,6 +1218,9 @@ async def agui_stream(
             # Starlette may close the generator in a different context, which can
             # cause noisy context-detach errors on client disconnects.
             run_span = tracer.start_span("agui.stream.run")
+            terminal_emitted = False
+            saw_text_end = False
+            streamed_text_chars = 0
             try:
                 cfg = config_dict.get("configurable", {})
                 run_span.set_attribute(
@@ -1100,34 +1230,278 @@ async def agui_stream(
                 run_span.set_attribute("agui.provider", str(cfg.get("provider") or ""))
                 run_span.set_attribute("agui.model", str(cfg.get("model") or ""))
 
+                def _resolve_timeout(raw: Any) -> float | None:
+                    try:
+                        value = float(raw)
+                    except (TypeError, ValueError):
+                        return None
+                    if value <= 0:
+                        return None
+                    return value
+
+                idle_timeout = _resolve_timeout(
+                    getattr(settings, "agui_stream_idle_timeout_sec", None)
+                )
+                total_timeout = _resolve_timeout(
+                    getattr(settings, "agui_stream_total_timeout_sec", None)
+                )
+                heartbeat_interval = _resolve_timeout(
+                    getattr(settings, "sse_heartbeat_interval", None)
+                )
+                heartbeat_comment = (
+                    str(getattr(settings, "sse_heartbeat_comment", "ping") or "ping")
+                    .strip()
+                    .replace("\n", " ")
+                )
+                if not heartbeat_comment:
+                    heartbeat_comment = "ping"
+
                 try:
                     # Stream events from AG-UI LangGraphAgent
                     # The agent.run() method returns properly formatted AG-UI protocol events
-                    async for event in agent.run(enriched_input):
-                        # The frontend does not consume RAW/debug events and parsing them can
-                        # overwhelm the browser for long-running or large-output runs (e.g., 10k reports).
-                        # Skip them entirely to keep the SSE stream lightweight and reliable.
-                        if getattr(event, "type", None) == EventType.RAW:
-                            continue
+                    stream_started = time.monotonic()
+                    last_event_at = stream_started
+                    stream_iter = agent.run(enriched_input).__aiter__()
+                    try:
+                        while True:
+                            elapsed = time.monotonic() - stream_started
+                            if total_timeout is not None and elapsed >= total_timeout:
+                                if not saw_text_end:
+                                    try:
+                                        yield encoder.encode(
+                                            RunErrorEvent(
+                                                type=EventType.RUN_ERROR,
+                                                message=(
+                                                    "Agent stream exceeded total runtime budget"
+                                                ),
+                                                code="stream_total_timeout",
+                                            )
+                                        )
+                                    except Exception:
+                                        pass
+                                else:
+                                    logging.warning(
+                                        "agui_stream_total_timeout_after_text_end",
+                                        extra={
+                                            "thread_id": thread_id,
+                                            "run_id": run_id,
+                                            "timeout_sec": total_timeout,
+                                        },
+                                    )
+                                break
 
-                        update: dict[str, Any] = {}
+                            next_wait_timeout = idle_timeout
+                            if total_timeout is not None:
+                                remaining = max(0.0, total_timeout - elapsed)
+                                if remaining == 0:
+                                    break
+                                if (
+                                    next_wait_timeout is None
+                                    or remaining < next_wait_timeout
+                                ):
+                                    next_wait_timeout = remaining
+                            wait_timeout = next_wait_timeout
+                            if heartbeat_interval is not None:
+                                if wait_timeout is None or heartbeat_interval < wait_timeout:
+                                    wait_timeout = heartbeat_interval
 
-                        # Avoid sending large debug payloads (reasoning details, data URLs) to the browser.
+                            try:
+                                if wait_timeout is None:
+                                    event = await stream_iter.__anext__()
+                                else:
+                                    event = await asyncio.wait_for(
+                                        stream_iter.__anext__(),
+                                        timeout=wait_timeout,
+                                    )
+                            except StopAsyncIteration:
+                                break
+                            except asyncio.TimeoutError:
+                                now = time.monotonic()
+                                idle_elapsed = now - last_event_at
+                                idle_expired = (
+                                    idle_timeout is not None
+                                    and idle_elapsed >= idle_timeout
+                                )
+                                total_expired = (
+                                    total_timeout is not None
+                                    and (now - stream_started) >= total_timeout
+                                )
+                                if total_expired:
+                                    if not saw_text_end:
+                                        try:
+                                            yield encoder.encode(
+                                                RunErrorEvent(
+                                                    type=EventType.RUN_ERROR,
+                                                    message=(
+                                                        "Agent stream exceeded total runtime budget"
+                                                    ),
+                                                    code="stream_total_timeout",
+                                                )
+                                            )
+                                        except Exception:
+                                            pass
+                                    break
+                                if not idle_expired:
+                                    # Keep long-running streams alive for proxies/clients.
+                                    yield f": {heartbeat_comment}\n\n"
+                                    # Treat heartbeat emission as stream liveness to
+                                    # avoid aborting healthy long-running generations.
+                                    last_event_at = now
+                                    continue
+                                if not saw_text_end:
+                                    try:
+                                        yield encoder.encode(
+                                            RunErrorEvent(
+                                                type=EventType.RUN_ERROR,
+                                                message=(
+                                                    "Agent stream idle timeout while waiting for events"
+                                                ),
+                                                code="stream_idle_timeout",
+                                            )
+                                        )
+                                    except Exception:
+                                        pass
+                                else:
+                                    logging.warning(
+                                        "agui_stream_idle_timeout_after_text_end",
+                                        extra={
+                                            "thread_id": thread_id,
+                                            "run_id": run_id,
+                                            "timeout_sec": idle_timeout,
+                                        },
+                                    )
+                                break
+
+                            # The frontend does not consume RAW/debug events and parsing them can
+                            # overwhelm the browser for long-running or large-output runs (e.g., 10k reports).
+                            # Skip them entirely to keep the SSE stream lightweight and reliable.
+                            if getattr(event, "type", None) == EventType.RAW:
+                                continue
+
+                            update: dict[str, Any] = {}
+
+                            # Avoid sending large debug payloads (reasoning details, data URLs) to the browser.
+                            try:
+                                # Drop raw event payloads entirely (they are not used by the UI and can be huge).
+                                if (
+                                    hasattr(event, "raw_event")
+                                    and getattr(event, "raw_event") is not None
+                                ):
+                                    update["raw_event"] = None
+                                if update:
+                                    event = event.model_copy(update=update)
+                            except Exception:
+                                # Never fail streaming due to debug payload sanitization.
+                                pass
+
+                            event_type = getattr(event, "type", None)
+                            last_event_at = time.monotonic()
+                            if event_type == EventType.TEXT_MESSAGE_END:
+                                saw_text_end = True
+                            elif event_type == EventType.TEXT_MESSAGE_CONTENT:
+                                delta = getattr(event, "delta", None)
+                                if isinstance(delta, str):
+                                    streamed_text_chars += len(delta)
+                            # Encode event using AG-UI EventEncoder for proper SSE formatting.
+                            # If a single event fails to encode, skip it rather than aborting
+                            # the entire stream before terminal completion.
+                            try:
+                                yield encoder.encode(event)
+                                if event_type == EventType.RUN_FINISHED:
+                                    terminal_emitted = True
+                            except Exception as encode_exc:
+                                logging.warning(
+                                    "agui_stream_event_encode_failed",
+                                    extra={
+                                        "event_type": str(event_type),
+                                        "error": str(encode_exc),
+                                    },
+                                    exc_info=True,
+                                )
+                                if event_type == EventType.RUN_FINISHED:
+                                    try:
+                                        yield encoder.encode(
+                                            RunFinishedEvent(
+                                                type=EventType.RUN_FINISHED,
+                                                thread_id=thread_id,
+                                                run_id=run_id,
+                                            )
+                                        )
+                                        terminal_emitted = True
+                                    except Exception:
+                                        pass
+                                continue
+                    finally:
+                        # Ensure a timed-out iterator is closed promptly so the
+                        # underlying run can release resources.
+                        if hasattr(stream_iter, "aclose"):
+                            try:
+                                await stream_iter.aclose()  # type: ignore[attr-defined]
+                            except Exception:
+                                pass
+
+                    if streamed_text_chars <= 0:
+                        provider_value = str(cfg.get("provider") or "google").strip()
+                        model_value = str(cfg.get("model") or "").strip()
+                        user_query = _extract_last_user_text(merged_messages)
+                        fallback_text = await _degraded_direct_response_fallback(
+                            provider=provider_value or "google",
+                            model=model_value,
+                            user_query=user_query,
+                        )
+                        if fallback_text:
+                            fallback_message_id = f"fallback-{run_id}"
+                            yield encoder.encode(
+                                TextMessageStartEvent(
+                                    type=EventType.TEXT_MESSAGE_START,
+                                    role="assistant",
+                                    message_id=fallback_message_id,
+                                )
+                            )
+                            yield encoder.encode(
+                                TextMessageContentEvent(
+                                    type=EventType.TEXT_MESSAGE_CONTENT,
+                                    message_id=fallback_message_id,
+                                    delta=fallback_text,
+                                )
+                            )
+                            yield encoder.encode(
+                                TextMessageEndEvent(
+                                    type=EventType.TEXT_MESSAGE_END,
+                                    message_id=fallback_message_id,
+                                )
+                            )
+                            saw_text_end = True
+                            streamed_text_chars = len(fallback_text)
+                            logging.warning(
+                                "agui_stream_degraded_fallback_emitted",
+                                extra={
+                                    "thread_id": thread_id,
+                                    "run_id": run_id,
+                                    "provider": provider_value,
+                                    "model": model_value,
+                                    "chars": len(fallback_text),
+                                },
+                            )
+
+                    # Defensive: if the underlying generator completes without a terminal
+                    # event, emit one to keep clients out of perpetual "running" state.
+                    if not terminal_emitted:
                         try:
-                            # Drop raw event payloads entirely (they are not used by the UI and can be huge).
-                            if (
-                                hasattr(event, "raw_event")
-                                and getattr(event, "raw_event") is not None
-                            ):
-                                update["raw_event"] = None
-                            if update:
-                                event = event.model_copy(update=update)
+                            yield encoder.encode(
+                                RunFinishedEvent(
+                                    type=EventType.RUN_FINISHED,
+                                    thread_id=thread_id,
+                                    run_id=run_id,
+                                )
+                            )
+                            terminal_emitted = True
+                            logging.warning(
+                                "agui_stream_missing_terminal_event_recovered",
+                                extra={"thread_id": thread_id, "run_id": run_id},
+                            )
                         except Exception:
-                            # Never fail streaming due to debug payload sanitization.
                             pass
-                        # Encode event using AG-UI EventEncoder for proper SSE formatting
-                        yield encoder.encode(event)
-
                     run_span.set_status(Status(StatusCode.OK))
                 except Exception as exc:  # pragma: no cover
                     run_span.record_exception(exc)
@@ -1143,6 +1517,18 @@ async def agui_stream(
                         )
                     except Exception:
                         pass
+                    if not terminal_emitted:
+                        try:
+                            yield encoder.encode(
+                                RunFinishedEvent(
+                                    type=EventType.RUN_FINISHED,
+                                    thread_id=thread_id,
+                                    run_id=run_id,
+                                )
+                            )
+                            terminal_emitted = True
+                        except Exception:
+                            pass
                     return
             finally:
                 run_span.end()
@@ -1193,11 +1579,12 @@ def get_travel_agent() -> LangGraphAgent:
     if _travel_agent is None:
         if travel_graph is None:
             raise RuntimeError("Travel graph not available")
+        recur_limit = _resolve_agui_recursion_limit(get_settings())
         _travel_agent = LangGraphAgent(
             name="travel_agent",
             graph=travel_graph,
             description="Travel Agent Supervisor",
-            config={"recursion_limit": DEFAULT_LANGGRAPH_RECURSION_LIMIT},
+            config={"recursion_limit": recur_limit},
         )
     return _travel_agent
 

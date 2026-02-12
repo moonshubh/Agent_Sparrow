@@ -13,6 +13,8 @@ class _FakeEmitter:
         self.custom_events: list[dict[str, Any]] = []
         self.trace_steps: list[dict[str, Any]] = []
         self.objective_hints: list[dict[str, Any]] = []
+        self.text_events: list[dict[str, Any]] = []
+        self._message_started = False
 
     def add_trace_step(self, **kwargs: Any) -> None:
         self.trace_steps.append(dict(kwargs))
@@ -22,6 +24,24 @@ class _FakeEmitter:
 
     def emit_objective_hint(self, **kwargs: Any) -> None:
         self.objective_hints.append(dict(kwargs))
+
+    def start_text_message(self, message_id: str | None = None) -> str:
+        self._message_started = True
+        resolved = message_id or "msg-test"
+        self.text_events.append({"type": "TEXT_MESSAGE_START", "messageId": resolved})
+        return resolved
+
+    def emit_text_content(self, delta: str) -> None:
+        if not self._message_started:
+            self.start_text_message()
+        self.text_events.append({"type": "TEXT_MESSAGE_CONTENT", "delta": delta})
+
+    def end_text_message(self) -> None:
+        self._message_started = False
+        self.text_events.append({"type": "TEXT_MESSAGE_END"})
+
+    def mark_all_todos_done(self) -> None:  # pragma: no cover - test double
+        return None
 
     def complete_root(self) -> None:  # pragma: no cover - not exercised
         return None
@@ -134,3 +154,8 @@ async def test_fallback_coerces_system_messages_on_invalid_role_error(
     assert agent.last_messages
     assert not any(isinstance(m, SystemMessage) for m in agent.last_messages)
     assert "SYSTEM INSTRUCTIONS:" in str(getattr(agent.last_messages[0], "content", ""))
+    assert any(event.get("type") == "TEXT_MESSAGE_CONTENT" for event in fake_emitter.text_events)
+    assert any(
+        event.get("type") == "TEXT_MESSAGE_CONTENT" and event.get("delta") == "ok"
+        for event in fake_emitter.text_events
+    )

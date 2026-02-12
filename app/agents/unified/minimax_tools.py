@@ -21,6 +21,8 @@ import os
 import shutil
 import shlex
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Annotated, cast
 
@@ -379,6 +381,17 @@ _minimax_mcp_client: Optional[MultiServerMCPClient] = None
 _minimax_mcp_tools: Dict[str, BaseTool] = {}
 _mcp_client_lock = asyncio.Lock()
 _mcp_tools_lock = asyncio.Lock()
+_mcp_circuit_lock = asyncio.Lock()
+
+
+@dataclass
+class _MCPFailureCircuit:
+    consecutive_failures: int = 0
+    opened_until_monotonic: float = 0.0
+    last_reason: str = ""
+
+
+_mcp_failure_circuit = _MCPFailureCircuit()
 
 
 def _resolve_mcp_timeout() -> Optional[float]:
@@ -390,6 +403,71 @@ def _resolve_mcp_timeout() -> Optional[float]:
     if timeout <= 0:
         return None
     return timeout
+
+
+def _resolve_mcp_circuit_threshold() -> int:
+    try:
+        threshold = int(
+            getattr(settings, "minimax_mcp_circuit_breaker_failures", 3) or 3
+        )
+    except (TypeError, ValueError):
+        threshold = 3
+    return max(1, threshold)
+
+
+def _resolve_mcp_circuit_cooldown() -> float:
+    try:
+        cooldown = float(
+            getattr(settings, "minimax_mcp_circuit_breaker_cooldown_sec", 180.0)
+            or 180.0
+        )
+    except (TypeError, ValueError):
+        cooldown = 180.0
+    return max(5.0, cooldown)
+
+
+async def _is_mcp_circuit_open() -> bool:
+    async with _mcp_circuit_lock:
+        return time.monotonic() < _mcp_failure_circuit.opened_until_monotonic
+
+
+async def _record_mcp_failure(reason: str) -> None:
+    threshold = _resolve_mcp_circuit_threshold()
+    cooldown = _resolve_mcp_circuit_cooldown()
+    now = time.monotonic()
+
+    async with _mcp_circuit_lock:
+        if now >= _mcp_failure_circuit.opened_until_monotonic:
+            # Cooldown elapsed: restart counting from a clean window.
+            _mcp_failure_circuit.consecutive_failures = 0
+
+        _mcp_failure_circuit.consecutive_failures += 1
+        _mcp_failure_circuit.last_reason = reason
+
+        if _mcp_failure_circuit.consecutive_failures < threshold:
+            return
+
+        _mcp_failure_circuit.opened_until_monotonic = now + cooldown
+        logger.warning(
+            "minimax_mcp_circuit_open",
+            reason=reason,
+            consecutive_failures=_mcp_failure_circuit.consecutive_failures,
+            threshold=threshold,
+            cooldown_sec=cooldown,
+        )
+
+
+async def _record_mcp_success() -> None:
+    async with _mcp_circuit_lock:
+        if (
+            _mcp_failure_circuit.consecutive_failures == 0
+            and _mcp_failure_circuit.opened_until_monotonic == 0.0
+        ):
+            return
+        _mcp_failure_circuit.consecutive_failures = 0
+        _mcp_failure_circuit.opened_until_monotonic = 0.0
+        _mcp_failure_circuit.last_reason = ""
+    logger.debug("minimax_mcp_circuit_closed")
 
 
 async def _reset_minimax_mcp_client(reason: str) -> None:
@@ -465,6 +543,10 @@ async def _get_minimax_mcp_client() -> Optional[MultiServerMCPClient]:
 
 
 async def _get_minimax_mcp_tool(tool_name: str) -> Optional[BaseTool]:
+    if await _is_mcp_circuit_open():
+        logger.debug("minimax_mcp_circuit_open_skip", tool=tool_name)
+        return None
+
     client = await _get_minimax_mcp_client()
     if client is None:
         return None
@@ -526,9 +608,13 @@ async def _get_minimax_mcp_tool(tool_name: str) -> Optional[BaseTool]:
 
     if reset_reason:
         await _reset_minimax_mcp_client(reset_reason)
+        await _record_mcp_failure(reset_reason)
         return None
 
-    return _minimax_mcp_tools.get(tool_name)
+    selected = _minimax_mcp_tools.get(tool_name)
+    if selected is not None:
+        await _record_mcp_success()
+    return selected
 
 
 def _extract_base_resp_error(payload: Dict[str, Any]) -> Optional[str]:
@@ -569,11 +655,15 @@ async def _invoke_minimax_mcp_tool(
             timeout=timeout,
         )
         await _reset_minimax_mcp_client("invoke_timeout")
+        await _record_mcp_failure("invoke_timeout")
         return {"error": "minimax_mcp_timeout"}
     except Exception as exc:
         logger.warning("minimax_mcp_tool_invoke_failed", tool=tool_name, error=str(exc))
         await _reset_minimax_mcp_client("invoke_failed")
+        await _record_mcp_failure("invoke_failed")
         return {"error": str(exc)}
+
+    await _record_mcp_success()
 
     if isinstance(result, dict):
         return result

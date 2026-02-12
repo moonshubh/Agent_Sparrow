@@ -38,6 +38,23 @@ def configure_langsmith() -> bool:
         os.environ.setdefault("LANGCHAIN_PROJECT", settings.langsmith_project)
         os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
 
+    sampling_rate = getattr(settings, "langsmith_tracing_sampling_rate", None)
+    if sampling_rate is not None:
+        try:
+            parsed_sampling_rate = float(sampling_rate)
+        except (TypeError, ValueError):
+            parsed_sampling_rate = None
+        if parsed_sampling_rate is None or not (0.0 <= parsed_sampling_rate <= 1.0):
+            logger.warning(
+                "Ignoring invalid LangSmith sampling rate: %r (expected 0.0..1.0)",
+                sampling_rate,
+            )
+        else:
+            # Set both names for compatibility across SDK/docs generations.
+            value = f"{parsed_sampling_rate:.6f}".rstrip("0").rstrip(".")
+            os.environ.setdefault("LANGSMITH_TRACING_SAMPLING_RATE", value)
+            os.environ.setdefault("LANGCHAIN_TRACING_SAMPLING_RATE", value)
+
     try:  # Optional dependency
         from langsmith import Client
 

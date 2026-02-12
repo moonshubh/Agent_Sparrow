@@ -21,6 +21,8 @@ interface ChatInputProps {
   onInitialInputUsed?: () => void;
 }
 
+const LONG_RUN_SOFT_TIMEOUT_MS = 120_000;
+
 export function ChatInput({
   initialInput,
   onInitialInputUsed,
@@ -32,6 +34,7 @@ export function ChatInput({
     abortRun,
     pendingPromptSteering,
     resolvePromptSteering,
+    streamRecovery,
     webSearchMode,
     setWebSearchMode,
   } = useAgent();
@@ -39,6 +42,9 @@ export function ChatInput({
   const [attachments, setAttachments] = useState<AttachmentInput[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [steeringCountdownMs, setSteeringCountdownMs] = useState(0);
+  const [retryCountdownMs, setRetryCountdownMs] = useState(0);
+  const [softTimeoutVisible, setSoftTimeoutVisible] = useState(false);
+  const [softTimeoutGeneration, setSoftTimeoutGeneration] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastAppliedInitialInputRef = useRef<string | null>(null);
@@ -159,6 +165,36 @@ export function ChatInput({
     };
   }, [pendingPromptSteering]);
 
+  useEffect(() => {
+    const nextRetryAt = streamRecovery.nextRetryAt;
+    if (!streamRecovery.isRetrying || !nextRetryAt) {
+      setRetryCountdownMs(0);
+      return;
+    }
+    const updateCountdown = () => {
+      setRetryCountdownMs(Math.max(0, nextRetryAt - Date.now()));
+    };
+    updateCountdown();
+    const intervalId = window.setInterval(updateCountdown, 200);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [streamRecovery.isRetrying, streamRecovery.nextRetryAt]);
+
+  useEffect(() => {
+    if (!isStreaming) {
+      setSoftTimeoutVisible(false);
+      setSoftTimeoutGeneration(0);
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setSoftTimeoutVisible(true);
+    }, LONG_RUN_SOFT_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isStreaming, softTimeoutGeneration]);
+
   const handleSubmit = useCallback(async () => {
     if (!input.trim() && attachments.length === 0) return;
 
@@ -179,6 +215,11 @@ export function ChatInput({
   const handleStop = useCallback(() => {
     abortRun();
   }, [abortRun]);
+
+  const handleContinueLongRun = useCallback(() => {
+    setSoftTimeoutVisible(false);
+    setSoftTimeoutGeneration((prev) => prev + 1);
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -346,6 +387,7 @@ export function ChatInput({
   }, []);
 
   const steeringSeconds = Math.max(0, Math.ceil(steeringCountdownMs / 1000));
+  const retrySeconds = Math.max(0, Math.ceil(retryCountdownMs / 1000));
 
   return (
     <div
@@ -354,6 +396,45 @@ export function ChatInput({
       aria-hidden={isLanding ? "true" : undefined}
     >
       <div className="lc-input-wrapper">
+        {(streamRecovery.isRetrying || streamRecovery.exhausted) && (
+          <div className="lc-stream-recovery-banner" role="status" aria-live="polite">
+            {streamRecovery.isRetrying ? (
+              <>
+                <strong>
+                  Reconnecting ({streamRecovery.attemptsUsed}/{streamRecovery.maxRetries})
+                </strong>
+                <span>
+                  Network interrupted. Retrying in {retrySeconds}s while preserving
+                  partial response state.
+                </span>
+              </>
+            ) : (
+              <>
+                <strong>Connection retries exhausted</strong>
+                <span>
+                  This response is marked limited and may be incomplete.
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
+        {isStreaming && softTimeoutVisible && (
+          <div className="lc-soft-timeout-banner" role="status" aria-live="polite">
+            <div className="lc-soft-timeout-copy">
+              <strong>This response is taking longer than expected.</strong>
+              <span>It has been running for over 2 minutes. Continue waiting?</span>
+            </div>
+            <button
+              type="button"
+              className="lc-soft-timeout-btn"
+              onClick={handleContinueLongRun}
+            >
+              Continue waiting
+            </button>
+          </div>
+        )}
+
         {pendingPromptSteering && (
           <div className="lc-steering-banner" role="status" aria-live="polite">
             <div className="lc-steering-banner-copy">

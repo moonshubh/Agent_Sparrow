@@ -30,6 +30,21 @@ def infer_provider(model_id: str) -> str:
     return "google"
 
 
+# Backward-compatible model aliases. Keep keys lowercase.
+MODEL_ID_ALIASES: dict[str, str] = {
+    "grok-4-fast-reasoning": "grok-4-1-fast-reasoning",
+    "gemini-3-flash": "gemini-3-flash-preview",
+}
+
+
+def canonicalize_model_id(model_id: str | None) -> str | None:
+    """Normalize legacy/alias model IDs to canonical model IDs."""
+    normalized = (model_id or "").strip()
+    if not normalized:
+        return None
+    return MODEL_ID_ALIASES.get(normalized.lower(), normalized)
+
+
 class RateLimits(BaseModel):
     rpm: int = Field(..., description="Requests per minute")
     rpd: int = Field(..., description="Requests per day")
@@ -319,13 +334,13 @@ def find_bucket_for_model(
     prefix: str | None = None,
 ) -> str | None:
     """Find the first bucket name that matches a given model_id."""
-    target = (model_id or "").strip()
+    target = canonicalize_model_id(model_id) or ""
     if not target:
         return None
     for bucket, model_cfg in iter_rate_limit_buckets(config):
         if prefix and not bucket.startswith(prefix):
             continue
-        if model_cfg.model_id == target:
+        if canonicalize_model_id(model_cfg.model_id) == target:
             return bucket
     return None
 
@@ -335,11 +350,11 @@ def find_model_config(
     model_id: str,
 ) -> ModelConfig | None:
     """Find the first matching ModelConfig for a given model_id."""
-    target = (model_id or "").strip()
+    target = canonicalize_model_id(model_id) or ""
     if not target:
         return None
     for _, _, model in iter_model_configs(config):
-        if model.model_id == target:
+        if canonicalize_model_id(model.model_id) == target:
             return model
     return None
 

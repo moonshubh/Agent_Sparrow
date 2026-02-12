@@ -23,7 +23,7 @@ coordinators:
   # Default coordinator for Google provider
   google:
     model_id: "gemini-3-flash-preview"
-    temperature: 1.0          # Gemini 3.x recommended
+    temperature: 0.3          # Stability-biased coordinator setting
     context_window: 1048576
     rate_limits:
       rpm: 1000
@@ -34,7 +34,7 @@ coordinators:
   # NOTE: Model can be identical to `coordinators.google` but limits are separate.
   google_with_subagents:
     model_id: "gemini-3-flash-preview"
-    temperature: 1.0
+    temperature: 0.3
     context_window: 1048576
     rate_limits:
       rpm: 1000
@@ -238,7 +238,7 @@ zendesk:
   coordinators:
     google:
       model_id: "gemini-3-flash-preview"
-      temperature: 1.0
+      temperature: 0.3
       context_window: 1048576
       rate_limits:
         rpm: 150
@@ -246,11 +246,47 @@ zendesk:
 
     google_with_subagents:
       model_id: "gemini-3-flash-preview"
-      temperature: 1.0
+      temperature: 0.3
       context_window: 1048576
       rate_limits:
         rpm: 120
         rpd: 4000
+
+    xai:
+      model_id: "grok-4-1-fast-reasoning"
+      temperature: 0.2
+      context_window: 2000000
+      rate_limits:
+        rpm: 45
+        rpd: 750
+
+    xai_with_subagents:
+      model_id: "grok-4-1-fast-reasoning"
+      temperature: 0.2
+      context_window: 2000000
+      rate_limits:
+        rpm: 35
+        rpd: 600
+
+    openrouter:
+      model_id: "x-ai/grok-4.1-fast"
+      provider: "openrouter"
+      temperature: 0.2
+      context_window: 2000000
+      always_enable_reasoning: true
+      rate_limits:
+        rpm: 45
+        rpd: 750
+
+    openrouter_with_subagents:
+      model_id: "x-ai/grok-4.1-fast"
+      provider: "openrouter"
+      temperature: 0.2
+      context_window: 2000000
+      always_enable_reasoning: true
+      rate_limits:
+        rpm: 35
+        rpd: 600
   subagents:
     _default:
       model_id: "minimax/MiniMax-M2.1"

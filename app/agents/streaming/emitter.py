@@ -484,7 +484,6 @@ class StreamEventEmitter:
 
         message_id = getattr(self, "_current_message_id", self.root_id)
         self._message_started = False
-
         self.writer(
             {
                 "type": "TEXT_MESSAGE_END",
@@ -682,6 +681,7 @@ class StreamEventEmitter:
         prompt_preview: Optional[str] = None,
     ) -> TimelineOperation:
         """Record a thought/reasoning operation starting."""
+        run_id = str(run_id)
         thought_op = TimelineOperation.create_thought(
             run_id=run_id,
             parent_id=self.root_id,
@@ -721,7 +721,7 @@ class StreamEventEmitter:
         self._thinking_buffer.pop(run_id_str, None)
         self._thinking_buffer_last_flush.pop(run_id_str, None)
 
-        thought_op = self.operations.get(run_id)
+        thought_op = self.operations.get(run_id_str)
         duration_ms: Optional[int] = None
         status: Optional[str] = None
         if thought_op:
@@ -731,7 +731,7 @@ class StreamEventEmitter:
             if content:
                 thought_op.metadata["content"] = str(content)
 
-        self._emit_timeline_update(run_id)
+        self._emit_timeline_update(run_id_str)
 
         trace_meta: Dict[str, Any] = {}
         if duration_ms is not None:

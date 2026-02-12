@@ -46,6 +46,7 @@ interface ThinkingPanelProps {
   researchProgress?: number;
   researchStatus?: ResearchStatus;
   webSearchMode?: WebSearchMode;
+  enableKeyboardShortcuts?: boolean;
 }
 
 interface ThinkingStickyRailProps {
@@ -245,6 +246,13 @@ const readPersistedFilter = (storageKey: string): PanelFilter => {
     : "all";
 };
 
+const isEditableTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select";
+};
+
 export const ThinkingStickyRail = memo(function ThinkingStickyRail({
   panelState,
   isStreaming = false,
@@ -302,6 +310,7 @@ export const ThinkingPanel = memo(function ThinkingPanel({
   researchProgress = 0,
   researchStatus = "idle",
   webSearchMode = "off",
+  enableKeyboardShortcuts = false,
 }: ThinkingPanelProps) {
   const [isExpanded, setIsExpanded] = useState<boolean>(() => isStreaming);
   const [expandedLaneIds, setExpandedLaneIds] = useState<Set<string>>(
@@ -317,6 +326,7 @@ export const ThinkingPanel = memo(function ThinkingPanel({
     readPersistedFilter(`lc-thinking-filter:${sessionId ?? "global"}`),
   );
   const [autoFollow, setAutoFollow] = useState(true);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const contentRef = useRef<HTMLDivElement | null>(null);
 
   const filterStorageKey = useMemo(
@@ -328,6 +338,23 @@ export const ThinkingPanel = memo(function ThinkingPanel({
     if (typeof window === "undefined") return;
     window.localStorage.setItem(filterStorageKey, activeFilter);
   }, [activeFilter, filterStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const apply = () => {
+      setPrefersReducedMotion(query.matches);
+    };
+    apply();
+    if (typeof query.addEventListener === "function") {
+      query.addEventListener("change", apply);
+      return () => query.removeEventListener("change", apply);
+    }
+    query.addListener(apply);
+    return () => query.removeListener(apply);
+  }, []);
 
   const panelExpanded = isExpanded || isStreaming;
 
@@ -401,7 +428,10 @@ export const ThinkingPanel = memo(function ThinkingPanel({
     if (!target) return;
 
     requestAnimationFrame(() => {
-      target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      target.scrollIntoView({
+        block: "nearest",
+        behavior: prefersReducedMotion ? "auto" : "smooth",
+      });
     });
   }, [
     autoFollow,
@@ -409,6 +439,7 @@ export const ThinkingPanel = memo(function ThinkingPanel({
     latestVisibleObjectiveId,
     panelState.activeObjectiveId,
     panelState.updatedAt,
+    prefersReducedMotion,
   ]);
 
   const onContentScroll = useCallback(() => {
@@ -459,6 +490,58 @@ export const ThinkingPanel = memo(function ThinkingPanel({
     });
   }, []);
 
+  const togglePanelExpanded = useCallback(() => {
+    setIsExpanded((prev) => !prev);
+  }, []);
+
+  const cycleFilter = useCallback(() => {
+    setActiveFilter((prev) => {
+      const currentIndex = PANEL_FILTERS.findIndex((filter) => filter.id === prev);
+      const safeIndex = currentIndex < 0 ? 0 : currentIndex;
+      return PANEL_FILTERS[(safeIndex + 1) % PANEL_FILTERS.length].id;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!enableKeyboardShortcuts) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat) return;
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey) {
+        return;
+      }
+      if (isEditableTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      if (key === "p") {
+        event.preventDefault();
+        togglePanelExpanded();
+        return;
+      }
+      if (key === "f") {
+        event.preventDefault();
+        setIsExpanded(true);
+        cycleFilter();
+        return;
+      }
+      if (key === "a") {
+        event.preventDefault();
+        setAutoFollow((prev) => !prev);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [cycleFilter, enableKeyboardShortcuts, togglePanelExpanded]);
+
+  const shortcutModifierLabel = useMemo(() => {
+    if (typeof navigator !== "undefined" && /mac/i.test(navigator.platform)) {
+      return "Cmd+Shift";
+    }
+    return "Ctrl+Shift";
+  }, []);
+
   const { done: todosDone, total: todosTotal } = useMemo(() => summarizeTodos(todos), [todos]);
 
   if (!hasContent) return null;
@@ -469,8 +552,13 @@ export const ThinkingPanel = memo(function ThinkingPanel({
         <button
           type="button"
           className="lc-think-header-button"
-          onClick={() => setIsExpanded((prev) => !prev)}
+          onClick={togglePanelExpanded}
           aria-expanded={panelExpanded}
+          aria-keyshortcuts={
+            enableKeyboardShortcuts
+              ? "Meta+Shift+P Control+Shift+P"
+              : undefined
+          }
         >
           <span className="lc-think-header-left">
             {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
@@ -488,6 +576,11 @@ export const ThinkingPanel = memo(function ThinkingPanel({
       {panelExpanded && (
         <>
           <div className="lc-think-topline">
+            {panelState.runStatus === "unknown" && (
+              <div className="lc-think-limited-pill" role="status" aria-live="polite">
+                Reasoning ended with incomplete signals.
+              </div>
+            )}
             {researchStatus !== "idle" && (
               <div className={`lc-think-research-pill ${researchStatus}`}>
                 <span className="lc-think-research-dot" />
@@ -523,6 +616,11 @@ export const ThinkingPanel = memo(function ThinkingPanel({
                 aria-pressed={activeFilter === filter.id}
                 className={`lc-think-filter-chip ${activeFilter === filter.id ? "active" : ""}`}
                 onClick={() => setActiveFilter(filter.id)}
+                aria-keyshortcuts={
+                  enableKeyboardShortcuts && filter.id === activeFilter
+                    ? "Meta+Shift+F Control+Shift+F"
+                    : undefined
+                }
               >
                 {filter.label}
               </button>
@@ -532,6 +630,11 @@ export const ThinkingPanel = memo(function ThinkingPanel({
                 type="button"
                 className="lc-think-follow-btn"
                 onClick={() => setAutoFollow(true)}
+                aria-keyshortcuts={
+                  enableKeyboardShortcuts
+                    ? "Meta+Shift+A Control+Shift+A"
+                    : undefined
+                }
               >
                 <Eye size={12} />
                 Follow latest
@@ -541,6 +644,12 @@ export const ThinkingPanel = memo(function ThinkingPanel({
               <span className="lc-think-follow-hint">
                 <EyeOff size={12} />
                 Auto-follow on
+              </span>
+            )}
+            {enableKeyboardShortcuts && (
+              <span className="lc-think-shortcut-hint">
+                Shortcuts: {shortcutModifierLabel}+P panel, {shortcutModifierLabel}+F
+                filter, {shortcutModifierLabel}+A follow
               </span>
             )}
           </div>

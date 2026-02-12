@@ -75,8 +75,10 @@ A sophisticated state machine that transforms heterogeneous AG-UI custom events 
 - **Phases**: `plan` -> `gather` -> `execute` -> `synthesize`
 - **Batching**: Thought-cadence events are batched at 200ms intervals to reduce render frequency
 - **Deduplication**: Event keys are tracked (up to 1200) to prevent duplicate processing
+- **Stale fallback**: Running objectives without completion events are marked `unknown` after 30s
+- **Incomplete runs**: Connection-exhausted runs can force unresolved objectives to `unknown` for limited-state signaling
 
-The adapter exposes `usePanelEventAdapter()` hook with `panelState`, `applyCustomEvent`, `applyToolCallStart`, `applyToolCallResult`, and `syncTodosSnapshot`.
+The adapter exposes `usePanelEventAdapter()` hook with `panelState`, `applyCustomEvent`, `applyToolCallStart`, `applyToolCallResult`, `syncTodosSnapshot`, and `markRunIncomplete`.
 
 #### Message Flow
 
