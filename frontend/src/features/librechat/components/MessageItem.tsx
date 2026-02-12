@@ -685,6 +685,7 @@ export const MessageItem = memo(function MessageItem({
                   isLatestMessage={isLast && isStreaming}
                   messageId={message.id}
                   registerArtifacts={shouldRegisterArtifacts}
+                  enableLinkPreviews
                   variant="librechat"
                 />
                 {notesForDropdown ? (

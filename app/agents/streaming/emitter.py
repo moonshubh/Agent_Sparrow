@@ -339,14 +339,6 @@ class StreamEventEmitter:
         if self.writer is None:
             return
 
-        # Warn if content is empty but images exist
-        if not content.strip() and images:
-            logger.warning(
-                "emit_article_artifact: empty content with images present. "
-                "Article will contain only embedded images."
-            )
-
-        # Early return only if BOTH content AND images are empty
         if not content.strip() and not images:
             logger.warning("emit_article_artifact: no content or images")
             return
@@ -356,41 +348,24 @@ class StreamEventEmitter:
         artifact_id = f"article-{uuid.uuid4().hex[:8]}"
         message_id = getattr(self, "_current_message_id", None) or f"msg-{self.root_id}"
 
-        # If images provided, append them to the content as markdown
-        if images:
-            # Only add separator if there's existing content
-            if content.strip():
-                image_section = "\n\n---\n\n## Images\n\n"
-            else:
-                # For image-only articles, start with a header
-                image_section = "# Generated Images\n\n"
-
-            for img in images:
-                alt = img.get("alt", "Image")
-                url = img.get("url", "")
-                if url:
-                    image_section += f"![{alt}]({url})\n\n"
-            content = content + image_section if content else image_section
-
         # Don't truncate article content; send raw payload for artifact rendering.
-        self.writer(
-            {
-                "event": "on_custom_event",
-                "name": "article_artifact",
-                "data": {
-                    "id": artifact_id,
-                    "type": "article",
-                    "title": title,
-                    "content": content,
-                    "messageId": message_id,
-                },
-            }
-        )
+        payload: Dict[str, Any] = {
+            "id": artifact_id,
+            "type": "article",
+            "title": title,
+            "content": content,
+            "messageId": message_id,
+        }
+        if images:
+            payload["images"] = images
+
+        self.emit_custom_event("article_artifact", payload, truncate=False)
         logger.info(
-            "emit_article_artifact: id={}, title={}, content_length={}",
+            "emit_article_artifact: id={}, title={}, content_length={}, images={}",
             artifact_id,
             title,
             len(content),
+            len(images or []),
         )
 
     # -------------------------------------------------------------------------

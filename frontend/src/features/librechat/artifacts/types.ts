@@ -57,6 +57,8 @@ export interface Artifact {
   mimeType?: string;
   /** Alt text for accessibility */
   altText?: string;
+  /** Optional source page URL for web-sourced images */
+  pageUrl?: string;
   /** Aspect ratio of the generated image */
   aspectRatio?: string;
   /** Resolution of the generated image */

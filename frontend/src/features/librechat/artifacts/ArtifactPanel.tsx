@@ -19,6 +19,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import mermaid from "mermaid";
 import { cn } from "@/shared/lib/utils";
+import { LinkPreview } from "@/components/ui/link-preview";
 import {
   useCurrentArtifact,
   useArtifactsVisible,
@@ -123,6 +124,21 @@ function sanitizeMermaidContent(content: string): string {
   );
 
   return sanitized;
+}
+
+function toExternalHttpUrl(value?: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return url.toString();
+    }
+  } catch {
+    // Ignore invalid URL values from artifact payloads
+  }
+  return null;
 }
 
 interface MermaidRendererProps {
@@ -452,6 +468,9 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
   >({});
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [draftById, setDraftById] = useState<Record<string, string>>({});
+  const [failedImageArtifacts, setFailedImageArtifacts] = useState<
+    Record<string, boolean>
+  >({});
 
   const viewMode = artifact
     ? (viewModeById[artifact.id] ?? getDefaultViewMode(artifact.type))
@@ -980,9 +999,14 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
       case "image": {
         const imageSrc = artifact.imageData
           ? `data:${artifact.mimeType || "image/png"};base64,${artifact.imageData}`
-          : artifact.content || null;
+          : artifact.imageUrl || artifact.content || null;
+        const sourceUrl = toExternalHttpUrl(
+          artifact.pageUrl || artifact.imageUrl || artifact.content,
+        );
+        const linkedUrl = toExternalHttpUrl(artifact.content);
+        const hasFailed = Boolean(failedImageArtifacts[artifact.id]);
 
-        if (!imageSrc) {
+        if (!imageSrc || hasFailed) {
           return (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
               <svg
@@ -998,7 +1022,43 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
                   d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
                 />
               </svg>
-              <span className="text-sm">Image loading...</span>
+              <span className="text-sm">
+                {hasFailed ? "Image failed to load" : "Image unavailable"}
+              </span>
+              <div className="flex items-center gap-3 text-xs">
+                {sourceUrl && (
+                  <a
+                    href={sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:text-primary/80 underline underline-offset-2"
+                  >
+                    Open source
+                  </a>
+                )}
+                {linkedUrl && linkedUrl !== sourceUrl && (
+                  <a
+                    href={linkedUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-muted-foreground hover:text-foreground underline underline-offset-2"
+                  >
+                    Open linked URL
+                  </a>
+                )}
+              </div>
+              {sourceUrl && (
+                <LinkPreview url={sourceUrl}>
+                  <a
+                    href={sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                  >
+                    Preview source
+                  </a>
+                </LinkPreview>
+              )}
             </div>
           );
         }
@@ -1008,6 +1068,12 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
               src={imageSrc}
               alt={artifact.altText || artifact.title}
               className="max-w-full max-h-[calc(100%-4rem)] object-contain rounded-lg shadow-lg"
+              onError={() => {
+                setFailedImageArtifacts((prev) => ({
+                  ...prev,
+                  [artifact.id]: true,
+                }));
+              }}
             />
             {(artifact.aspectRatio || artifact.resolution) && (
               <div className="flex items-center gap-3 text-sm text-muted-foreground">

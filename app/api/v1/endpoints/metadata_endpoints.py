@@ -5,10 +5,22 @@ Provides memory stats, quota status, and trace metadata for frontend transparenc
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import asyncio
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from functools import lru_cache
+import ipaddress
+import socket
+import threading
+import time
+from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urljoin, urlparse
 
-from fastapi import APIRouter, HTTPException, Depends, Path
+from bs4 import BeautifulSoup
+import httpx
+
+from fastapi import APIRouter, HTTPException, Depends, Path, Query
 from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user, User
@@ -17,6 +29,8 @@ from app.agents.unified.model_health import quota_tracker
 from app.core.config import coordinator_bucket_name
 from app.core.logging_config import get_logger
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
+from app.core.settings import settings
+from app.tools.research_tools import FirecrawlTool
 
 logger = get_logger("metadata_endpoints")
 router = APIRouter(prefix="/metadata", tags=["Metadata"])
@@ -100,6 +114,445 @@ class TraceMetadata(BaseModel):
     )
     token_count: Optional[int] = Field(None, description="Total tokens used")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+# Link preview endpoint models and helpers
+class LinkPreviewResponse(BaseModel):
+    """Normalized link-preview payload for chat/artifact hover cards."""
+
+    url: str = Field(..., description="Original request URL")
+    resolvedUrl: str = Field(..., description="Final URL after redirect resolution")
+    title: str | None = Field(None, description="Page title")
+    description: str | None = Field(None, description="Page description")
+    siteName: str | None = Field(None, description="Site name/hostname")
+    imageUrl: str | None = Field(None, description="OpenGraph image URL")
+    screenshotUrl: str | None = Field(
+        None, description="Rendered screenshot URL from screenshot provider"
+    )
+    mode: Literal["screenshot", "og", "fallback"] = Field(
+        ..., description="Primary preview mode used"
+    )
+    status: Literal["ok", "degraded"] = Field(
+        ..., description="Preview quality status"
+    )
+    retryable: bool = Field(
+        False,
+        description="Whether retrying later may improve this preview",
+    )
+
+
+_LINK_PREVIEW_METADATA_REQUEST_TIMEOUT_SECONDS = 6.0
+_LINK_PREVIEW_SCREENSHOT_REQUEST_TIMEOUT_SECONDS = 5.0
+_LINK_PREVIEW_METADATA_SOFT_TIMEOUT_SECONDS = 4.0
+_LINK_PREVIEW_SCREENSHOT_SOFT_TIMEOUT_SECONDS = 0.25
+_LINK_PREVIEW_MAX_REDIRECTS = 5
+_LINK_PREVIEW_MAX_HTML_BYTES = 350_000
+_LINK_PREVIEW_HEAD_SCAN_WINDOW_BYTES = 8192
+_LINK_PREVIEW_CACHE_TTL_SECONDS = 600
+_LINK_PREVIEW_HOST_CACHE_TTL_SECONDS = 300
+
+_PRIVATE_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
+
+_LINK_PREVIEW_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_LINK_PREVIEW_CACHE_LOCK = threading.Lock()
+_LINK_PREVIEW_HOST_IP_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
+_LINK_PREVIEW_HOST_IP_CACHE_LOCK = threading.Lock()
+
+
+@dataclass
+class _LinkPreviewMetadata:
+    resolved_url: str
+    title: str | None
+    description: str | None
+    site_name: str | None
+    image_url: str | None
+
+
+class _LinkPreviewFetchError(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        resolved_url: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.resolved_url = resolved_url
+
+
+def _fallback_metadata(url: str) -> _LinkPreviewMetadata:
+    site_name = _site_name_from_url(url)
+    return _LinkPreviewMetadata(
+        resolved_url=url,
+        title=site_name,
+        description="Preview unavailable right now.",
+        site_name=site_name,
+        image_url=None,
+    )
+
+
+def _resolve_hostname_ips(hostname: str) -> tuple[str, ...]:
+    now = time.monotonic()
+    with _LINK_PREVIEW_HOST_IP_CACHE_LOCK:
+        cached = _LINK_PREVIEW_HOST_IP_CACHE.get(hostname)
+        if cached:
+            expires_at, ip_values = cached
+            if expires_at > now:
+                return ip_values
+            _LINK_PREVIEW_HOST_IP_CACHE.pop(hostname, None)
+
+    infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC)
+    ips = tuple(sorted({info[4][0] for info in infos if info and info[4]}))
+    with _LINK_PREVIEW_HOST_IP_CACHE_LOCK:
+        _LINK_PREVIEW_HOST_IP_CACHE[hostname] = (
+            now + _LINK_PREVIEW_HOST_CACHE_TTL_SECONDS,
+            ips,
+        )
+    return ips
+
+
+async def _cancel_task(task: asyncio.Task[Any]) -> None:
+    if task.done():
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
+def _cache_key_for_preview(url: str) -> str:
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.netloc or "").lower()
+    path = parsed.path or "/"
+    query = parsed.query or ""
+    return f"{scheme}://{host}{path}?{query}"
+
+
+def _get_cached_link_preview(cache_key: str) -> dict[str, Any] | None:
+    now = time.monotonic()
+    with _LINK_PREVIEW_CACHE_LOCK:
+        hit = _LINK_PREVIEW_CACHE.get(cache_key)
+        if not hit:
+            return None
+        expires_at, payload = hit
+        if expires_at <= now:
+            _LINK_PREVIEW_CACHE.pop(cache_key, None)
+            return None
+        return dict(payload)
+
+
+def _store_cached_link_preview(cache_key: str, payload: dict[str, Any]) -> None:
+    with _LINK_PREVIEW_CACHE_LOCK:
+        _LINK_PREVIEW_CACHE[cache_key] = (
+            time.monotonic() + _LINK_PREVIEW_CACHE_TTL_SECONDS,
+            dict(payload),
+        )
+
+
+def _is_http_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _is_safe_public_url(url: str) -> tuple[bool, str]:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "Invalid URL format"
+
+    if parsed.scheme not in {"http", "https"}:
+        return False, f"Disallowed scheme: {parsed.scheme}"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "No hostname in URL"
+
+    lowered = hostname.lower()
+    if lowered in {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}:
+        return False, f"Blocked hostname: {hostname}"
+    if lowered in {"metadata.google.internal", "169.254.169.254"}:
+        return False, "Blocked cloud metadata endpoint"
+
+    try:
+        resolved_ips = _resolve_hostname_ips(hostname)
+    except socket.gaierror:
+        return False, f"Could not resolve hostname: {hostname}"
+    except Exception as exc:
+        return False, f"Hostname resolution failed: {exc}"
+
+    for ip_str in resolved_ips:
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        for network in _PRIVATE_NETWORKS:
+            if ip in network:
+                return False, f"Resolved to private IP: {ip}"
+
+    return True, ""
+
+
+def _resolve_redirect_url(base_url: str, location: str) -> str:
+    try:
+        return str(httpx.URL(base_url).join(location))
+    except Exception:
+        return urljoin(base_url, location)
+
+
+def _extract_meta_content(soup: BeautifulSoup, *keys: str) -> str | None:
+    for key in keys:
+        tag = soup.find("meta", property=key) or soup.find("meta", attrs={"name": key})
+        if not tag:
+            continue
+        value = (tag.get("content") or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _site_name_from_url(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").replace("www.", "") or url
+    except Exception:
+        return url
+
+
+def _extract_named_url(payload: Any, keys: set[str]) -> str | None:
+    queue: list[Any] = [payload]
+    while queue:
+        current = queue.pop(0)
+        if isinstance(current, dict):
+            for key, value in current.items():
+                normalized_key = str(key).lower().replace("_", "")
+                if normalized_key in keys and isinstance(value, str):
+                    candidate = value.strip()
+                    if _is_http_url(candidate):
+                        return candidate
+                if isinstance(value, (dict, list)):
+                    queue.append(value)
+        elif isinstance(current, list):
+            queue.extend(current)
+    return None
+
+
+@lru_cache(maxsize=1)
+def _link_preview_firecrawl_tool() -> FirecrawlTool:
+    return FirecrawlTool(api_key=settings.firecrawl_api_key)
+
+
+async def _attempt_screenshot_preview(url: str) -> str | None:
+    tool = _link_preview_firecrawl_tool()
+    if getattr(tool, "disabled", True):
+        return None
+
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                tool.scrape_with_options,
+                url,
+                formats=["screenshot"],
+                only_main_content=False,
+                max_age=3600,
+            ),
+            timeout=_LINK_PREVIEW_SCREENSHOT_REQUEST_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.debug("link_preview_screenshot_request_timeout", url=url)
+        return None
+    except Exception as exc:
+        logger.debug("link_preview_screenshot_attempt_failed", error=str(exc), url=url)
+        return None
+
+    if not isinstance(result, dict) or result.get("error"):
+        return None
+
+    screenshot_url = _extract_named_url(
+        result,
+        {"screenshot", "screenshoturl"},
+    )
+    if not screenshot_url:
+        return None
+
+    safe, reason = _is_safe_public_url(screenshot_url)
+    if not safe:
+        logger.warning(
+            "link_preview_screenshot_rejected",
+            screenshot_url=screenshot_url,
+            reason=reason,
+        )
+        return None
+    return screenshot_url
+
+
+async def _request_html_with_safe_redirects(
+    client: httpx.AsyncClient,
+    url: str,
+) -> tuple[str, bytes, str]:
+    current_url = url
+
+    for _ in range(_LINK_PREVIEW_MAX_REDIRECTS + 1):
+        safe, reason = _is_safe_public_url(current_url)
+        if not safe:
+            raise _LinkPreviewFetchError(
+                f"URL blocked for security reasons: {reason}",
+                retryable=False,
+                resolved_url=current_url,
+            )
+
+        try:
+            async with client.stream(
+                "GET",
+                current_url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+                    ),
+                    "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+                },
+                follow_redirects=False,
+            ) as response:
+                if 300 <= response.status_code < 400:
+                    location = (response.headers.get("location") or "").strip()
+                    if not location:
+                        raise _LinkPreviewFetchError(
+                            "Redirect missing location header",
+                            retryable=True,
+                            resolved_url=current_url,
+                        )
+                    current_url = _resolve_redirect_url(current_url, location)
+                    continue
+
+                if response.status_code >= 400:
+                    raise _LinkPreviewFetchError(
+                        f"Upstream returned HTTP {response.status_code}",
+                        retryable=response.status_code >= 500,
+                        resolved_url=current_url,
+                    )
+
+                chunks: list[bytes] = []
+                total = 0
+                head_window = b""
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
+                    remaining = _LINK_PREVIEW_MAX_HTML_BYTES - total
+                    if remaining <= 0:
+                        break
+                    clipped = chunk[:remaining]
+                    chunks.append(clipped)
+                    total += len(clipped)
+                    head_window = (head_window + clipped)[
+                        -_LINK_PREVIEW_HEAD_SCAN_WINDOW_BYTES :
+                    ]
+                    if b"</head>" in head_window.lower():
+                        break
+                    if total >= _LINK_PREVIEW_MAX_HTML_BYTES:
+                        break
+
+                body = b"".join(chunks)
+                content_type = (response.headers.get("content-type") or "").lower()
+                resolved_url = str(response.url) if response.url else current_url
+                return resolved_url, body, content_type
+
+        except _LinkPreviewFetchError:
+            raise
+        except httpx.TimeoutException as exc:
+            raise _LinkPreviewFetchError(
+                f"Timeout while fetching preview: {exc}",
+                retryable=True,
+                resolved_url=current_url,
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise _LinkPreviewFetchError(
+                f"Failed to fetch preview: {exc}",
+                retryable=True,
+                resolved_url=current_url,
+            ) from exc
+
+    raise _LinkPreviewFetchError(
+        "Too many redirects while resolving preview",
+        retryable=True,
+        resolved_url=current_url,
+    )
+
+
+async def _fetch_link_metadata(url: str) -> _LinkPreviewMetadata:
+    async with httpx.AsyncClient(
+        timeout=_LINK_PREVIEW_METADATA_REQUEST_TIMEOUT_SECONDS
+    ) as client:
+        resolved_url, raw_body, content_type = await _request_html_with_safe_redirects(
+            client, url
+        )
+
+    html_text = raw_body.decode("utf-8", errors="replace") if raw_body else ""
+    title: str | None = None
+    description: str | None = None
+    site_name: str | None = None
+    image_url: str | None = None
+
+    if html_text:
+        try:
+            soup = BeautifulSoup(html_text, "html.parser")
+            title = _extract_meta_content(soup, "og:title", "twitter:title")
+            if not title and soup.title and soup.title.string:
+                title = soup.title.string.strip()
+
+            description = _extract_meta_content(
+                soup,
+                "og:description",
+                "twitter:description",
+                "description",
+            )
+            site_name = _extract_meta_content(
+                soup,
+                "og:site_name",
+                "application-name",
+            )
+
+            raw_image = _extract_meta_content(
+                soup,
+                "og:image",
+                "twitter:image",
+                "twitter:image:src",
+            )
+            if raw_image:
+                candidate = _resolve_redirect_url(resolved_url, raw_image)
+                if _is_http_url(candidate):
+                    safe, _ = _is_safe_public_url(candidate)
+                    if safe:
+                        image_url = candidate
+        except Exception as exc:
+            logger.debug("link_preview_html_parse_failed", error=str(exc), url=url)
+
+    content_is_html = "text/html" in content_type or "application/xhtml" in content_type
+    if not content_is_html and not title:
+        title = _site_name_from_url(resolved_url)
+        description = "Preview metadata unavailable for this content type."
+
+    if not site_name:
+        site_name = _site_name_from_url(resolved_url)
+
+    return _LinkPreviewMetadata(
+        resolved_url=resolved_url,
+        title=title,
+        description=description,
+        site_name=site_name,
+        image_url=image_url,
+    )
 
 
 # ============================================
@@ -396,6 +849,172 @@ async def get_trace_metadata(
         raise HTTPException(
             status_code=500, detail=f"Failed to fetch trace metadata: {str(e)}"
         )
+
+
+# ============================================
+# Link Preview Endpoint
+# ============================================
+
+
+@router.get("/link-preview", response_model=LinkPreviewResponse)
+async def get_link_preview(
+    url: str = Query(..., description="External URL to preview"),
+    current_user: User = Depends(get_current_user),
+) -> LinkPreviewResponse:
+    """
+    Generate a safe link preview payload for chat and artifact link hovers.
+
+    Flow:
+    1. Validate URL with SSRF protections.
+    2. Attempt screenshot preview first.
+    3. Fetch OpenGraph/title metadata as fallback or enrichment.
+    4. Return degraded fallback shell when metadata cannot be fetched.
+    """
+    _ = current_user  # Required for authenticated access; value used by dependency.
+
+    candidate_url = (url or "").strip()
+    if not candidate_url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    if not _is_http_url(candidate_url):
+        raise HTTPException(
+            status_code=400,
+            detail="Only http/https URLs are supported for link previews",
+        )
+
+    safe, reason = _is_safe_public_url(candidate_url)
+    if not safe:
+        raise HTTPException(
+            status_code=400,
+            detail=f"URL blocked for security reasons: {reason}",
+        )
+
+    cache_key = _cache_key_for_preview(candidate_url)
+    cached = _get_cached_link_preview(cache_key)
+    if cached:
+        return LinkPreviewResponse(**cached)
+
+    started_at = time.perf_counter()
+    screenshot_task = asyncio.create_task(_attempt_screenshot_preview(candidate_url))
+    metadata_task = asyncio.create_task(_fetch_link_metadata(candidate_url))
+
+    screenshot_url: str | None = None
+    metadata_error: _LinkPreviewFetchError | None = None
+    metadata_timed_out = False
+    screenshot_timed_out = False
+
+    try:
+        metadata = await asyncio.wait_for(
+            metadata_task,
+            timeout=_LINK_PREVIEW_METADATA_SOFT_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        metadata_timed_out = True
+        await _cancel_task(metadata_task)
+        metadata = _fallback_metadata(candidate_url)
+        logger.info(
+            "link_preview_metadata_soft_timeout",
+            url=candidate_url,
+            timeout_seconds=_LINK_PREVIEW_METADATA_SOFT_TIMEOUT_SECONDS,
+        )
+    except _LinkPreviewFetchError as exc:
+        metadata_error = exc
+        logger.warning(
+            "link_preview_metadata_fetch_failed",
+            url=candidate_url,
+            error=str(exc),
+            retryable=exc.retryable,
+        )
+        fallback_resolved = exc.resolved_url or candidate_url
+        metadata = _fallback_metadata(fallback_resolved)
+
+    # Prioritize speed: if OG image is already available, do not block the response
+    # waiting for screenshot capture.
+    if metadata.image_url:
+        if screenshot_task.done():
+            try:
+                screenshot_url = screenshot_task.result()
+            except Exception as exc:
+                logger.debug(
+                    "link_preview_screenshot_join_failed",
+                    error=str(exc),
+                    url=candidate_url,
+                )
+        else:
+            screenshot_timed_out = True
+            await _cancel_task(screenshot_task)
+    else:
+        try:
+            screenshot_url = await asyncio.wait_for(
+                screenshot_task,
+                timeout=_LINK_PREVIEW_SCREENSHOT_SOFT_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            screenshot_timed_out = True
+            await _cancel_task(screenshot_task)
+            logger.debug(
+                "link_preview_screenshot_soft_timeout",
+                url=candidate_url,
+                timeout_seconds=_LINK_PREVIEW_SCREENSHOT_SOFT_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            await _cancel_task(screenshot_task)
+            logger.debug(
+                "link_preview_screenshot_join_failed",
+                error=str(exc),
+                url=candidate_url,
+            )
+
+    mode: Literal["screenshot", "og", "fallback"] = "fallback"
+    status: Literal["ok", "degraded"] = "degraded"
+
+    if screenshot_url:
+        mode = "screenshot"
+    elif metadata.image_url:
+        mode = "og"
+
+    metadata_fetch_ok = metadata_error is None and not metadata_timed_out
+    if metadata_fetch_ok or screenshot_url or metadata.image_url:
+        # Metadata-only previews are valid and should not show degraded banners.
+        status = "ok"
+    else:
+        status = "degraded"
+
+    retryable = (
+        status == "degraded"
+        and bool(
+            (metadata_error and metadata_error.retryable)
+            or metadata_timed_out
+            or screenshot_timed_out
+        )
+    )
+
+    payload = LinkPreviewResponse(
+        url=candidate_url,
+        resolvedUrl=metadata.resolved_url or candidate_url,
+        title=metadata.title,
+        description=metadata.description,
+        siteName=metadata.site_name,
+        imageUrl=metadata.image_url,
+        screenshotUrl=screenshot_url,
+        mode=mode,
+        status=status,
+        retryable=retryable,
+    )
+
+    _store_cached_link_preview(cache_key, payload.model_dump())
+    duration_ms = int((time.perf_counter() - started_at) * 1000)
+    logger.info(
+        "link_preview_mode_selected",
+        url=candidate_url,
+        mode=payload.mode,
+        status=payload.status,
+        retryable=payload.retryable,
+        duration_ms=duration_ms,
+        metadata_timed_out=metadata_timed_out,
+        screenshot_timed_out=screenshot_timed_out,
+    )
+    return payload
 
 
 # ============================================
