@@ -1,18 +1,29 @@
 "use client";
 
-import React, { memo, useState, useCallback, useEffect, useRef } from "react";
+import React, {
+  memo,
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+} from "react";
 import dynamic from "next/dynamic";
 import type { Message } from "@/services/ag-ui/client";
 import type { AttachmentInput } from "@/services/ag-ui/types";
-import type {
-  TraceStep,
-  TodoItem,
-  ToolEvidenceUpdateEvent,
-} from "@/services/ag-ui/event-types";
-import type { SubagentRun } from "@/features/librechat/AgentContext";
+import type { TodoItem } from "@/services/ag-ui/event-types";
+import type { WebSearchMode } from "@/features/librechat/AgentContext";
+import {
+  type PanelState,
+} from "@/features/librechat/panel-event-adapter";
+import {
+  coercePanelProvenanceV1,
+  coercePanelSnapshotV1,
+  coercePanelVersionsV1,
+  panelSnapshotToPanelState,
+  type PanelSnapshotVersionV1,
+} from "@/features/librechat/panel-snapshot";
 import { ThinkingPanel } from "./ThinkingPanel";
-import { ResearchProgress } from "./ResearchProgress";
-import { ToolIndicator } from "./ToolIndicator";
 import { Copy, Check, RefreshCw, Pencil } from "lucide-react";
 import { AttachmentPreviewList } from "@/features/librechat/components/AttachmentPreview";
 import { EnhancedMarkdown } from "@/features/librechat/components/EnhancedMarkdown";
@@ -34,15 +45,13 @@ interface MessageItemProps {
   isStreaming: boolean;
   sessionId?: string;
   attachments?: AttachmentInput[];
-  thinkingTrace?: TraceStep[];
-  activeTraceStepId?: string;
   activeTools?: string[];
   todos?: TodoItem[];
-  toolEvidence?: Record<string, ToolEvidenceUpdateEvent>;
-  subagentActivity?: Map<string, SubagentRun>;
+  panelState?: PanelState;
   researchProgress?: number;
   researchStatus?: ResearchStatus;
   isResearching?: boolean;
+  webSearchMode?: WebSearchMode;
   onEditMessage?: (messageId: string, content: string) => void;
   onRegenerate?: () => void;
 }
@@ -65,10 +74,30 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const EMPTY_ATTACHMENTS: AttachmentInput[] = [];
 const EMPTY_ACTIVE_TOOLS: string[] = [];
-const EMPTY_THINKING_TRACE: TraceStep[] = [];
 const EMPTY_TODOS: TodoItem[] = [];
-const EMPTY_TOOL_EVIDENCE: Record<string, ToolEvidenceUpdateEvent> = {};
-const EMPTY_SUBAGENT_ACTIVITY: Map<string, SubagentRun> = new Map();
+
+const withFallbackSnapshotVersion = (
+  snapshot: ReturnType<typeof coercePanelSnapshotV1>,
+  versions: PanelSnapshotVersionV1[],
+): PanelSnapshotVersionV1[] => {
+  if (!snapshot) return versions;
+  const hasEquivalentVersion = versions.some(
+    (version) =>
+      version.snapshot.runId === snapshot.runId &&
+      version.snapshot.updatedAt === snapshot.updatedAt,
+  );
+  if (hasEquivalentVersion) return versions;
+  const createdAt = snapshot.captured_at || snapshot.updatedAt;
+  return [
+    ...versions,
+    {
+      id: `version-${snapshot.runId}-${snapshot.updatedAt}`,
+      label: `Version ${versions.length + 1}`,
+      created_at: createdAt,
+      snapshot,
+    },
+  ];
+};
 
 function extractThinking(content: string): {
   thinking: string | null;
@@ -442,15 +471,13 @@ export const MessageItem = memo(function MessageItem({
   isStreaming,
   sessionId,
   attachments = EMPTY_ATTACHMENTS,
-  thinkingTrace,
-  activeTraceStepId,
   activeTools = EMPTY_ACTIVE_TOOLS,
   todos,
-  toolEvidence,
-  subagentActivity,
+  panelState,
   researchProgress = 0,
   researchStatus = "idle",
   isResearching = false,
+  webSearchMode,
   onEditMessage,
   onRegenerate,
 }: MessageItemProps) {
@@ -458,10 +485,7 @@ export const MessageItem = memo(function MessageItem({
   const [editContent, setEditContent] = useState("");
   const [isUserExpanded, setIsUserExpanded] = useState(false);
 
-  const effectiveThinkingTrace = thinkingTrace ?? EMPTY_THINKING_TRACE;
   const effectiveTodos = todos ?? EMPTY_TODOS;
-  const effectiveToolEvidence = toolEvidence ?? EMPTY_TOOL_EVIDENCE;
-  const effectiveSubagentActivity = subagentActivity ?? EMPTY_SUBAGENT_ACTIVITY;
   const metadata = isRecord(message.metadata) ? message.metadata : undefined;
   const isUserMessage = message.role === "user";
   const isToolMessage = message.role === "tool";
@@ -490,19 +514,80 @@ export const MessageItem = memo(function MessageItem({
   const displayContent = isUserMessage
     ? baseContent
     : stripInternalSearchPayloads(baseContent);
-  const { thinking, mainContent, hadThinking } =
-    extractThinking(displayContent);
+  const { mainContent, thinking, hadThinking } = extractThinking(displayContent);
   const showStreaming = isLast && isStreaming && !isUserMessage && !mainContent;
   const shouldRegisterArtifacts = !(isLast && isStreaming);
+  const persistedSnapshot = useMemo(
+    () => coercePanelSnapshotV1(metadata?.panel_snapshot_v1),
+    [metadata],
+  );
+  const persistedVersions = useMemo(
+    () =>
+      withFallbackSnapshotVersion(
+        persistedSnapshot,
+        coercePanelVersionsV1(metadata?.panel_versions_v1),
+      ),
+    [metadata, persistedSnapshot],
+  );
+  const [selectedPersistedVersionId, setSelectedPersistedVersionId] = useState<
+    string | undefined
+  >(undefined);
+  const selectedPersistedVersionIdSafe = useMemo(() => {
+    if (!persistedVersions.length) return undefined;
+    if (
+      selectedPersistedVersionId &&
+      persistedVersions.some((version) => version.id === selectedPersistedVersionId)
+    ) {
+      return selectedPersistedVersionId;
+    }
+    return persistedVersions[persistedVersions.length - 1]?.id;
+  }, [persistedVersions, selectedPersistedVersionId]);
+
+  const selectedPersistedSnapshot = useMemo(() => {
+    if (!persistedVersions.length) return persistedSnapshot;
+    const selected = selectedPersistedVersionIdSafe
+      ? persistedVersions.find(
+          (version) => version.id === selectedPersistedVersionIdSafe,
+        )
+      : undefined;
+    return (
+      selected?.snapshot ?? persistedVersions[persistedVersions.length - 1].snapshot
+    );
+  }, [persistedSnapshot, persistedVersions, selectedPersistedVersionIdSafe]);
+
+  const persistedPanelState: PanelState | undefined = useMemo(() => {
+    return selectedPersistedSnapshot
+      ? panelSnapshotToPanelState(selectedPersistedSnapshot)
+      : undefined;
+  }, [selectedPersistedSnapshot]);
+
+  const effectivePanelState =
+    isLast && isStreaming
+      ? panelState
+      : persistedPanelState ?? (isLast ? panelState : undefined);
+  const hasPanelObjectives = Boolean(
+    effectivePanelState &&
+      Object.keys(effectivePanelState.objectives).length > 0,
+  );
   const showThinking =
     !isUserMessage &&
-    (thinking ||
+    Boolean(effectivePanelState) &&
+    (hasPanelObjectives ||
       (isLast &&
-        (effectiveThinkingTrace.length > 0 ||
-          effectiveSubagentActivity.size > 0)));
-  const showResearchProgress =
-    isLast && !isUserMessage && (isResearching || researchStatus !== "idle");
-  const showToolIndicator = isLast && !isUserMessage && activeTools.length > 0;
+        (isStreaming ||
+          activeTools.length > 0 ||
+          effectiveTodos.length > 0 ||
+          isResearching ||
+          researchStatus !== "idle")));
+  const messageWebMode: WebSearchMode | undefined =
+    metadata?.web_search_mode === "on"
+      ? "on"
+      : metadata?.web_search_mode === "off"
+        ? "off"
+        : webSearchMode;
+  const panelProvenance = coercePanelProvenanceV1(metadata?.panel_provenance_v1);
+  const isPanelEdited = panelProvenance?.edited === true;
+  const showVersionSelector = !isUserMessage && persistedVersions.length > 1;
   const roleName = isUserMessage ? "You" : "Agent Sparrow";
 
   const derivedLogPayload = !isUserMessage
@@ -537,7 +622,16 @@ export const MessageItem = memo(function MessageItem({
         ? `Created artifact: ${artifactTitle}.`
         : "Log analysis complete. Open Technical details for per-file diagnostics.";
     }
-    return hadThinking ? mainContent : displayContent;
+    if (!hadThinking) {
+      return displayContent;
+    }
+    if (showThinking) {
+      return mainContent;
+    }
+    if (mainContent.trim()) {
+      return mainContent;
+    }
+    return thinking?.trim() || displayContent;
   })();
   const notesForDropdown =
     logAnalysisNotes ?? derivedLogPayload?.notes ?? fallbackNotes;
@@ -611,6 +705,35 @@ export const MessageItem = memo(function MessageItem({
             <div className="lc-agent-meta">
               <MessageAvatar role="assistant" />
               <span className="lc-agent-name">Agent Sparrow</span>
+              {isPanelEdited && (
+                <span className="lc-message-provenance-badge">Edited</span>
+              )}
+              {showVersionSelector && (
+                <label className="lc-panel-version-select-wrap">
+                  <span className="lc-sr-only">Reasoning version</span>
+                  <select
+                    className="lc-panel-version-select"
+                    value={selectedPersistedVersionIdSafe ?? ""}
+                    onChange={(event) =>
+                      setSelectedPersistedVersionId(event.target.value)
+                    }
+                    title="Reasoning snapshot version"
+                  >
+                    {persistedVersions.map((version) => (
+                      <option key={version.id} value={version.id}>
+                        {version.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {messageWebMode && (
+                <span
+                  className={`lc-web-mode-badge ${messageWebMode === "on" ? "on" : "off"}`}
+                >
+                  Web {messageWebMode === "on" ? "On" : "Off"}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -624,37 +747,21 @@ export const MessageItem = memo(function MessageItem({
           </div>
         )}
 
-        {showThinking && (
+        {showThinking && effectivePanelState && (
           <div className="lc-thinking-wrapper">
             <ThinkingPanel
-              thinking={thinking}
-              traceSteps={isLast ? effectiveThinkingTrace : undefined}
-              todos={isLast ? effectiveTodos : undefined}
-              toolEvidence={isLast ? effectiveToolEvidence : undefined}
-              activeStepId={isLast ? activeTraceStepId : undefined}
-              subagentActivity={isLast ? effectiveSubagentActivity : undefined}
+              key={`thinking-${sessionId ?? "session"}-${effectivePanelState.runId}-${message.id}-${selectedPersistedVersionIdSafe ?? "live"}`}
+              panelState={effectivePanelState}
               isStreaming={isLast && isStreaming}
+              sessionId={sessionId}
+              activeTools={isLast ? activeTools : undefined}
+              todos={isLast ? effectiveTodos : undefined}
+              researchProgress={researchProgress}
+              researchStatus={researchStatus}
+              webSearchMode={messageWebMode ?? "off"}
             />
-            {showResearchProgress && (
-              <ResearchProgress
-                progress={researchProgress}
-                status={researchStatus}
-                visible={showResearchProgress}
-                attached
-              />
-            )}
           </div>
         )}
-
-        {!showThinking && showResearchProgress && (
-          <ResearchProgress
-            progress={researchProgress}
-            status={researchStatus}
-            visible={showResearchProgress}
-          />
-        )}
-
-        {showToolIndicator && <ToolIndicator tools={activeTools} />}
 
         {!isUserMessage && (
           <div
@@ -685,6 +792,7 @@ export const MessageItem = memo(function MessageItem({
                   isLatestMessage={isLast && isStreaming}
                   messageId={message.id}
                   registerArtifacts={shouldRegisterArtifacts}
+                  enableLinkPreviews
                   variant="librechat"
                 />
                 {notesForDropdown ? (

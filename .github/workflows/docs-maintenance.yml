@@ -1,0 +1,64 @@
+name: Docs Maintenance
+
+on:
+  pull_request:
+    paths:
+      - "requirements.txt"
+      - "frontend/package.json"
+      - "app/core/config/models.yaml"
+      - "scripts/refresh_ref_docs.py"
+      - "scripts/validate_docs_consistency.py"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "docs/**/*.md"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "requirements.txt"
+      - "frontend/package.json"
+      - "app/core/config/models.yaml"
+      - "scripts/refresh_ref_docs.py"
+      - "scripts/validate_docs_consistency.py"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "docs/**/*.md"
+  schedule:
+    # Biweekly cadence (1st and 15th) to balance freshness with limited budgets.
+    - cron: "0 8 1,15 * *"
+  workflow_dispatch:
+
+jobs:
+  refresh-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lightweight tooling deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Regenerate docs artifacts
+        run: |
+          python scripts/refresh_ref_docs.py
+
+      - name: Validate docs consistency
+        env:
+          # CI-only dummy value for startup validation paths.
+          API_KEY_ENCRYPTION_SECRET: 0123456789abcdef0123456789abcdef
+          FORCE_PRODUCTION_SECURITY: "false"
+        run: |
+          python scripts/validate_docs_consistency.py
+
+      - name: Ensure generated docs are committed
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+        run: |
+          git diff --exit-code docs/model-catalog.md docs/dependency-watchlist.md

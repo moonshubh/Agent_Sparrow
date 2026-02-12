@@ -9,14 +9,19 @@ from app.agents.streaming.handler import StreamEventHandler
 
 class _FakeEmitter:
     def __init__(self) -> None:
+        self.root_id = "test-root"
         self.custom_events: list[dict[str, Any]] = []
         self.trace_steps: list[dict[str, Any]] = []
+        self.objective_hints: list[dict[str, Any]] = []
 
     def add_trace_step(self, **kwargs: Any) -> None:
         self.trace_steps.append(dict(kwargs))
 
     def emit_custom_event(self, _name: str, payload: dict[str, Any]) -> None:
         self.custom_events.append(payload)
+
+    def emit_objective_hint(self, **kwargs: Any) -> None:
+        self.objective_hints.append(dict(kwargs))
 
     def complete_root(self) -> None:  # pragma: no cover - not exercised
         return None
@@ -73,6 +78,12 @@ async def test_streaming_failure_returns_user_visible_overload_error(
     output = await handler.stream_and_process()
     assert isinstance(output, dict)
     assert "temporarily overloaded" in str(output.get("output", "")).lower()
+    assert fake_emitter.objective_hints
+    assert any(
+        hint.get("objective_id") == "phase:plan"
+        and hint.get("status") == "running"
+        for hint in fake_emitter.objective_hints
+    )
 
     system_bucket = (state.scratchpad or {}).get("_system") or {}
     failure = system_bucket.get("streaming_failure") or {}

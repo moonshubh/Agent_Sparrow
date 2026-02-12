@@ -1,1282 +1,720 @@
 "use client";
 
 import React, {
-  useState,
-  useMemo,
+  memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
-  memo,
+  useState,
 } from "react";
 import {
   AlertCircle,
-  Brain,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Circle,
-  Clock,
+  Compass,
   Database,
-  FileText,
-  Globe,
+  Eye,
+  EyeOff,
   ListChecks,
   Loader2,
   Search,
-  Users,
+  Sparkles,
+  Wrench,
+  Zap,
 } from "lucide-react";
-import type {
-  TraceStep,
-  TodoItem,
-  ToolEvidenceUpdateEvent,
-} from "@/services/ag-ui/event-types";
-import type { SubagentRun } from "@/features/librechat/AgentContext";
-import {
-  extractTodosFromPayload,
-  parseToolOutput,
-} from "@/features/librechat/utils";
 import { EnhancedMarkdown } from "./EnhancedMarkdown";
+import type { TodoItem, ToolEvidenceCard } from "@/services/ag-ui/event-types";
+import type {
+  PanelLane,
+  PanelObjective,
+  PanelObjectiveStatus,
+  PanelState,
+} from "@/features/librechat/panel-event-adapter";
+import { PANEL_PRIMARY_PHASE_ORDER } from "@/features/librechat/panel-event-adapter";
+import type { WebSearchMode } from "@/features/librechat/AgentContext";
+
+type ResearchStatus = "idle" | "running" | "stuck" | "failed";
+type PanelFilter = "all" | "active" | "thought" | "tool" | "todo" | "error";
 
 interface ThinkingPanelProps {
-  thinking: string | null;
-  traceSteps?: TraceStep[];
-  todos?: TodoItem[];
-  toolEvidence?: Record<string, ToolEvidenceUpdateEvent>;
-  activeStepId?: string;
-  subagentActivity?: Map<string, SubagentRun>;
+  panelState: PanelState;
   isStreaming?: boolean;
+  sessionId?: string;
+  activeTools?: string[];
+  todos?: TodoItem[];
+  researchProgress?: number;
+  researchStatus?: ResearchStatus;
+  webSearchMode?: WebSearchMode;
 }
 
-const MAX_ARG_LENGTH = 160;
-const MAX_DETAIL_LENGTH = 600;
-const DEFAULT_THOUGHT_PLACEHOLDER = "model reasoning";
-const INTERNAL_TOOL_NAMES = new Set(["write_todos", "trace_update"]);
-const SENSITIVE_TOOL_NAMES = new Set(["log_diagnoser", "log_diagnoser_tool"]);
-
-type TimelineKind = "thought" | "tool" | "todo" | "result";
-
-type TimelineItem = {
-  id: string;
-  kind: TimelineKind;
-  step?: TraceStep;
-  startStep?: TraceStep;
-  endStep?: TraceStep;
-  toolCallId?: string;
-  toolName?: string;
+interface ThinkingStickyRailProps {
+  panelState: PanelState;
+  isStreaming?: boolean;
   todos?: TodoItem[];
+  activeTools?: string[];
+  webSearchMode?: WebSearchMode;
+}
+
+const PANEL_FILTERS: ReadonlyArray<{
+  id: PanelFilter;
+  label: string;
+}> = [
+  { id: "all", label: "All" },
+  { id: "active", label: "Active" },
+  { id: "thought", label: "Thought" },
+  { id: "tool", label: "Tool" },
+  { id: "todo", label: "Todo" },
+  { id: "error", label: "Error" },
+];
+
+const clampText = (value: string, max: number): string =>
+  value.length > max ? `${value.slice(0, max).trimEnd()}...` : value;
+
+const statusLabel = (status: PanelObjectiveStatus): string => {
+  switch (status) {
+    case "pending":
+      return "Pending";
+    case "running":
+      return "Running";
+    case "done":
+      return "Done";
+    case "error":
+      return "Error";
+    case "unknown":
+      return "Unknown";
+    default:
+      return "Pending";
+  }
 };
 
-const normalizeWhitespace = (value: string): string =>
-  value.replace(/\s+/g, " ").trim();
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value);
-const stripThoughtMarkers = (value: string): string =>
-  value
-    .replace(/:::\s*(?:thinking|think|analysis|reasoning)\s*/gi, "")
-    .replace(/:::\s*/g, "")
-    .replace(/<\/?\s*(?:thinking|think|analysis|reasoning)\s*>/gi, "")
-    .trim();
-
-const hasMeaningfulThought = (step: TraceStep): boolean => {
-  if (step.type !== "thought") return false;
-  const raw = typeof step.content === "string" ? step.content : "";
-  const normalized = raw.replace(/^model reasoning[:\s]*/i, "").trim();
-  return Boolean(
-    normalized && normalized.toLowerCase() !== DEFAULT_THOUGHT_PLACEHOLDER,
-  );
+const statusIcon = (status: PanelObjectiveStatus): React.ReactNode => {
+  if (status === "error") return <AlertCircle size={12} />;
+  if (status === "running") return <Loader2 size={12} className="lc-spin" />;
+  if (status === "done") return <Sparkles size={12} />;
+  if (status === "unknown") return <Compass size={12} />;
+  return <Zap size={12} />;
 };
 
-const formatDuration = (duration?: number): string | null => {
-  if (typeof duration !== "number" || !Number.isFinite(duration)) return null;
-  if (duration < 1) return "<1s";
-  return `${Math.round(duration)}s`;
-};
-
-const formatDurationMs = (
-  startTime?: string,
-  endTime?: string,
-): string | null => {
-  if (!startTime) return null;
-  const start = new Date(startTime).getTime();
-  const end = endTime ? new Date(endTime).getTime() : Date.now();
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  const seconds = Math.max(0, (end - start) / 1000);
-  return formatDuration(seconds);
-};
-
-const formatToolArgs = (args: unknown): string | null => {
-  if (args === null || args === undefined) return null;
-  if (typeof args === "string") {
-    const trimmed = args.trim();
-    if (!trimmed) return null;
-    if (trimmed.startsWith("content=")) {
-      const parsed = parseToolOutput(trimmed);
-      if (Object.keys(parsed).length > 0) {
-        return formatToolArgs(parsed);
-      }
+const objectiveIcon = (objective: PanelObjective): React.ReactNode => {
+  if (objective.status === "error") {
+    return <AlertCircle size={14} className="lc-think-objective-icon-error" />;
+  }
+  if (objective.kind === "todo") {
+    return <ListChecks size={14} />;
+  }
+  if (objective.kind === "tool") {
+    const label = `${objective.title} ${objective.summary ?? ""}`.toLowerCase();
+    if (label.includes("search") || label.includes("web")) return <Search size={14} />;
+    if (label.includes("db") || label.includes("database")) {
+      return <Database size={14} />;
     }
-    if (
-      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-      (trimmed.startsWith("[") && trimmed.endsWith("]"))
-    ) {
-      try {
-        return formatToolArgs(JSON.parse(trimmed));
-      } catch {
-        return trimmed;
-      }
-    }
-    return trimmed;
+    return <Wrench size={14} />;
   }
-  if (typeof args === "number" || typeof args === "boolean")
-    return String(args);
-  if (Array.isArray(args)) {
-    if (args.length === 0) return null;
-    return formatToolArgs(args[0]) ?? JSON.stringify(args);
-  }
-  if (typeof args === "object") {
-    const record = args as Record<string, unknown>;
-    if (Array.isArray(record.todos)) {
-      return `${record.todos.length} todos`;
-    }
-    if (Array.isArray(record.items)) {
-      return `${record.items.length} items`;
-    }
-    if (record.update && typeof record.update === "object") {
-      const nested = formatToolArgs(record.update);
-      if (nested) return nested;
-    }
-    const preferredKeys = [
-      "query",
-      "q",
-      "path",
-      "file",
-      "url",
-      "id",
-      "name",
-      "prompt",
-      "title",
-      "content",
-      "text",
-    ];
-    for (const key of preferredKeys) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) {
-        const cleaned =
-          key === "path" ? value.split("/").pop() || value : value;
-        return cleaned.trim();
-      }
-      if (typeof value === "number" || typeof value === "boolean") {
-        return String(value);
-      }
-    }
-    const entries = Object.entries(record).filter(
-      ([, value]) => value !== undefined && value !== null,
-    );
-    if (entries.length === 1) {
-      const singleValue = entries[0][1];
-      if (typeof singleValue === "string") return singleValue;
-      if (typeof singleValue === "number" || typeof singleValue === "boolean")
-        return String(singleValue);
-    }
-    try {
-      return JSON.stringify(record);
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  return <Sparkles size={14} />;
 };
 
-const summarizeRetrievalPayload = (raw: unknown): string | null => {
-  const parsed = typeof raw === "string" ? parseToolOutput(raw) : raw;
-  if (!isRecord(parsed)) return null;
-  if (
-    !(
-      "retrieval_id" in parsed ||
-      "sources_searched" in parsed ||
-      "results" in parsed
-    )
-  )
-    return null;
-
-  const sourcesRaw = parsed.sources_searched;
-  const sources = Array.isArray(sourcesRaw)
-    ? sourcesRaw.filter(
-        (item): item is string =>
-          typeof item === "string" && Boolean(item.trim()),
-      )
-    : [];
-  const results = Array.isArray(parsed.results) ? parsed.results : [];
-
-  if (!sources.length && !results.length) return null;
-
-  const counts = results.reduce<Record<string, number>>((acc, item) => {
-    const source =
-      isRecord(item) && typeof item.source === "string" ? item.source : "other";
-    acc[source] = (acc[source] || 0) + 1;
-    return acc;
-  }, {});
-  const countsLine = Object.entries(counts)
-    .map(([source, count]) => `${source}: ${count}`)
-    .join(", ");
-  if (countsLine) return `Results: ${countsLine}`;
-  if (sources.length) return `Sources: ${sources.join(", ")}`;
-  return results.length ? `Results: ${results.length}` : null;
+const phaseLabel = (phase: string): string => {
+  if (!phase) return "Execute";
+  return phase.charAt(0).toUpperCase() + phase.slice(1);
 };
 
-const truncateLine = (value: string, maxLength: number) => {
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, maxLength)}...`;
+const matchesFilter = (objective: PanelObjective, filter: PanelFilter): boolean => {
+  switch (filter) {
+    case "all":
+      return true;
+    case "active":
+      return objective.status === "pending" || objective.status === "running";
+    case "thought":
+      return objective.kind === "thought";
+    case "tool":
+      return objective.kind === "tool";
+    case "todo":
+      return objective.kind === "todo";
+    case "error":
+      return objective.kind === "error" || objective.status === "error";
+    default:
+      return true;
+  }
 };
 
-const formatTodoLine = (
-  todo: Record<string, unknown>,
-  index: number,
-): string => {
-  const title =
-    typeof todo.title === "string"
-      ? todo.title
-      : typeof todo.content === "string"
-        ? todo.content
-        : typeof todo.name === "string"
-          ? todo.name
-          : typeof todo.task === "string"
-            ? todo.task
-            : `Todo ${index + 1}`;
-  const status =
-    typeof todo.status === "string" ? todo.status.replace(/_/g, " ") : "";
-  const description =
-    typeof todo.description === "string" ? todo.description : "";
-  const statusSuffix = status ? ` (${status})` : "";
-  const descriptionSuffix = description ? ` - ${description}` : "";
-  return `${index + 1}. ${title}${statusSuffix}${descriptionSuffix}`;
-};
-
-const formatTodosBlock = (raw: unknown): string | null => {
-  const normalized = typeof raw === "string" ? parseToolOutput(raw) : raw;
-  const resolved =
-    normalized &&
-    typeof normalized === "object" &&
-    Object.keys(normalized).length > 0
-      ? normalized
-      : raw;
-  const todos = extractTodosFromPayload(resolved);
-  if (!Array.isArray(todos) || todos.length === 0) return null;
-  const lines = todos.map((todo, index) => {
-    const record =
-      typeof todo === "object" && todo !== null
-        ? (todo as Record<string, unknown>)
-        : { title: String(todo) };
-    return formatTodoLine(record, index);
-  });
-  return `Todos:\n${lines.join("\n")}`;
-};
-
-const extractErrorMessage = (raw: unknown): string | null => {
-  if (!raw) return null;
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    return trimmed ? trimmed : null;
-  }
-  if (typeof raw === "object") {
-    const record = raw as Record<string, unknown>;
-    const message = record.error ?? record.message ?? record.detail;
-    if (typeof message === "string" && message.trim()) return message.trim();
-  }
-  return null;
-};
-
-const getThoughtContent = (step: TraceStep): string => {
-  const rawContent =
-    typeof step.content === "string" ? stripThoughtMarkers(step.content) : "";
-  const metadata = (step.metadata ?? {}) as Record<string, unknown>;
-
-  const normalized = rawContent.replace(/^model reasoning[:\s]*/i, "").trim();
-  if (normalized && normalized.toLowerCase() !== DEFAULT_THOUGHT_PLACEHOLDER) {
-    return rawContent;
-  }
-  return "";
-};
-
-const getStepToolName = (step: TraceStep): string | undefined => {
-  if (step.toolName) return step.toolName;
-  const metadata = (step.metadata ?? {}) as Record<string, unknown>;
-  const name = metadata.toolName ?? metadata.tool_name ?? metadata.name;
-  return typeof name === "string" ? name : undefined;
-};
-
-const getStepToolCallId = (step: TraceStep): string | undefined => {
-  const metadata = (step.metadata ?? {}) as Record<string, unknown>;
-  const id =
-    metadata.toolCallId ??
-    metadata.tool_call_id ??
-    metadata.tool_callId ??
-    metadata.toolId ??
-    metadata.id;
-  return typeof id === "string" ? id : undefined;
-};
-
-const humanizeToolName = (name?: string): string => {
-  if (!name) return "";
-  return normalizeWhitespace(name.replace(/[_-]+/g, " "));
-};
-
-const getToolIcon = (step: TraceStep): React.ReactNode => {
-  if (step.status === "error")
-    return <AlertCircle className="text-red-400" size={14} />;
-
-  const toolName = (getStepToolName(step) || "").toLowerCase();
-  if (toolName.includes("read") || toolName.includes("file")) {
-    return <FileText className="text-blue-400" size={14} />;
-  }
-  if (
-    toolName.includes("search") ||
-    toolName.includes("tavily") ||
-    toolName.includes("google") ||
-    toolName.includes("firecrawl")
-  ) {
-    return <Globe className="text-green-400" size={14} />;
-  }
-  if (
-    toolName.includes("sql") ||
-    toolName.includes("db") ||
-    toolName.includes("database")
-  ) {
-    return <Database className="text-amber-400" size={14} />;
-  }
-  return <Search className="text-slate-400" size={14} />;
-};
-
-const getThoughtKindLabel = (step: TraceStep): string => {
-  const metadata = (step.metadata ?? {}) as Record<string, unknown>;
-  const kind =
-    typeof metadata.kind === "string" ? metadata.kind.toLowerCase() : "";
-  if (kind === "phase") return "Phase";
-  const source =
-    typeof metadata.source === "string" ? metadata.source.toLowerCase() : "";
-  if (source === "provider_reasoning" || source === "model_reasoning")
-    return "Model";
-  if (source === "narration") return "Narration";
-  return "Thought";
-};
-
-const getTimestampMs = (value?: string): number | null => {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const getItemTimestampMs = (item: TimelineItem): number | null => {
-  const step = item.step ?? item.startStep ?? item.endStep;
-  return getTimestampMs(step?.timestamp);
-};
-
-const getToolLabel = (step: TraceStep): string => {
-  const toolName = getStepToolName(step);
-  const toolNameValue = (toolName || "").toLowerCase();
-  const metadata = (step.metadata ?? {}) as Record<string, unknown>;
-  const rawArgs = metadata.input ?? metadata.args ?? metadata.arguments;
-  if (SENSITIVE_TOOL_NAMES.has(toolNameValue)) {
-    const argsRecord =
-      typeof rawArgs === "object" && rawArgs !== null
-        ? (rawArgs as Record<string, unknown>)
-        : null;
-    const fileName =
-      argsRecord && typeof argsRecord.file_name === "string"
-        ? argsRecord.file_name
-        : "";
-    return fileName ? `Analyzing log: ${fileName}` : "Analyzing attached logs";
-  }
-  const todoBlock = formatTodosBlock(rawArgs);
-  const argPreview = formatToolArgs(rawArgs);
-  const cleanedPreview =
-    argPreview && /^[{\[]/.test(argPreview.trim()) ? null : argPreview;
-  const lower = normalizeWhitespace(
-    `${toolName ?? step.content}`,
-  ).toLowerCase();
-  const parsedArgs = (() => {
-    if (!rawArgs) return null;
-    if (typeof rawArgs === "object") return rawArgs as Record<string, unknown>;
-    if (typeof rawArgs === "string") {
-      const trimmed = rawArgs.trim();
-      if (!trimmed) return null;
-      if (
-        (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-        (trimmed.startsWith("[") && trimmed.endsWith("]"))
-      ) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          return typeof parsed === "object" && parsed
-            ? (parsed as Record<string, unknown>)
-            : null;
-        } catch {
-          return null;
-        }
-      }
-    }
-    return null;
-  })();
-  if (toolNameValue === "task") {
-    const rawType = parsedArgs?.subagent_type ?? parsedArgs?.subagentType;
-    const rawTask =
-      parsedArgs?.description ?? parsedArgs?.task ?? parsedArgs?.prompt;
-    const subagentType =
-      typeof rawType === "string" && rawType.trim()
-        ? rawType.trim()
-        : "subagent";
-    const taskLabel =
-      typeof rawTask === "string" && rawTask.trim()
-        ? truncateLine(rawTask.trim(), 120)
-        : "";
-    const agentLabel = humanizeToolName(subagentType);
-    return taskLabel
-      ? `Delegating to ${agentLabel}: ${taskLabel}`
-      : `Delegating to ${agentLabel}`;
-  }
-
-  if (toolNameValue.includes("todo") || lower.includes("todo") || todoBlock) {
-    return "Updating todos";
-  }
-  if (
-    lower.includes("search") ||
-    lower.includes("tavily") ||
-    lower.includes("google") ||
-    lower.includes("firecrawl")
-  ) {
-    return `Searching web for "${cleanedPreview ?? "information"}"`;
-  }
-  if (lower.includes("read") || lower.includes("file")) {
-    return `Reading ${cleanedPreview ?? "file"}`;
-  }
-  if (
-    lower.includes("write") ||
-    lower.includes("edit") ||
-    lower.includes("update") ||
-    lower.includes("replace")
-  ) {
-    return `Updating ${cleanedPreview ?? "file"}`;
-  }
-  if (
-    lower.includes("sql") ||
-    lower.includes("db") ||
-    lower.includes("database")
-  ) {
-    return cleanedPreview
-      ? `Querying database for "${cleanedPreview}"`
-      : "Querying database";
-  }
-  if (toolName) {
-    const label = humanizeToolName(toolName);
-    return cleanedPreview ? `${label}: ${cleanedPreview}` : label;
-  }
-  return normalizeWhitespace(step.content || "Tool action");
-};
-
-const buildToolDetailLines = (
-  step: TraceStep,
-  evidence?: ToolEvidenceUpdateEvent | null,
+const sortObjectiveIds = (
+  objectiveIds: string[],
+  objectives: Record<string, PanelObjective>,
 ): string[] => {
-  const metadata = (step.metadata ?? {}) as Record<string, unknown>;
-  const toolName = (getStepToolName(step) || "").toLowerCase();
-  if (SENSITIVE_TOOL_NAMES.has(toolName)) {
-    return [];
-  }
-  const rawInput = metadata.input ?? metadata.args ?? metadata.arguments;
-  const rawOutput =
-    metadata.output ?? metadata.result ?? metadata.data ?? metadata.value;
-  const detailLines: string[] = [];
-
-  if (evidence?.summary) {
-    detailLines.push(`Summary: ${evidence.summary}`);
-  }
-
-  if (typeof metadata.goal === "string" && metadata.goal.trim()) {
-    detailLines.push(
-      `Goal: ${truncateLine(metadata.goal.trim(), MAX_DETAIL_LENGTH)}`,
-    );
-  }
-
-  if (step.status === "error") {
-    const errorMessage = extractErrorMessage(metadata.error ?? rawOutput);
-    if (errorMessage) {
-      detailLines.push(
-        `Error: ${truncateLine(errorMessage, MAX_DETAIL_LENGTH)}`,
-      );
-    }
-  }
-
-  const todoOutput = formatTodosBlock(rawOutput) || formatTodosBlock(rawInput);
-  if (todoOutput) {
-    detailLines.push(todoOutput);
-  } else {
-    const retrievalSummary =
-      summarizeRetrievalPayload(rawOutput) ||
-      summarizeRetrievalPayload(rawInput);
-    if (retrievalSummary) {
-      detailLines.push(retrievalSummary);
-      return detailLines;
-    }
-
-    const inputLine = formatToolArgs(rawInput);
-    if (inputLine) {
-      detailLines.push(
-        `Input: ${truncateLine(normalizeWhitespace(inputLine), MAX_ARG_LENGTH)}`,
-      );
-    }
-
-    const outputLine = formatToolArgs(rawOutput);
-    if (outputLine) {
-      detailLines.push(
-        `Output: ${truncateLine(normalizeWhitespace(outputLine), MAX_ARG_LENGTH)}`,
-      );
-    }
-  }
-
-  return detailLines;
+  return [...objectiveIds].sort((a, b) => {
+    const left = objectives[a];
+    const right = objectives[b];
+    const leftTs = Date.parse(left?.updatedAt ?? left?.startedAt ?? "") || 0;
+    const rightTs = Date.parse(right?.updatedAt ?? right?.startedAt ?? "") || 0;
+    return leftTs - rightTs;
+  });
 };
 
-const getToolStatus = (item: TimelineItem): "running" | "done" | "error" => {
-  const step = item.endStep ?? item.startStep ?? item.step;
-  if (step?.status === "error") return "error";
-  if (item.endStep) return "done";
-  return "running";
-};
-
-const getTodoProgress = (todos: TodoItem[]) => {
+const summarizeTodos = (todos: TodoItem[]): { done: number; total: number } => {
   const total = todos.length;
   const done = todos.filter((todo) => todo.status === "done").length;
   return { done, total };
 };
 
-const safeHost = (url?: string): string | null => {
-  if (!url) return null;
-  try {
-    const parsed = new URL(url);
-    return parsed.host;
-  } catch {
-    return null;
-  }
+const formatRelativeDuration = (start?: string, end?: string): string | null => {
+  if (!start) return null;
+  const startMs = Date.parse(start);
+  if (!Number.isFinite(startMs)) return null;
+  const endMs = end ? Date.parse(end) : Date.now();
+  if (!Number.isFinite(endMs)) return null;
+  const seconds = Math.max(0, Math.round((endMs - startMs) / 1000));
+  if (seconds < 1) return "<1s";
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  return rem ? `${mins}m ${rem}s` : `${mins}m`;
 };
 
-const buildTimelineItems = (steps: TraceStep[]): TimelineItem[] => {
-  const items: TimelineItem[] = [];
-  const toolItems = new Map<string, TimelineItem>();
+const ensureSummary = (objective: PanelObjective): string => {
+  if (objective.summary?.trim()) return objective.summary.trim();
+  if (objective.detail?.trim()) return clampText(objective.detail.trim(), 180);
+  return objective.status === "running" ? "In progress" : "No summary yet";
+};
 
-  const pushToolItem = (step: TraceStep, toolCallId?: string) => {
-    const toolName = getStepToolName(step);
-    if (toolCallId && toolItems.has(toolCallId)) {
-      const existing = toolItems.get(toolCallId)!;
-      if (step.type === "result") {
-        existing.endStep = step;
-      } else {
-        existing.startStep = existing.startStep ?? step;
-      }
-      existing.toolName = existing.toolName ?? toolName;
-      return;
+const shouldRenderMarkdown = (objective: PanelObjective): boolean => {
+  if (objective.kind !== "thought") return false;
+  const detail = objective.detail ?? objective.summary;
+  if (!detail) return false;
+  const sample = detail.trim();
+  if (!sample) return false;
+  return /[#*_`\-\[\]\(\)]/.test(sample);
+};
+
+const hostForCard = (card: ToolEvidenceCard): string | null => {
+  if (typeof card.url === "string" && card.url.trim()) {
+    try {
+      return new URL(card.url).host;
+    } catch {
+      return null;
     }
+  }
+  if (typeof card.metadata?.host === "string" && card.metadata.host.trim()) {
+    return card.metadata.host;
+  }
+  return null;
+};
 
-    const item: TimelineItem = {
-      id: step.id,
-      kind: "tool",
-      startStep: step.type === "result" ? undefined : step,
-      endStep: step.type === "result" ? step : undefined,
-      toolCallId,
-      toolName,
-    };
-    if (toolCallId) {
-      toolItems.set(toolCallId, item);
+const groupObjectivesByPhase = (
+  lane: PanelLane,
+  objectives: Record<string, PanelObjective>,
+): Array<{ phase: string; objectiveIds: string[] }> => {
+  const sortedIds = sortObjectiveIds(lane.objectiveIds, objectives);
+  if (lane.id !== "primary") {
+    return [{ phase: "execute", objectiveIds: sortedIds }];
+  }
+
+  const byPhase = new Map<string, string[]>();
+  sortedIds.forEach((objectiveId) => {
+    const objective = objectives[objectiveId];
+    if (!objective) return;
+    const phase = objective.phase || "execute";
+    if (!byPhase.has(phase)) {
+      byPhase.set(phase, []);
     }
-    items.push(item);
-  };
-
-  steps.forEach((step) => {
-    if (step.type === "thought") {
-      items.push({ id: step.id, kind: "thought", step });
-      return;
-    }
-
-    const toolCallId = getStepToolCallId(step);
-    const toolName = getStepToolName(step);
-    const looksLikeTool = Boolean(
-      toolCallId || toolName || step.type === "action",
-    );
-
-    if (looksLikeTool) {
-      pushToolItem(step, toolCallId);
-      return;
-    }
-
-    if (step.type === "result") {
-      items.push({ id: step.id, kind: "result", step });
-      return;
-    }
-
-    items.push({ id: step.id, kind: "tool", startStep: step, toolName });
+    byPhase.get(phase)?.push(objectiveId);
   });
 
-  return items;
+  const sections: Array<{ phase: string; objectiveIds: string[] }> = [];
+  PANEL_PRIMARY_PHASE_ORDER.forEach((phase) => {
+    const ids = byPhase.get(phase) ?? [];
+    sections.push({ phase, objectiveIds: ids });
+  });
+
+  byPhase.forEach((ids, phase) => {
+    if (!PANEL_PRIMARY_PHASE_ORDER.includes(phase as (typeof PANEL_PRIMARY_PHASE_ORDER)[number])) {
+      sections.push({ phase, objectiveIds: ids });
+    }
+  });
+
+  return sections;
 };
 
-export const ThinkingPanel = memo(function ThinkingPanel({
-  thinking,
-  traceSteps = [],
-  todos = [],
-  toolEvidence = {},
-  activeStepId,
-  subagentActivity = new Map(),
+const readPersistedFilter = (storageKey: string): PanelFilter => {
+  if (typeof window === "undefined") return "all";
+  const stored = window.localStorage.getItem(storageKey);
+  if (!stored) return "all";
+  const normalized = stored.toLowerCase();
+  return PANEL_FILTERS.some((item) => item.id === normalized)
+    ? (normalized as PanelFilter)
+    : "all";
+};
+
+export const ThinkingStickyRail = memo(function ThinkingStickyRail({
+  panelState,
   isStreaming = false,
+  todos = [],
+  activeTools = [],
+  webSearchMode = "off",
+}: ThinkingStickyRailProps) {
+  const { done, total } = useMemo(() => summarizeTodos(todos), [todos]);
+  const runningTools = activeTools.length;
+  const runLabel = isStreaming
+    ? "Running"
+    : panelState.runStatus === "error"
+      ? "Issue detected"
+      : panelState.runStatus === "done"
+        ? "Completed"
+        : panelState.runStatus === "unknown"
+          ? "Limited"
+          : panelState.runStatus === "running"
+            ? "Running"
+            : "Ready";
+
+  return (
+    <div className="lc-thinking-rail">
+      <div className="lc-thinking-rail-main">
+        <span className={`lc-thinking-rail-dot ${isStreaming ? "active" : ""}`} />
+        <span className="lc-thinking-rail-status">{runLabel}</span>
+        <span className="lc-thinking-rail-divider" aria-hidden="true">
+          •
+        </span>
+        <span className="lc-thinking-rail-meta">
+          {total > 0 ? `${done}/${total} todos` : "No todos"}
+        </span>
+        {runningTools > 0 && (
+          <>
+            <span className="lc-thinking-rail-divider" aria-hidden="true">
+              •
+            </span>
+            <span className="lc-thinking-rail-meta">{runningTools} tool{runningTools === 1 ? "" : "s"}</span>
+          </>
+        )}
+      </div>
+      <span className={`lc-web-mode-badge ${webSearchMode === "on" ? "on" : "off"}`}>
+        Web {webSearchMode === "on" ? "On" : "Off"}
+      </span>
+    </div>
+  );
+});
+
+export const ThinkingPanel = memo(function ThinkingPanel({
+  panelState,
+  isStreaming = false,
+  sessionId,
+  activeTools = [],
+  todos = [],
+  researchProgress = 0,
+  researchStatus = "idle",
+  webSearchMode = "off",
 }: ThinkingPanelProps) {
-  const [isExpanded, setIsExpanded] = useState(() => isStreaming);
-  const [isTodoExpanded, setIsTodoExpanded] = useState(() => isStreaming);
-  const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(
+  const [isExpanded, setIsExpanded] = useState<boolean>(() => isStreaming);
+  const [expandedLaneIds, setExpandedLaneIds] = useState<Set<string>>(
+    () => new Set([panelState.activeLaneId]),
+  );
+  const [expandedObjectiveIds, setExpandedObjectiveIds] = useState<Set<string>>(
     new Set(),
   );
-  const [expandedSubagentIds, setExpandedSubagentIds] = useState<Set<string>>(
+  const [expandedEvidenceObjectiveIds, setExpandedEvidenceObjectiveIds] = useState<Set<string>>(
     new Set(),
   );
+  const [activeFilter, setActiveFilter] = useState<PanelFilter>(() =>
+    readPersistedFilter(`lc-thinking-filter:${sessionId ?? "global"}`),
+  );
+  const [autoFollow, setAutoFollow] = useState(true);
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const lastScrollTargetRef = useRef<string | undefined>(undefined);
 
-  const hasContent =
-    thinking ||
-    traceSteps.length > 0 ||
-    todos.length > 0 ||
-    subagentActivity.size > 0;
-
-  const mergedTraceSteps = useMemo(() => {
-    if (!thinking) return traceSteps;
-    if (traceSteps.some((step) => hasMeaningfulThought(step)))
-      return traceSteps;
-    const trimmed = thinking.trim();
-    if (!trimmed) return traceSteps;
-    const syntheticStep: TraceStep = {
-      id: "message-thinking",
-      type: "thought",
-      timestamp: new Date().toISOString(),
-      content: trimmed,
-      metadata: { source: "message_thinking" },
-    };
-    return [syntheticStep, ...traceSteps];
-  }, [thinking, traceSteps]);
-
-  const filteredTraceSteps = useMemo(() => {
-    return mergedTraceSteps.filter((step) => {
-      if (step.type === "thought") {
-        const metadata = (step.metadata ?? {}) as Record<string, unknown>;
-        const kind =
-          typeof metadata.kind === "string" ? metadata.kind.toLowerCase() : "";
-        const source =
-          typeof metadata.source === "string"
-            ? metadata.source.toLowerCase()
-            : "";
-        const content = getThoughtContent(step).trim();
-        if (kind === "phase") return Boolean(step.content?.trim());
-        if (content) return true;
-        // Hide placeholder thought steps created for model runs that never emitted reasoning.
-        return (
-          source === "narration" ||
-          source === "provider_reasoning" ||
-          source === "model_reasoning"
-        );
-      }
-
-      const toolName = (getStepToolName(step) || "").toLowerCase();
-      if (toolName && INTERNAL_TOOL_NAMES.has(toolName)) return false;
-      return true;
-    });
-  }, [mergedTraceSteps]);
-
-  const timelineItems = useMemo(
-    () => buildTimelineItems(filteredTraceSteps),
-    [filteredTraceSteps],
+  const filterStorageKey = useMemo(
+    () => `lc-thinking-filter:${sessionId ?? "global"}`,
+    [sessionId],
   );
-
-  const { done: todosDone, total: todosTotal } = useMemo(
-    () => getTodoProgress(todos),
-    [todos],
-  );
-  const todoPercent =
-    todosTotal > 0 ? Math.round((todosDone / todosTotal) * 100) : 0;
-
-  const subagentEntries = useMemo(() => {
-    const items = Array.from(subagentActivity.values());
-    return items.sort((a, b) => {
-      const aTime = new Date(a.startTime || 0).getTime();
-      const bTime = new Date(b.startTime || 0).getTime();
-      return aTime - bTime;
-    });
-  }, [subagentActivity]);
-  const runningSubagents = useMemo(
-    () => subagentEntries.filter((entry) => entry.status === "running").length,
-    [subagentEntries],
-  );
-
-  const activeItemId = useMemo(() => {
-    if (!activeStepId) return undefined;
-    const direct = timelineItems.find((item) => item.id === activeStepId);
-    if (direct) return direct.id;
-    const match = timelineItems.find(
-      (item) =>
-        item.kind === "tool" &&
-        (item.startStep?.id === activeStepId ||
-          item.endStep?.id === activeStepId),
-    );
-    return match?.id;
-  }, [activeStepId, timelineItems]);
-
-  const derivedThoughtDurations = useMemo(() => {
-    const durations = new Map<string, number>();
-    const streamingEndMs = isStreaming
-      ? getItemTimestampMs(
-          timelineItems[timelineItems.length - 1] ?? { id: "", kind: "result" },
-        )
-      : null;
-
-    for (let i = 0; i < timelineItems.length; i += 1) {
-      const item = timelineItems[i];
-      if (item.kind !== "thought" || !item.step) continue;
-      const startMs = getTimestampMs(item.step.timestamp);
-      if (startMs === null) continue;
-
-      let endMs: number | null = null;
-      for (let j = i + 1; j < timelineItems.length; j += 1) {
-        const candidateItem = timelineItems[j];
-        if (candidateItem.kind !== "thought") continue;
-        const candidate = getItemTimestampMs(candidateItem);
-        if (candidate !== null) {
-          endMs = candidate;
-          break;
-        }
-      }
-
-      const effectiveEnd = endMs ?? streamingEndMs;
-      if (effectiveEnd !== null && effectiveEnd > startMs) {
-        durations.set(item.id, (effectiveEnd - startMs) / 1000);
-      }
-    }
-
-    return durations;
-  }, [isStreaming, timelineItems]);
-
-  const scrollTargetId = useMemo(() => {
-    if (activeItemId) return activeItemId;
-    if (isStreaming) return timelineItems[timelineItems.length - 1]?.id;
-    return undefined;
-  }, [activeItemId, isStreaming, timelineItems]);
-
-  const expandedItemIdsForRender = useMemo(() => {
-    if (!isStreaming || !scrollTargetId) return expandedItemIds;
-    const next = new Set(expandedItemIds);
-    next.add(scrollTargetId);
-    return next;
-  }, [expandedItemIds, isStreaming, scrollTargetId]);
 
   useEffect(() => {
-    if (!isExpanded || !scrollTargetId) {
-      lastScrollTargetRef.current = undefined;
-      return;
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(filterStorageKey, activeFilter);
+  }, [activeFilter, filterStorageKey]);
+
+  const panelExpanded = isExpanded || isStreaming;
+
+  const expandedLaneIdsForRender = useMemo(() => {
+    if (!isStreaming) return expandedLaneIds;
+    const next = new Set(expandedLaneIds);
+    next.add(panelState.activeLaneId || "primary");
+    return next;
+  }, [expandedLaneIds, isStreaming, panelState.activeLaneId]);
+
+  const expandedObjectiveIdsForRender = useMemo(() => {
+    const next = new Set(expandedObjectiveIds);
+    Object.values(panelState.objectives)
+      .filter((objective) => objective.status === "error")
+      .forEach((objective) => next.add(objective.id));
+    return next;
+  }, [expandedObjectiveIds, panelState.objectives]);
+
+  const laneViewModels = useMemo(() => {
+    return panelState.laneOrder
+      .map((laneId) => panelState.lanes[laneId])
+      .filter((lane): lane is PanelLane => Boolean(lane))
+      .map((lane) => {
+        const groupedSections = groupObjectivesByPhase(lane, panelState.objectives)
+          .map((section) => ({
+            phase: section.phase,
+            objectiveIds: section.objectiveIds.filter((objectiveId) => {
+              const objective = panelState.objectives[objectiveId];
+              return objective ? matchesFilter(objective, activeFilter) : false;
+            }),
+          }))
+          .filter((section) => section.objectiveIds.length > 0);
+
+        return {
+          lane,
+          groupedSections,
+          visibleObjectiveCount: groupedSections.reduce(
+            (sum, section) => sum + section.objectiveIds.length,
+            0,
+          ),
+        };
+      })
+      .filter((entry) => entry.visibleObjectiveCount > 0);
+  }, [activeFilter, panelState.laneOrder, panelState.lanes, panelState.objectives]);
+
+  const hasContent = laneViewModels.length > 0 || todos.length > 0 || activeTools.length > 0;
+
+  const latestVisibleObjectiveId = useMemo(() => {
+    const visibleObjectives = laneViewModels.flatMap((laneEntry) =>
+      laneEntry.groupedSections.flatMap((section) => section.objectiveIds),
+    );
+    if (!visibleObjectives.length) return undefined;
+    return visibleObjectives[visibleObjectives.length - 1];
+  }, [laneViewModels]);
+
+  useEffect(() => {
+    if (!panelExpanded || !autoFollow) return;
+    const targetId = panelState.activeObjectiveId ?? latestVisibleObjectiveId;
+    if (!targetId) return;
+
+    const container = contentRef.current;
+    if (!container) return;
+
+    const safeTargetId =
+      typeof CSS !== "undefined" && typeof CSS.escape === "function"
+        ? CSS.escape(targetId)
+        : targetId;
+    const target = container.querySelector(
+      `[data-objective-id="${safeTargetId}"]`,
+    ) as HTMLElement | null;
+    if (!target) return;
+
+    requestAnimationFrame(() => {
+      target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }, [
+    autoFollow,
+    panelExpanded,
+    latestVisibleObjectiveId,
+    panelState.activeObjectiveId,
+    panelState.updatedAt,
+  ]);
+
+  const onContentScroll = useCallback(() => {
+    const container = contentRef.current;
+    if (!container) return;
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom > 36) {
+      setAutoFollow(false);
+    } else if (isStreaming) {
+      setAutoFollow(true);
     }
-    if (scrollTargetId === lastScrollTargetRef.current) return;
-    lastScrollTargetRef.current = scrollTargetId;
+  }, [isStreaming]);
 
-    const timeoutId = window.setTimeout(() => {
-      try {
-        const safeTargetId =
-          typeof CSS !== "undefined" && typeof CSS.escape === "function"
-            ? CSS.escape(scrollTargetId)
-            : scrollTargetId;
-        const el = contentRef.current?.querySelector(
-          `[data-step-id="${safeTargetId}"]`,
-        ) as HTMLElement | null;
-        const container = contentRef.current;
-        if (!el || !container) return;
-        const targetTop = el.offsetTop - container.clientHeight / 3;
-        container.scrollTop = Math.max(0, targetTop);
-      } catch {
-        // noop - selector can fail on unexpected IDs
-      }
-    }, 100);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [isExpanded, scrollTargetId]);
-
-  const toggleItem = useCallback((id: string) => {
-    setExpandedItemIds((prev) => {
+  const toggleLane = useCallback((laneId: string) => {
+    setExpandedLaneIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
+      if (next.has(laneId)) {
+        next.delete(laneId);
       } else {
-        next.add(id);
+        next.add(laneId);
       }
       return next;
     });
   }, []);
 
-  const toggleSubagent = useCallback((id: string) => {
-    setExpandedSubagentIds((prev) => {
+  const toggleObjective = useCallback((objectiveId: string) => {
+    setExpandedObjectiveIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
+      if (next.has(objectiveId)) {
+        next.delete(objectiveId);
       } else {
-        next.add(id);
+        next.add(objectiveId);
       }
       return next;
     });
   }, []);
+
+  const toggleEvidenceExpansion = useCallback((objectiveId: string) => {
+    setExpandedEvidenceObjectiveIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(objectiveId)) {
+        next.delete(objectiveId);
+      } else {
+        next.add(objectiveId);
+      }
+      return next;
+    });
+  }, []);
+
+  const { done: todosDone, total: todosTotal } = useMemo(() => summarizeTodos(todos), [todos]);
 
   if (!hasContent) return null;
 
   return (
-    <div className="lc-thinking">
-      <div
-        className="lc-thinking-header"
-        onClick={() => setIsExpanded(!isExpanded)}
-      >
-        <div className="lc-thinking-title">
-          <div
-            className={`lc-thinking-status-icon ${timelineItems.length > 0 ? "active" : ""}`}
-          >
-            {timelineItems.length > 0 ? (
-              <Clock size={16} />
-            ) : (
-              <Brain size={16} />
+    <section className="lc-think" aria-label="Reasoning panel">
+      <header className="lc-think-header">
+        <button
+          type="button"
+          className="lc-think-header-button"
+          onClick={() => setIsExpanded((prev) => !prev)}
+          aria-expanded={panelExpanded}
+        >
+          <span className="lc-think-header-left">
+            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            <span className="lc-think-header-title">Reasoning Timeline</span>
+            <span className="lc-think-header-meta">
+              {Object.keys(panelState.objectives).length} objectives
+            </span>
+          </span>
+          <span className={`lc-web-mode-badge ${webSearchMode === "on" ? "on" : "off"}`}>
+            Web {webSearchMode === "on" ? "On" : "Off"}
+          </span>
+        </button>
+      </header>
+
+      {panelExpanded && (
+        <>
+          <div className="lc-think-topline">
+            {researchStatus !== "idle" && (
+              <div className={`lc-think-research-pill ${researchStatus}`}>
+                <span className="lc-think-research-dot" />
+                <span>
+                  {researchStatus === "running"
+                    ? `Research ${Math.min(100, Math.max(0, Math.round(researchProgress)))}%`
+                    : researchStatus === "stuck"
+                      ? "Research delayed"
+                      : "Research failed"}
+                </span>
+              </div>
+            )}
+            {activeTools.length > 0 && (
+              <div className="lc-think-tool-strip" aria-label="Active tools">
+                {activeTools.map((tool, index) => (
+                  <span key={`${tool}-${index}`} className="lc-think-tool-pill">
+                    <Loader2 size={11} className="lc-spin" />
+                    {tool.replace(/[_-]+/g, " ")}
+                  </span>
+                ))}
+              </div>
+            )}
+            {todosTotal > 0 && (
+              <div className="lc-think-todo-pill">Todos {todosDone}/{todosTotal}</div>
             )}
           </div>
-          <span className="font-semibold text-sm">Progress Updates</span>
-          <span className="lc-thinking-count">
-            {timelineItems.length} steps
-          </span>
-          {subagentEntries.length > 0 && (
-            <span
-              className={`lc-subagent-pill ${runningSubagents > 0 ? "active" : ""}`}
-            >
-              <Users size={12} />
-              {runningSubagents > 0
-                ? `${runningSubagents} running`
-                : `${subagentEntries.length} total`}
-            </span>
-          )}
-        </div>
-        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-      </div>
 
-      {isExpanded && (
-        <div className="lc-thinking-content" ref={contentRef}>
-          {todosTotal > 0 && (
-            <div className="lc-todo-summary">
+          <div className="lc-think-filters" role="group" aria-label="Reasoning filters">
+            {PANEL_FILTERS.map((filter) => (
+              <button
+                key={filter.id}
+                type="button"
+                aria-pressed={activeFilter === filter.id}
+                className={`lc-think-filter-chip ${activeFilter === filter.id ? "active" : ""}`}
+                onClick={() => setActiveFilter(filter.id)}
+              >
+                {filter.label}
+              </button>
+            ))}
+            {!autoFollow && (
               <button
                 type="button"
-                className="lc-progress-row"
-                onClick={() => setIsTodoExpanded((prev) => !prev)}
-                aria-expanded={isTodoExpanded}
+                className="lc-think-follow-btn"
+                onClick={() => setAutoFollow(true)}
               >
-                <span className="lc-progress-row-left">
-                  {isTodoExpanded ? (
-                    <ChevronDown size={14} />
-                  ) : (
-                    <ChevronRight size={14} />
-                  )}
-                  <span className="lc-progress-icon">
-                    <ListChecks size={14} />
-                  </span>
-                  <span className="lc-progress-label">{`${todosDone}/${todosTotal} tasks done`}</span>
-                </span>
-                <span className="lc-progress-row-right">
-                  <span className="lc-progress-meta">{`${todoPercent}%`}</span>
-                </span>
+                <Eye size={12} />
+                Follow latest
               </button>
-              <div className="lc-todo-progress">
-                <div
-                  className="lc-todo-progress-fill"
-                  style={{ width: `${todoPercent}%` }}
-                />
-              </div>
-              {isTodoExpanded && (
-                <div className="lc-trace-box">
-                  <div className="lc-todo-list">
-                    {todos.map((todo) => {
-                      const status = todo.status || "pending";
-                      const statusIcon =
-                        status === "done" ? (
-                          <CheckCircle2 size={14} />
-                        ) : status === "in_progress" ? (
-                          <Loader2 size={14} className="lc-spin" />
-                        ) : (
-                          <Circle size={14} />
-                        );
-                      return (
-                        <div key={todo.id} className={`lc-todo-item ${status}`}>
-                          <span className="lc-todo-status">{statusIcon}</span>
-                          <span className="lc-todo-title">{todo.title}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          {subagentEntries.length > 0 && (
-            <div className="lc-subagent-section">
-              <div className="lc-subagent-header">
-                <div className="lc-subagent-title">
-                  <Users size={14} />
-                  <span>Agents</span>
-                </div>
-                <span className="lc-thinking-count">
-                  {subagentEntries.length} tasks
-                </span>
-              </div>
-              <div className="lc-progress-list">
-                {subagentEntries.map((subagent) => {
-                  const isOpen = expandedSubagentIds.has(subagent.toolCallId);
-                  const status = subagent.status;
-                  const statusLabel =
-                    status === "error"
-                      ? "Error"
-                      : status === "success"
-                        ? "Done"
-                        : "Running";
-                  const statusClass =
-                    status === "error"
-                      ? "error"
-                      : status === "success"
-                        ? "success"
-                        : "running";
-                  const statusIcon =
-                    status === "error" ? (
-                      <AlertCircle size={12} />
-                    ) : status === "success" ? (
-                      <CheckCircle2 size={12} />
-                    ) : (
-                      <Loader2 size={12} className="lc-spin" />
-                    );
-                  const durationLabel = formatDurationMs(
-                    subagent.startTime,
-                    subagent.endTime,
-                  );
-                  const metaLabel =
-                    durationLabel ||
-                    (status === "running" ? "In progress" : "Completed");
-                  const title =
-                    humanizeToolName(subagent.subagentType) ||
-                    subagent.subagentType ||
-                    "Subagent";
-                  const taskLine = subagent.task
-                    ? truncateLine(subagent.task, 280)
-                    : "";
-                  const thinkingLine = subagent.thinking
-                    ? truncateLine(subagent.thinking, 1200)
-                    : "";
-                  const excerptLine = subagent.excerpt
-                    ? truncateLine(subagent.excerpt, 600)
-                    : "";
-                  return (
-                    <div key={subagent.toolCallId} className="lc-progress-item">
-                      <button
-                        type="button"
-                        className="lc-progress-row"
-                        onClick={() => toggleSubagent(subagent.toolCallId)}
-                      >
-                        <span className="lc-progress-row-left">
-                          {isOpen ? (
-                            <ChevronDown size={14} />
-                          ) : (
-                            <ChevronRight size={14} />
-                          )}
-                          <span className="lc-progress-icon">
-                            <Users size={14} />
-                          </span>
-                          <span className="lc-progress-label">{title}</span>
-                        </span>
-                        <span className="lc-progress-row-right">
-                          <span className="lc-progress-meta">{metaLabel}</span>
-                          <span className={`lc-progress-badge ${statusClass}`}>
-                            {statusIcon}
-                            {statusLabel}
-                          </span>
-                        </span>
-                      </button>
-                      {isOpen && (
-                        <div className="lc-trace-box">
-                          <div className="lc-trace-lines mono">
-                            {taskLine && (
-                              <div className="lc-trace-line">
-                                Task: {taskLine}
-                              </div>
-                            )}
-                            {thinkingLine && (
-                              <div className="lc-trace-line">
-                                Thinking: {thinkingLine}
-                              </div>
-                            )}
-                            {excerptLine && (
-                              <div className="lc-trace-line">
-                                Result: {excerptLine}
-                              </div>
-                            )}
-                            {subagent.reportPath && (
-                              <div className="lc-trace-line">
-                                Report: {subagent.reportPath}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          <div className="lc-progress-list">
-            {timelineItems.map((item) => {
-              const isOpen = expandedItemIdsForRender.has(item.id);
-              const itemStep = item.step ?? item.endStep ?? item.startStep;
-              const toolCallId =
-                item.toolCallId ??
-                (itemStep ? getStepToolCallId(itemStep) : undefined);
-              const evidence = toolCallId
-                ? toolEvidence[toolCallId]
-                : undefined;
+            )}
+            {autoFollow && (
+              <span className="lc-think-follow-hint">
+                <EyeOff size={12} />
+                Auto-follow on
+              </span>
+            )}
+          </div>
 
-              if (item.kind === "thought" && itemStep) {
-                const thoughtContent = getThoughtContent(itemStep);
-                if (!thoughtContent.trim()) return null;
-                const derivedDuration = derivedThoughtDurations.get(item.id);
-                const durationSeconds = itemStep.duration ?? derivedDuration;
-                const durationLabel = formatDuration(durationSeconds);
-                const label = durationLabel
-                  ? `Thought for ${durationLabel}`
-                  : getThoughtKindLabel(itemStep);
-                const metaLabel =
-                  durationLabel ?? getThoughtKindLabel(itemStep);
-                return (
-                  <div
-                    key={item.id}
-                    className="lc-progress-item"
-                    data-step-id={item.id}
-                  >
-                    <button
-                      type="button"
-                      className="lc-progress-row"
-                      onClick={() => toggleItem(item.id)}
-                    >
-                      <span className="lc-progress-row-left">
-                        {isOpen ? (
-                          <ChevronDown size={14} />
-                        ) : (
-                          <ChevronRight size={14} />
-                        )}
-                        <span className="lc-progress-icon">
-                          <Brain size={14} />
-                        </span>
-                        <span className="lc-progress-label">{label}</span>
-                      </span>
-                      <span className="lc-progress-row-right">
-                        <span className="lc-progress-meta">{metaLabel}</span>
-                      </span>
-                    </button>
-                    {isOpen && (
-                      <div className="lc-trace-box">
-                        <EnhancedMarkdown
-                          content={thoughtContent}
-                          variant="librechat"
-                          messageId={item.id}
-                          registerArtifacts={false}
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              }
+          <div
+            className="lc-think-body"
+            ref={contentRef}
+            onScroll={onContentScroll}
+            role="region"
+            aria-label="Reasoning details"
+          >
+            {laneViewModels.map((laneEntry) => {
+              const { lane, groupedSections } = laneEntry;
+              const isLaneExpanded = expandedLaneIdsForRender.has(lane.id);
+              const laneObjectiveCount = groupedSections.reduce(
+                (sum, section) => sum + section.objectiveIds.length,
+                0,
+              );
 
-              if (item.kind === "tool") {
-                const toolStep = itemStep;
-                if (!toolStep) return null;
-                const labelStep = item.startStep ?? toolStep;
-                const toolLabel = getToolLabel(labelStep);
-                const detailStep = item.endStep ?? item.startStep ?? toolStep;
-                const toolDetailLines = buildToolDetailLines(
-                  detailStep,
-                  evidence,
-                );
-                const cards = evidence?.cards ?? [];
-                const toolStatus = getToolStatus(item);
-                const isError = toolStatus === "error";
-                const statusLabel = isError
-                  ? "Error"
-                  : toolStatus === "done"
-                    ? "Done"
-                    : "Running";
-                const statusClass = isError
-                  ? "error"
-                  : toolStatus === "done"
-                    ? "success"
-                    : "running";
-                const statusIcon = isError ? (
-                  <AlertCircle size={12} />
-                ) : toolStatus === "done" ? (
-                  <CheckCircle2 size={12} />
-                ) : (
-                  <Loader2 size={12} className="lc-spin" />
-                );
-                const isCollapsible =
-                  toolDetailLines.length > 0 || cards.length > 0;
-                return (
-                  <div
-                    key={item.id}
-                    className="lc-progress-item"
-                    data-step-id={item.id}
+              return (
+                <section key={lane.id} className="lc-think-lane">
+                  <button
+                    type="button"
+                    className="lc-think-lane-header"
+                    onClick={() => toggleLane(lane.id)}
+                    aria-expanded={isLaneExpanded}
                   >
-                    <div className="lc-progress-row">
-                      <span className="lc-progress-row-left">
-                        {isCollapsible ? (
-                          <button
-                            type="button"
-                            className="lc-progress-toggle"
-                            onClick={() => toggleItem(item.id)}
-                          >
-                            {isOpen ? (
-                              <ChevronDown size={14} />
-                            ) : (
-                              <ChevronRight size={14} />
-                            )}
-                          </button>
-                        ) : (
-                          <span className="lc-progress-toggle-placeholder" />
-                        )}
-                        <span className="lc-progress-icon">
-                          {getToolIcon(toolStep)}
-                        </span>
-                        <span className="lc-progress-label">{toolLabel}</span>
+                    <span className="lc-think-lane-left">
+                      {isLaneExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      <span className="lc-think-lane-title">{lane.title}</span>
+                    </span>
+                    <span className="lc-think-lane-right">
+                      <span className={`lc-think-status-pill ${lane.status}`}>
+                        {statusIcon(lane.status)}
+                        {statusLabel(lane.status)}
                       </span>
-                      <span className="lc-progress-row-right">
-                        <span className={`lc-progress-badge ${statusClass}`}>
-                          {statusIcon}
-                          {statusLabel}
-                        </span>
-                      </span>
-                    </div>
-                    {isCollapsible && isOpen && (
-                      <div className="lc-trace-box">
-                        {toolDetailLines.length > 0 && (
-                          <div className="lc-trace-lines mono">
-                            {toolDetailLines.map((line, idx) => (
-                              <div
-                                key={`${item.id}-line-${idx}`}
-                                className="lc-trace-line"
-                              >
-                                {line}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {cards.length > 0 && (
-                          <div className="lc-tool-cards">
-                            {cards.map((card, idx) => {
-                              const hostFromMetadata =
-                                typeof card.metadata?.host === "string"
-                                  ? card.metadata.host
-                                  : null;
-                              const host =
-                                safeHost(card.url) || hostFromMetadata;
-                              const title = card.title || `Result ${idx + 1}`;
-                              const snippet = card.snippet || "";
-                              const Wrapper: React.ElementType = card.url
-                                ? "a"
-                                : "div";
+                      <span className="lc-think-lane-count">{laneObjectiveCount}</span>
+                    </span>
+                  </button>
+
+                  {isLaneExpanded && (
+                    <div className="lc-think-lane-content">
+                      {groupedSections.map((section) => (
+                        <div key={`${lane.id}-${section.phase}`} className="lc-think-phase-block">
+                          <div className="lc-think-phase-label">{phaseLabel(section.phase)}</div>
+
+                          <div className="lc-think-objective-list">
+                            {section.objectiveIds.map((objectiveId) => {
+                              const objective = panelState.objectives[objectiveId];
+                              if (!objective) return null;
+
+                              const isObjectiveExpanded = expandedObjectiveIdsForRender.has(
+                                objective.id,
+                              );
+                              const summary = ensureSummary(objective);
+                              const cards = objective.evidenceCards ?? [];
+                              const cardsExpanded = expandedEvidenceObjectiveIds.has(objective.id);
+                              const visibleCards = cardsExpanded ? cards : cards.slice(0, 3);
+                              const duration = formatRelativeDuration(
+                                objective.startedAt,
+                                objective.endedAt,
+                              );
+
                               return (
-                                <Wrapper
-                                  key={`${item.id}-card-${idx}`}
-                                  className="lc-tool-card"
-                                  {...(card.url
-                                    ? {
-                                        href: card.url,
-                                        target: "_blank",
-                                        rel: "noreferrer",
-                                      }
-                                    : {})}
+                                <article
+                                  key={objective.id}
+                                  className={`lc-think-objective ${objective.status === "error" ? "error" : ""}`}
+                                  data-objective-id={objective.id}
                                 >
-                                  <div className="lc-tool-card-title">
-                                    {title}
-                                  </div>
-                                  {snippet && (
-                                    <div className="lc-tool-card-snippet">
-                                      {snippet}
+                                  <button
+                                    type="button"
+                                    className="lc-think-objective-head"
+                                    onClick={() => toggleObjective(objective.id)}
+                                    aria-expanded={isObjectiveExpanded}
+                                  >
+                                    <span className="lc-think-objective-head-left">
+                                      {isObjectiveExpanded ? (
+                                        <ChevronDown size={13} />
+                                      ) : (
+                                        <ChevronRight size={13} />
+                                      )}
+                                      <span className="lc-think-objective-icon">
+                                        {objectiveIcon(objective)}
+                                      </span>
+                                      <span className="lc-think-objective-title">{objective.title}</span>
+                                    </span>
+                                    <span className="lc-think-objective-head-right">
+                                      {duration && (
+                                        <span className="lc-think-duration">{duration}</span>
+                                      )}
+                                      <span className={`lc-think-status-pill ${objective.status}`}>
+                                        {statusIcon(objective.status)}
+                                        {statusLabel(objective.status)}
+                                      </span>
+                                    </span>
+                                  </button>
+
+                                  <div className="lc-think-objective-summary">{clampText(summary, 220)}</div>
+
+                                  {isObjectiveExpanded && (
+                                    <div className="lc-think-objective-detail">
+                                      {objective.detail && shouldRenderMarkdown(objective) ? (
+                                        <EnhancedMarkdown
+                                          content={objective.detail}
+                                          variant="librechat"
+                                          messageId={objective.id}
+                                          registerArtifacts={false}
+                                        />
+                                      ) : objective.detail ? (
+                                        <p>{objective.detail}</p>
+                                      ) : null}
+
+                                      {visibleCards.length > 0 && (
+                                        <div className="lc-think-evidence-list">
+                                          {visibleCards.map((card, idx) => {
+                                            const Wrapper: React.ElementType = card.url ? "a" : "div";
+                                            const host = hostForCard(card);
+                                            const title = card.title || `Evidence ${idx + 1}`;
+                                            const snippet = card.snippet || "";
+                                            return (
+                                              <Wrapper
+                                                key={`${objective.id}-card-${idx}`}
+                                                className="lc-think-evidence-card"
+                                                {...(card.url
+                                                  ? {
+                                                      href: card.url,
+                                                      target: "_blank",
+                                                      rel: "noreferrer",
+                                                    }
+                                                  : {})}
+                                              >
+                                                <div className="lc-think-evidence-title">{title}</div>
+                                                {snippet && (
+                                                  <div className="lc-think-evidence-snippet">{snippet}</div>
+                                                )}
+                                                {(host || card.type) && (
+                                                  <div className="lc-think-evidence-meta">
+                                                    {host || card.type}
+                                                  </div>
+                                                )}
+                                              </Wrapper>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+
+                                      {cards.length > 3 && (
+                                        <button
+                                          type="button"
+                                          className="lc-think-more-cards"
+                                          onClick={() => toggleEvidenceExpansion(objective.id)}
+                                        >
+                                          {cardsExpanded
+                                            ? "Show fewer evidence cards"
+                                            : `Show all ${cards.length} evidence cards`}
+                                        </button>
+                                      )}
                                     </div>
                                   )}
-                                  {(host || card.type) && (
-                                    <div className="lc-tool-card-meta">
-                                      {host || card.type}
-                                    </div>
-                                  )}
-                                </Wrapper>
+                                </article>
                               );
                             })}
                           </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              }
-
-              if (item.kind === "result" && itemStep) {
-                const isOpenable = Boolean(itemStep.content);
-                return (
-                  <div
-                    key={item.id}
-                    className="lc-progress-item"
-                    data-step-id={item.id}
-                  >
-                    <div className="lc-progress-row">
-                      <span className="lc-progress-row-left">
-                        {isOpenable ? (
-                          <button
-                            type="button"
-                            className="lc-progress-toggle"
-                            onClick={() => toggleItem(item.id)}
-                          >
-                            {isOpen ? (
-                              <ChevronDown size={14} />
-                            ) : (
-                              <ChevronRight size={14} />
-                            )}
-                          </button>
-                        ) : (
-                          <span className="lc-progress-toggle-placeholder" />
-                        )}
-                        <span className="lc-progress-icon">
-                          <CheckCircle2 size={14} />
-                        </span>
-                        <span className="lc-progress-label">
-                          Final response ready
-                        </span>
-                      </span>
-                      <span className="lc-progress-row-right">
-                        <span className="lc-progress-meta">Result</span>
-                      </span>
+                        </div>
+                      ))}
                     </div>
-                    {isOpen && itemStep.content && (
-                      <div className="lc-trace-box">
-                        <EnhancedMarkdown
-                          content={itemStep.content}
-                          variant="librechat"
-                          messageId={item.id}
-                          registerArtifacts={false}
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              }
-
-              return null;
+                  )}
+                </section>
+              );
             })}
           </div>
-        </div>
+        </>
       )}
-    </div>
+    </section>
   );
 });
 

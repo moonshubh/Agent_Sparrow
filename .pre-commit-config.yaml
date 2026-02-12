@@ -1,0 +1,19 @@
+repos:
+  - repo: local
+    hooks:
+      - id: refresh-ref-docs
+        name: refresh-ref-docs
+        entry: python scripts/refresh_ref_docs.py
+        language: system
+        pass_filenames: false
+        require_serial: true
+        files: >-
+          ^(requirements\.txt|frontend/package\.json|app/core/config/models\.yaml|scripts/refresh_ref_docs\.py|docs/model-catalog\.md|docs/dependency-watchlist\.md)$
+      - id: docs-consistency
+        name: docs-consistency
+        entry: bash -c 'DOCS_VALIDATE_SKIP_ROUTE_IMPORT=1 python scripts/validate_docs_consistency.py'
+        language: system
+        pass_filenames: false
+        require_serial: true
+        files: >-
+          ^(AGENTS\.md|CLAUDE\.md|docs/.*\.md|app/main\.py|app/api/v1/.*\.py|app/integrations/zendesk/.*\.py|scripts/refresh_ref_docs\.py|scripts/validate_docs_consistency\.py)$

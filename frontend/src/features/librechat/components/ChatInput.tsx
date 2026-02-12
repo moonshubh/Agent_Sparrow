@@ -26,10 +26,19 @@ export function ChatInput({
   onInitialInputUsed,
   isLanding,
 }: ChatInputProps) {
-  const { sendMessage, isStreaming, abortRun } = useAgent();
+  const {
+    sendMessage,
+    isStreaming,
+    abortRun,
+    pendingPromptSteering,
+    resolvePromptSteering,
+    webSearchMode,
+    setWebSearchMode,
+  } = useAgent();
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<AttachmentInput[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [steeringCountdownMs, setSteeringCountdownMs] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastAppliedInitialInputRef = useRef<string | null>(null);
@@ -133,9 +142,25 @@ export function ChatInput({
     };
   }, []);
 
+  useEffect(() => {
+    if (!pendingPromptSteering) {
+      setSteeringCountdownMs(0);
+      return;
+    }
+    const updateCountdown = () => {
+      setSteeringCountdownMs(
+        Math.max(0, pendingPromptSteering.expiresAt - Date.now()),
+      );
+    };
+    updateCountdown();
+    const intervalId = window.setInterval(updateCountdown, 200);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [pendingPromptSteering]);
+
   const handleSubmit = useCallback(async () => {
     if (!input.trim() && attachments.length === 0) return;
-    if (isStreaming) return;
 
     const message = input.trim();
     const currentAttachments = [...attachments];
@@ -149,7 +174,7 @@ export function ChatInput({
     }
 
     await sendMessage(message, currentAttachments);
-  }, [input, attachments, isStreaming, sendMessage]);
+  }, [input, attachments, sendMessage]);
 
   const handleStop = useCallback(() => {
     abortRun();
@@ -159,12 +184,10 @@ export function ChatInput({
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (!isStreaming) {
-          handleSubmit();
-        }
+        handleSubmit();
       }
     },
-    [handleSubmit, isStreaming],
+    [handleSubmit],
   );
 
   const handleInputChange = useCallback(
@@ -173,6 +196,14 @@ export function ChatInput({
       resizeTextarea(e.currentTarget);
     },
     [resizeTextarea],
+  );
+
+  const handleWebModeChange = useCallback(
+    (e: ChangeEvent<HTMLSelectElement>) => {
+      const nextMode = e.target.value === "on" ? "on" : "off";
+      setWebSearchMode(nextMode);
+    },
+    [setWebSearchMode],
   );
 
   const handlePaste = useCallback(
@@ -314,6 +345,8 @@ export function ChatInput({
     fileInputRef.current?.click();
   }, []);
 
+  const steeringSeconds = Math.max(0, Math.ceil(steeringCountdownMs / 1000));
+
   return (
     <div
       className="lc-input-container"
@@ -321,6 +354,36 @@ export function ChatInput({
       aria-hidden={isLanding ? "true" : undefined}
     >
       <div className="lc-input-wrapper">
+        {pendingPromptSteering && (
+          <div className="lc-steering-banner" role="status" aria-live="polite">
+            <div className="lc-steering-banner-copy">
+              <strong>Continue this task or start a new topic?</strong>
+              <span>
+                {pendingPromptSteering.unresolvedCount > 0
+                  ? `${pendingPromptSteering.unresolvedCount} unresolved objective${pendingPromptSteering.unresolvedCount === 1 ? "" : "s"} detected.`
+                  : "The new prompt might be related to the current run."}{" "}
+                Auto-starting a new topic in {steeringSeconds}s.
+              </span>
+            </div>
+            <div className="lc-steering-banner-actions">
+              <button
+                type="button"
+                className="lc-steering-btn"
+                onClick={() => resolvePromptSteering("continue")}
+              >
+                Continue task
+              </button>
+              <button
+                type="button"
+                className="lc-steering-btn secondary"
+                onClick={() => resolvePromptSteering("new_topic")}
+              >
+                New topic
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Attachments preview */}
         {attachments.length > 0 && (
           <div style={{ marginBottom: "8px" }} aria-label="Attached files">
@@ -341,6 +404,19 @@ export function ChatInput({
           role="group"
           aria-label="Message input area"
         >
+          <div className="lc-web-mode-select-wrap">
+            <select
+              className="lc-web-mode-select"
+              value={webSearchMode}
+              onChange={handleWebModeChange}
+              aria-label="Web search mode"
+              title="Web search mode for this conversation"
+            >
+              <option value="off">Web Off</option>
+              <option value="on">Web On</option>
+            </select>
+          </div>
+
           {/* File attachment button */}
           <button
             className="lc-action-btn"
@@ -374,22 +450,22 @@ export function ChatInput({
             onPaste={handlePaste}
             wrap="soft"
             rows={1}
-            disabled={isStreaming}
             aria-label="Message input"
             aria-describedby="input-footer"
           />
 
           {/* Send/Stop button */}
-          {isStreaming ? (
-            <button
-              className="lc-send-btn lc-stop-btn"
-              onClick={handleStop}
-              aria-label="Stop generating response"
-              type="button"
-            >
-              <Square size={16} />
-            </button>
-          ) : (
+          <div className="lc-input-actions">
+            {isStreaming && (
+              <button
+                className="lc-send-btn lc-stop-btn"
+                onClick={handleStop}
+                aria-label="Stop generating response"
+                type="button"
+              >
+                <Square size={16} />
+              </button>
+            )}
             <button
               className="lc-send-btn"
               onClick={handleSubmit}
@@ -399,12 +475,19 @@ export function ChatInput({
             >
               <ArrowUp size={18} />
             </button>
-          )}
+          </div>
         </div>
 
         {/* Footer text */}
         <div id="input-footer" className="lc-input-footer">
-          Agent Sparrow can make mistakes. Please verify important information.
+          <span>
+            Agent Sparrow can make mistakes. Please verify important information.
+          </span>
+          <span
+            className={`lc-web-mode-badge ${webSearchMode === "on" ? "on" : "off"}`}
+          >
+            Next run: Web {webSearchMode === "on" ? "On" : "Off"}
+          </span>
         </div>
       </div>
     </div>

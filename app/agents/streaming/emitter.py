@@ -24,6 +24,7 @@ from .event_types import (
     AgentThinkingTraceEvent,
     AgentTimelineUpdateEvent,
     AgentTodosUpdateEvent,
+    ObjectiveHintUpdateEvent,
     TimelineOperation,
     TodoItem,
     ToolEvidenceUpdateEvent,
@@ -150,6 +151,7 @@ class StreamEventEmitter:
         self._subagent_thinking_buffer: Dict[str, str] = {}
         self._subagent_thinking_last_flush: Dict[str, float] = {}
         self._subagent_thinking_type: Dict[str, Optional[str]] = {}
+        self._objective_hint_fingerprints: Dict[str, str] = {}
 
     # -------------------------------------------------------------------------
     # Low-level emission
@@ -196,6 +198,65 @@ class StreamEventEmitter:
                 "data": sanitized_payload,
             }
         )
+
+    def emit_objective_hint(
+        self,
+        *,
+        run_id: str,
+        lane_id: str,
+        objective_id: str,
+        phase: str,
+        title: str,
+        status: str,
+        summary: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        subagent_type: Optional[str] = None,
+        started_at: Optional[str] = None,
+        ended_at: Optional[str] = None,
+    ) -> None:
+        """Emit additive objective_hint_update event with lightweight deduplication."""
+        normalized_phase = (
+            phase.lower().strip() if isinstance(phase, str) else "execute"
+        )
+        if normalized_phase not in {"plan", "gather", "execute", "synthesize"}:
+            normalized_phase = "execute"
+
+        normalized_status = (
+            status.lower().strip() if isinstance(status, str) else "unknown"
+        )
+        if normalized_status not in {"pending", "running", "done", "error", "unknown"}:
+            normalized_status = "unknown"
+
+        summary_value: Optional[str] = None
+        if isinstance(summary, str):
+            trimmed = summary.strip()
+            if trimmed:
+                summary_value = trimmed[:500]
+
+        payload = ObjectiveHintUpdateEvent(
+            run_id=run_id,
+            lane_id=lane_id,
+            objective_id=objective_id,
+            phase=normalized_phase,  # type: ignore[arg-type]
+            title=title.strip() if isinstance(title, str) and title.strip() else "Objective",
+            status=normalized_status,  # type: ignore[arg-type]
+            summary=summary_value,
+            tool_call_id=tool_call_id,
+            subagent_type=subagent_type,
+            started_at=started_at,
+            ended_at=ended_at,
+        ).to_dict()
+
+        fingerprint = (
+            f"{payload.get('status')}|{payload.get('summary') or ''}|"
+            f"{payload.get('startedAt') or ''}|{payload.get('endedAt') or ''}"
+        )
+        existing = self._objective_hint_fingerprints.get(objective_id)
+        if existing == fingerprint:
+            return
+        self._objective_hint_fingerprints[objective_id] = fingerprint
+
+        self.emit_custom_event("objective_hint_update", payload)
 
     def emit_tool_call_start(self, tool_call_id: str, tool_name: str) -> None:
         """Emit TOOL_CALL_START event."""
@@ -339,14 +400,6 @@ class StreamEventEmitter:
         if self.writer is None:
             return
 
-        # Warn if content is empty but images exist
-        if not content.strip() and images:
-            logger.warning(
-                "emit_article_artifact: empty content with images present. "
-                "Article will contain only embedded images."
-            )
-
-        # Early return only if BOTH content AND images are empty
         if not content.strip() and not images:
             logger.warning("emit_article_artifact: no content or images")
             return
@@ -356,41 +409,24 @@ class StreamEventEmitter:
         artifact_id = f"article-{uuid.uuid4().hex[:8]}"
         message_id = getattr(self, "_current_message_id", None) or f"msg-{self.root_id}"
 
-        # If images provided, append them to the content as markdown
-        if images:
-            # Only add separator if there's existing content
-            if content.strip():
-                image_section = "\n\n---\n\n## Images\n\n"
-            else:
-                # For image-only articles, start with a header
-                image_section = "# Generated Images\n\n"
-
-            for img in images:
-                alt = img.get("alt", "Image")
-                url = img.get("url", "")
-                if url:
-                    image_section += f"![{alt}]({url})\n\n"
-            content = content + image_section if content else image_section
-
         # Don't truncate article content; send raw payload for artifact rendering.
-        self.writer(
-            {
-                "event": "on_custom_event",
-                "name": "article_artifact",
-                "data": {
-                    "id": artifact_id,
-                    "type": "article",
-                    "title": title,
-                    "content": content,
-                    "messageId": message_id,
-                },
-            }
-        )
+        payload: Dict[str, Any] = {
+            "id": artifact_id,
+            "type": "article",
+            "title": title,
+            "content": content,
+            "messageId": message_id,
+        }
+        if images:
+            payload["images"] = images
+
+        self.emit_custom_event("article_artifact", payload, truncate=False)
         logger.info(
-            "emit_article_artifact: id={}, title={}, content_length={}",
+            "emit_article_artifact: id={}, title={}, content_length={}, images={}",
             artifact_id,
             title,
             len(content),
+            len(images or []),
         )
 
     # -------------------------------------------------------------------------

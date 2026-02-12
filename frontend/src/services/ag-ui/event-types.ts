@@ -209,6 +209,12 @@ export interface ArticleArtifactEvent {
   title: string;
   content: string;
   messageId: string;
+  images?: Array<{
+    url?: string;
+    alt?: string;
+    pageUrl?: string;
+    page_url?: string;
+  }>;
 }
 
 // -----------------------------------------------------------------------------
@@ -240,6 +246,32 @@ export interface SubagentThinkingDeltaEvent {
 }
 
 // -----------------------------------------------------------------------------
+// Objective Hint Types
+// -----------------------------------------------------------------------------
+
+export type ObjectiveHintPhase = "plan" | "gather" | "execute" | "synthesize";
+export type ObjectiveHintStatus =
+  | "pending"
+  | "running"
+  | "done"
+  | "error"
+  | "unknown";
+
+export interface ObjectiveHintUpdateEvent {
+  runId: string;
+  laneId: string;
+  objectiveId: string;
+  phase: ObjectiveHintPhase;
+  title: string;
+  status: ObjectiveHintStatus;
+  summary?: string;
+  toolCallId?: string;
+  subagentType?: string;
+  startedAt?: string;
+  endedAt?: string;
+}
+
+// -----------------------------------------------------------------------------
 // Union Type for All Custom Events
 // -----------------------------------------------------------------------------
 
@@ -257,7 +289,8 @@ export type AgentCustomEvent =
   | { name: "article_artifact"; value: ArticleArtifactEvent }
   | { name: "subagent_spawn"; value: SubagentSpawnEvent }
   | { name: "subagent_end"; value: SubagentEndEvent }
-  | { name: "subagent_thinking_delta"; value: SubagentThinkingDeltaEvent };
+  | { name: "subagent_thinking_delta"; value: SubagentThinkingDeltaEvent }
+  | { name: "objective_hint_update"; value: ObjectiveHintUpdateEvent };
 
 /**
  * Known AG-UI custom event names as const tuple for compile-time type derivation.
@@ -273,6 +306,7 @@ export const KNOWN_EVENT_NAMES = [
   "subagent_spawn",
   "subagent_end",
   "subagent_thinking_delta",
+  "objective_hint_update",
 ] as const;
 
 /**

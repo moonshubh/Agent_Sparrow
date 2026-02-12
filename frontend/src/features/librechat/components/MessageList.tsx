@@ -3,15 +3,12 @@
 import React, { useEffect, useRef, memo, useCallback } from "react";
 import type { Message } from "@/services/ag-ui/client";
 import { MessageItem } from "./MessageItem";
+import { ThinkingStickyRail } from "./ThinkingPanel";
 import { useAgent } from "../AgentContext";
 import { sessionsAPI } from "@/services/api/endpoints/sessions";
 import type { AttachmentInput } from "@/services/ag-ui/types";
-import type {
-  ToolEvidenceUpdateEvent,
-  TraceStep,
-  TodoItem,
-} from "@/services/ag-ui/event-types";
-import type { SubagentRun } from "@/features/librechat/AgentContext";
+import type { TodoItem } from "@/services/ag-ui/event-types";
+import { buildEditedProvenance } from "@/features/librechat/panel-snapshot";
 
 interface MessageListProps {
   messages: Message[];
@@ -21,10 +18,10 @@ interface MessageListProps {
 
 const EMPTY_ATTACHMENTS: AttachmentInput[] = [];
 const EMPTY_ACTIVE_TOOLS: string[] = [];
-const EMPTY_THINKING_TRACE: TraceStep[] = [];
 const EMPTY_TODOS: TodoItem[] = [];
-const EMPTY_TOOL_EVIDENCE: Record<string, ToolEvidenceUpdateEvent> = {};
-const EMPTY_SUBAGENT_ACTIVITY: Map<string, SubagentRun> = new Map();
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 function stableMessageKey(message: Message, index: number): string {
   if (message.id) return message.id;
@@ -51,29 +48,58 @@ export const MessageList = memo(function MessageList({
   isStreaming,
   sessionId,
 }: MessageListProps) {
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevLengthRef = useRef(messages.length);
+  const shouldAutoScrollRef = useRef(true);
   const {
     updateMessageContent,
+    updateMessageMetadata,
     regenerateLastResponse,
     resolvePersistedMessageId,
     messageAttachments,
-    thinkingTrace,
-    activeTraceStepId,
     activeTools,
     todos,
-    toolEvidence,
-    subagentActivity,
     researchProgress,
     researchStatus,
     isResearching,
+    panelState,
+    webSearchMode,
   } = useAgent();
+
+  const showStickyRail =
+    messages.length > 0 &&
+    (isStreaming ||
+      Object.keys(panelState.objectives).length > 0 ||
+      todos.length > 0);
+
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom < 48;
+  }, []);
 
   // Handle message edit - updates context immediately and persists to API
   const handleEditMessage = useCallback(
     async (messageId: string, content: string) => {
       // Update in context immediately for responsive UI
       updateMessageContent(messageId, content);
+      const targetMessage = messages.find((msg) => msg.id === messageId);
+      const metadata = isRecord(targetMessage?.metadata)
+        ? targetMessage.metadata
+        : undefined;
+      const panelProvenance = buildEditedProvenance({
+        existing: isRecord(metadata?.panel_provenance_v1)
+          ? metadata.panel_provenance_v1
+          : undefined,
+        editedAt: new Date().toISOString(),
+      });
+      const metadataPatch: Record<string, unknown> = {
+        panel_provenance_v1: panelProvenance,
+      };
+      updateMessageMetadata(messageId, metadataPatch);
 
       // Persist to backend if we have a session
       if (sessionId) {
@@ -86,14 +112,23 @@ export const MessageList = memo(function MessageList({
             );
             return;
           }
-          await sessionsAPI.updateMessage(sessionId, persistedId, content);
+          await sessionsAPI.updateMessage(sessionId, persistedId, {
+            content,
+            metadata: metadataPatch,
+          });
         } catch (error) {
           console.error("[MessageList] Failed to persist message edit:", error);
           // Note: We could add a toast notification here in the future
         }
       }
     },
-    [resolvePersistedMessageId, sessionId, updateMessageContent],
+    [
+      messages,
+      resolvePersistedMessageId,
+      sessionId,
+      updateMessageContent,
+      updateMessageMetadata,
+    ],
   );
 
   // Auto-scroll only when message count changes (not on every content update)
@@ -101,7 +136,7 @@ export const MessageList = memo(function MessageList({
     const lengthChanged = messages.length !== prevLengthRef.current;
     prevLengthRef.current = messages.length;
 
-    if (lengthChanged) {
+    if (lengthChanged && shouldAutoScrollRef.current) {
       // Use instant scroll during streaming for better UX, smooth otherwise
       messagesEndRef.current?.scrollIntoView({
         behavior: isStreaming ? "auto" : "smooth",
@@ -110,49 +145,62 @@ export const MessageList = memo(function MessageList({
   }, [messages.length, isStreaming]);
 
   return (
-    <div
-      className="lc-messages"
-      role="log"
-      aria-label="Chat messages"
-      aria-live="polite"
-    >
-      <div className="lc-messages-inner">
-        {messages.map((message, index) => {
-          const isLast = index === messages.length - 1;
-          const isLastAssistant = isLast && message.role === "assistant";
-          const attachments =
-            messageAttachments[message.id] ?? EMPTY_ATTACHMENTS;
-          return (
-            <MessageItem
-              key={stableMessageKey(message, index)}
-              message={message}
-              isLast={isLast}
+    <>
+      {showStickyRail && (
+        <div className="lc-thinking-rail-container" aria-live="off">
+          <div className="lc-messages-inner">
+            <ThinkingStickyRail
+              panelState={panelState}
               isStreaming={isStreaming}
-              sessionId={sessionId}
-              attachments={attachments}
-              thinkingTrace={isLast ? thinkingTrace : EMPTY_THINKING_TRACE}
-              activeTraceStepId={isLast ? activeTraceStepId : undefined}
-              activeTools={isLast ? activeTools : EMPTY_ACTIVE_TOOLS}
-              todos={isLast ? todos : EMPTY_TODOS}
-              toolEvidence={isLast ? toolEvidence : EMPTY_TOOL_EVIDENCE}
-              subagentActivity={
-                isLast ? subagentActivity : EMPTY_SUBAGENT_ACTIVITY
-              }
-              researchProgress={isLast ? researchProgress : 0}
-              researchStatus={isLast ? researchStatus : "idle"}
-              isResearching={isLast ? isResearching : false}
-              onEditMessage={handleEditMessage}
-              onRegenerate={
-                isLastAssistant && !isStreaming
-                  ? regenerateLastResponse
-                  : undefined
-              }
+              todos={todos}
+              activeTools={activeTools}
+              webSearchMode={webSearchMode}
             />
-          );
-        })}
-        <div ref={messagesEndRef} aria-hidden="true" />
+          </div>
+        </div>
+      )}
+      <div
+        ref={messagesContainerRef}
+        className="lc-messages"
+        role="log"
+        aria-label="Chat messages"
+        aria-live="polite"
+        onScroll={handleMessagesScroll}
+      >
+        <div className="lc-messages-inner">
+          {messages.map((message, index) => {
+            const isLast = index === messages.length - 1;
+            const isLastAssistant = isLast && message.role === "assistant";
+            const attachments =
+              messageAttachments[message.id] ?? EMPTY_ATTACHMENTS;
+            return (
+              <MessageItem
+                key={stableMessageKey(message, index)}
+                message={message}
+                isLast={isLast}
+                isStreaming={isStreaming}
+                sessionId={sessionId}
+                attachments={attachments}
+                activeTools={isLast ? activeTools : EMPTY_ACTIVE_TOOLS}
+                todos={isLast ? todos : EMPTY_TODOS}
+                panelState={isLast ? panelState : undefined}
+                researchProgress={isLast ? researchProgress : 0}
+                researchStatus={isLast ? researchStatus : "idle"}
+                isResearching={isLast ? isResearching : false}
+                webSearchMode={isLast ? webSearchMode : undefined}
+                onEditMessage={handleEditMessage}
+                onRegenerate={
+                  isLastAssistant && !isStreaming
+                    ? regenerateLastResponse
+                    : undefined
+                }
+              />
+            );
+          })}
+          <div ref={messagesEndRef} aria-hidden="true" />
+        </div>
       </div>
-    </div>
+    </>
   );
 });
 

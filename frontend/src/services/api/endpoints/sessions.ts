@@ -18,6 +18,12 @@ export interface ChatSessionListResponse {
   total_count?: number;
 }
 
+export interface ChatSessionUpdatePayload {
+  title?: string;
+  is_active?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
 export interface ChatMessagePayload {
   message_type: "user" | "assistant" | "system";
   agent_type?: AgentType;
@@ -79,12 +85,13 @@ export const sessionsAPI = {
   async create(
     agent_type: AgentType = "primary",
     title?: string,
+    metadata?: Record<string, unknown>,
     options?: RequestInit,
   ): Promise<ChatSession> {
     const normalizedTitle = title?.trim() || "New Chat";
     return apiClient.post<ChatSession>(
       `/api/v1/chat-sessions`,
-      { agent_type, title: normalizedTitle },
+      { agent_type, title: normalizedTitle, metadata },
       options,
     );
   },
@@ -93,8 +100,17 @@ export const sessionsAPI = {
     sessionId: string | number,
     title: string,
   ): Promise<ChatSession> {
-    return apiClient.put<ChatSession>(`/api/v1/chat-sessions/${sessionId}`, {
+    return sessionsAPI.update(sessionId, {
       title,
+    });
+  },
+
+  async update(
+    sessionId: string | number,
+    updates: ChatSessionUpdatePayload,
+  ): Promise<ChatSession> {
+    return apiClient.put<ChatSession>(`/api/v1/chat-sessions/${sessionId}`, {
+      ...updates,
     });
   },
 
