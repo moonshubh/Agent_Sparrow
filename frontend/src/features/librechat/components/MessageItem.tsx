@@ -514,7 +514,7 @@ export const MessageItem = memo(function MessageItem({
   const displayContent = isUserMessage
     ? baseContent
     : stripInternalSearchPayloads(baseContent);
-  const { mainContent, hadThinking } = extractThinking(displayContent);
+  const { mainContent, thinking, hadThinking } = extractThinking(displayContent);
   const showStreaming = isLast && isStreaming && !isUserMessage && !mainContent;
   const shouldRegisterArtifacts = !(isLast && isStreaming);
   const persistedSnapshot = useMemo(
@@ -622,7 +622,16 @@ export const MessageItem = memo(function MessageItem({
         ? `Created artifact: ${artifactTitle}.`
         : "Log analysis complete. Open Technical details for per-file diagnostics.";
     }
-    return hadThinking ? mainContent : displayContent;
+    if (!hadThinking) {
+      return displayContent;
+    }
+    if (showThinking) {
+      return mainContent;
+    }
+    if (mainContent.trim()) {
+      return mainContent;
+    }
+    return thinking?.trim() || displayContent;
   })();
   const notesForDropdown =
     logAnalysisNotes ?? derivedLogPayload?.notes ?? fallbackNotes;

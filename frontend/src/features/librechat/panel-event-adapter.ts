@@ -255,6 +255,35 @@ const stableHash = (value: string): string => {
   return hash.toString(16);
 };
 
+const hashUnknownForKey = (value: unknown): string => {
+  try {
+    return stableHash(JSON.stringify(value ?? null));
+  } catch {
+    return stableHash(String(value));
+  }
+};
+
+const buildTraceStepKey = (step: TraceStep): string =>
+  [
+    step.id,
+    step.timestamp,
+    step.type,
+    step.status ?? "",
+    step.toolName ?? "",
+    stableHash(step.content ?? ""),
+    hashUnknownForKey(step.metadata ?? null),
+  ].join(":");
+
+const buildTodosKey = (todos: TodoItem[]): string => {
+  const signature = todos
+    .map((todo) => {
+      const title = typeof todo.title === "string" ? todo.title.trim() : "";
+      return `${todo.id}:${todo.status}:${stableHash(title)}:${hashUnknownForKey(todo.metadata ?? null)}`;
+    })
+    .join("|");
+  return `${todos.length}:${stableHash(signature)}`;
+};
+
 const summarizeUnknown = (value: unknown): string => {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -970,20 +999,25 @@ const buildEventKey = (event: PanelAdapterEvent): string => {
     case "agent_thinking_trace": {
       const latest = event.value.latestStep;
       if (latest) {
-        return `agent_thinking_trace:${latest.id}:${latest.timestamp}:${latest.type}`;
+        return `agent_thinking_trace:${event.value.totalSteps}:${event.value.activeStepId ?? ""}:${buildTraceStepKey(
+          latest,
+        )}`;
       }
       if (Array.isArray(event.value.thinkingTrace) && event.value.thinkingTrace.length) {
-        const last = event.value.thinkingTrace[event.value.thinkingTrace.length - 1];
-        return `agent_thinking_trace:${last.id}:${last.timestamp}:${event.value.thinkingTrace.length}`;
+        const tailSignature = event.value.thinkingTrace
+          .slice(-3)
+          .map((step) => buildTraceStepKey(step))
+          .join("|");
+        return `agent_thinking_trace:${event.value.totalSteps}:${event.value.activeStepId ?? ""}:${event.value.thinkingTrace.length}:${stableHash(
+          tailSignature,
+        )}`;
       }
       return `agent_thinking_trace:${event.value.totalSteps}:${event.value.activeStepId ?? ""}`;
     }
     case "tool_evidence_update":
       return `tool_evidence_update:${event.value.toolCallId}:${event.value.summary ?? ""}:${event.value.cards?.length ?? 0}`;
     case "agent_todos_update":
-      return `agent_todos_update:${event.value.todos
-        .map((todo) => `${todo.id}:${todo.status}`)
-        .join("|")}`;
+      return `agent_todos_update:${buildTodosKey(event.value.todos)}`;
     case "agent_timeline_update":
       return `agent_timeline_update:${event.value.operations
         .map((operation) => `${operation.id}:${operation.status}`)
@@ -1001,9 +1035,7 @@ const buildEventKey = (event: PanelAdapterEvent): string => {
     case "tool_call_result":
       return `tool_call_result:${event.value.toolCallId ?? ""}:${event.value.timestamp ?? ""}:${event.value.status ?? ""}`;
     case "todos_snapshot":
-      return `todos_snapshot:${event.value.todos
-        .map((todo) => `${todo.id}:${todo.status}`)
-        .join("|")}`;
+      return `todos_snapshot:${buildTodosKey(event.value.todos)}`;
     default:
       return `${event.name}:${stableHash(JSON.stringify(event.value ?? ""))}`;
   }

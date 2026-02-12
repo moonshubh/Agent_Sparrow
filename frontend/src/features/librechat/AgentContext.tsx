@@ -1284,6 +1284,10 @@ export function AgentProvider({
   const pendingRegenerateSourceMessageIdRef = useRef<string | undefined>(
     undefined,
   );
+  const activeRunVersionSeedRef = useRef<PanelSnapshotVersionV1[] | null>(null);
+  const activeRunRegenerateSourceMessageIdRef = useRef<string | undefined>(
+    undefined,
+  );
   const toolNameByIdRef = useRef<Record<string, string>>({});
   const assistantPersistedRef = useRef(false);
   const lastPersistedAssistantIdBySessionRef = useRef<Record<string, string>>(
@@ -1343,6 +1347,8 @@ export function AgentProvider({
     pendingOverlapContextRef.current = null;
     pendingVersionSeedRef.current = null;
     pendingRegenerateSourceMessageIdRef.current = undefined;
+    activeRunVersionSeedRef.current = null;
+    activeRunRegenerateSourceMessageIdRef.current = undefined;
   }, [initialWebSearchMode, sessionId]);
 
   const setWebSearchMode = useCallback(
@@ -1702,6 +1708,11 @@ export function AgentProvider({
           attachments: pendingAttachments,
           overlapContext:
             relatedness === "related" ? unresolvedContext : undefined,
+          inheritedVersions: activeRunVersionSeedRef.current
+            ? [...activeRunVersionSeedRef.current]
+            : undefined,
+          regeneratedFromMessageId:
+            activeRunRegenerateSourceMessageIdRef.current,
         };
         setPendingPromptSteering(null);
         if (abortControllerRef.current) {
@@ -1721,6 +1732,9 @@ export function AgentProvider({
       pendingVersionSeedRef.current = null;
       const regeneratedFromMessageId = pendingRegenerateSourceMessageIdRef.current;
       pendingRegenerateSourceMessageIdRef.current = undefined;
+      activeRunVersionSeedRef.current =
+        inheritedPanelVersions.length > 0 ? [...inheritedPanelVersions] : null;
+      activeRunRegenerateSourceMessageIdRef.current = regeneratedFromMessageId;
 
       clearResearchTimer();
       researchProgressRef.current = 0;
@@ -3148,6 +3162,8 @@ export function AgentProvider({
             );
           }, 0);
         }
+        activeRunVersionSeedRef.current = null;
+        activeRunRegenerateSourceMessageIdRef.current = undefined;
       }
     },
     [
@@ -3182,6 +3198,11 @@ export function AgentProvider({
               choice === "continue"
                 ? pendingPromptSteering.unresolvedContext
                 : undefined,
+            inheritedVersions: activeRunVersionSeedRef.current
+              ? [...activeRunVersionSeedRef.current]
+              : undefined,
+            regeneratedFromMessageId:
+              activeRunRegenerateSourceMessageIdRef.current,
           }
         : null;
       setPendingPromptSteering(null);
@@ -3229,6 +3250,8 @@ export function AgentProvider({
     pendingOverlapContextRef.current = null;
     pendingVersionSeedRef.current = null;
     pendingRegenerateSourceMessageIdRef.current = undefined;
+    activeRunVersionSeedRef.current = null;
+    activeRunRegenerateSourceMessageIdRef.current = undefined;
     setPendingPromptSteering(null);
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
