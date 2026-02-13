@@ -1,7 +1,12 @@
 import { apiClient } from "@/services/api/api-client";
 
-export type Provider = "google" | "xai" | "openrouter";
+export type Provider = "google" | "xai" | "openrouter" | "minimax";
 export type AgentType = "primary" | "log_analysis";
+export type AgentMode =
+  | "general"
+  | "mailbird_expert"
+  | "research_expert"
+  | "creative_expert";
 export type ModelTier = "pro" | "standard" | "lite";
 
 export type ProviderModels = Partial<Record<Provider, string[]>>;
@@ -32,7 +37,8 @@ const FALLBACK_MODELS: Record<Provider, string[]> = {
     "gemini-2.5-flash-lite",
   ],
   xai: ["grok-4-1-fast-reasoning"],
-  openrouter: ["x-ai/grok-4.1-fast", "minimax/minimax-m2.1"],
+  openrouter: ["x-ai/grok-4.1-fast"],
+  minimax: ["minimax/MiniMax-M2.5"],
 };
 
 // Official model display names (from ai.google.dev & docs.x.ai)
@@ -45,7 +51,7 @@ const FALLBACK_DISPLAY_NAMES: Record<string, string> = {
   "grok-4-1-fast-reasoning": "Grok 4.1 Fast",
   // OpenRouter
   "x-ai/grok-4.1-fast": "Grok 4.1 Fast",
-  "minimax/minimax-m2.1": "MiniMax M2.1",
+  "minimax/MiniMax-M2.5": "MiniMax M2.5",
 };
 
 // Human-readable provider labels
@@ -53,6 +59,7 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
   google: "Google",
   xai: "xAI",
   openrouter: "OpenRouter",
+  minimax: "MiniMax",
 };
 
 // Cache TTL in milliseconds (5 minutes)
@@ -94,13 +101,17 @@ function normalizeModelsResponse(data: unknown): ProviderModels | null {
   const openrouter = Array.isArray(providers.openrouter)
     ? (providers.openrouter as string[])
     : undefined;
+  const minimax = Array.isArray(providers.minimax)
+    ? (providers.minimax as string[])
+    : undefined;
 
-  if (!google && !xai && !openrouter) return null;
+  if (!google && !xai && !openrouter && !minimax) return null;
 
   const result: ProviderModels = {};
   if (google && google.length) result.google = google;
   if (xai && xai.length) result.xai = xai;
   if (openrouter && openrouter.length) result.openrouter = openrouter;
+  if (minimax && minimax.length) result.minimax = minimax;
 
   return result;
 }
@@ -121,6 +132,7 @@ function normalizeProvidersResponse(
     google: Boolean(providers.google),
     xai: Boolean(providers.xai),
     openrouter: Boolean(providers.openrouter),
+    minimax: Boolean(providers.minimax),
   };
 }
 
@@ -129,9 +141,15 @@ export const modelsAPI = {
    * Fetch available models grouped by provider.
    * Only returns providers that have API keys configured on the backend.
    */
-  async list(agent: AgentType): Promise<ProviderModels> {
+  async list(
+    agent: AgentType,
+    agentMode: AgentMode = "general",
+  ): Promise<ProviderModels> {
     try {
-      const qs = new URLSearchParams({ agent_type: agent });
+      const qs = new URLSearchParams({
+        agent_type: agent,
+        agent_mode: agentMode,
+      });
       const res = await apiClient.get<unknown>(
         `/api/v1/models?${qs.toString()}`,
       );
@@ -142,6 +160,7 @@ export const modelsAPI = {
           google: FALLBACK_MODELS.google,
           xai: FALLBACK_MODELS.xai,
           openrouter: FALLBACK_MODELS.openrouter,
+          minimax: FALLBACK_MODELS.minimax,
         }
       );
     } catch (e: unknown) {
@@ -153,6 +172,7 @@ export const modelsAPI = {
         google: FALLBACK_MODELS.google,
         xai: FALLBACK_MODELS.xai,
         openrouter: FALLBACK_MODELS.openrouter,
+        minimax: FALLBACK_MODELS.minimax,
       };
     }
   },
@@ -164,7 +184,12 @@ export const modelsAPI = {
     try {
       const res = await apiClient.get<unknown>("/api/v1/providers");
       const normalized = normalizeProvidersResponse(res);
-      return normalized || { google: true, xai: false, openrouter: false };
+      return normalized || {
+        google: true,
+        xai: false,
+        openrouter: false,
+        minimax: false,
+      };
     } catch (e: unknown) {
       if (process.env.NODE_ENV === "development") {
         console.debug(
@@ -173,7 +198,7 @@ export const modelsAPI = {
         );
       }
       // Assume Google is always available as fallback
-      return { google: true, xai: false, openrouter: false };
+      return { google: true, xai: false, openrouter: false, minimax: false };
     }
   },
 
@@ -225,6 +250,7 @@ export const modelsAPI = {
           // Determine provider from model ID
           let provider: Provider = "google";
           if (id.startsWith("grok-")) provider = "xai";
+          else if (id.toLowerCase().includes("minimax")) provider = "minimax";
           else if (id.includes("/")) provider = "openrouter";
 
           return [
@@ -243,6 +269,7 @@ export const modelsAPI = {
         google: "gemini-3-flash-preview",
         xai: "grok-4-1-fast-reasoning",
         openrouter: "x-ai/grok-4.1-fast",
+        minimax: "minimax/MiniMax-M2.5",
       },
       fallback_chains: {
         google: {
@@ -254,11 +281,18 @@ export const modelsAPI = {
           "grok-4-1-fast-reasoning": null,
         },
         openrouter: {
-          "x-ai/grok-4.1-fast": "minimax/minimax-m2.1",
-          "minimax/minimax-m2.1": null,
+          "x-ai/grok-4.1-fast": null,
+        },
+        minimax: {
+          "minimax/MiniMax-M2.5": null,
         },
       },
-      available_providers: { google: true, xai: false, openrouter: false },
+      available_providers: {
+        google: true,
+        xai: false,
+        openrouter: false,
+        minimax: false,
+      },
     };
   },
 

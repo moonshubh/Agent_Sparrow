@@ -1863,7 +1863,7 @@ async def _summarize_ticket_with_llm(
     try:
         if is_minimax_available():
             model = build_chat_model(
-                "minimax", "minimax/MiniMax-M2.1", role="summarization"
+                "minimax", "minimax/MiniMax-M2.5", role="summarization"
             )
         else:
             model = build_summarization_model()

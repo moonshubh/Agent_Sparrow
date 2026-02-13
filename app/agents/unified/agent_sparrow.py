@@ -101,7 +101,7 @@ from app.agents.unified.message_preparation import MessagePreparer
 from app.agents.unified.session_cache import get_session_data
 
 from .model_router import ModelSelectionResult, model_router
-from .tools import get_registered_tools
+from .tools import get_registered_tools_for_mode
 from .attachment_processor import get_attachment_processor
 from .log_autoroute_middleware import LogAutorouteMiddleware
 from .name_sanitization_middleware import MessageNameSanitizationMiddleware
@@ -109,6 +109,11 @@ from .tool_call_id_sanitization_middleware import ToolCallIdSanitizationMiddlewa
 from .subagents import get_subagent_specs
 from .minimax_tools import is_minimax_available
 from .prompts import get_coordinator_prompt, get_current_utc_date, TODO_PROMPT
+from .agent_modes import (
+    DEFAULT_AGENT_MODE,
+    mode_allows_log_analysis,
+    resolve_agent_mode,
+)
 from .thread_state import (
     compute_tool_burst_signature,
     extract_thread_state_at_tool_burst,
@@ -153,6 +158,7 @@ PROVIDER_TOKEN_LIMITS: dict[str, int] = {
     "google": 50000,  # Gemini 3 Pro has 1M/min quota - keep very low
     "xai": 80000,  # Grok ~400K context → 80K summarization threshold
     "openrouter": 50000,  # OpenRouter 262K context → 50K summarization threshold
+    "minimax": 50000,  # MiniMax M2.5 coordinator via OpenAI-compatible transport
 }
 DEFAULT_TOKEN_LIMIT = 50000  # Conservative default for unknown providers
 
@@ -337,9 +343,10 @@ class AgentRuntimeConfig:
 def _normalize_runtime_overrides(state: GraphState) -> str:
     """Normalize provider/model overrides using models.yaml."""
     config = get_models_config()
-    allowed_providers = {"google", "xai", "openrouter"}
+    allowed_providers = {"google", "xai", "openrouter", "minimax"}
 
     provider = (state.provider or "").strip().lower()
+    requested_provider = provider
 
     if state.model:
         requested_model = str(state.model)
@@ -356,7 +363,11 @@ def _normalize_runtime_overrides(state: GraphState) -> str:
             logger.warning("unknown_model_override", model=state.model)
             state.model = None
         else:
-            provider = match.provider or provider
+            if requested_provider == "minimax" and "minimax" in state.model.lower():
+                # Preserve explicit MiniMax coordinator selection.
+                provider = "minimax"
+            else:
+                provider = match.provider or provider
 
     if provider not in allowed_providers:
         provider = "google"
@@ -394,7 +405,7 @@ def _resolve_runtime_config(state: GraphState) -> AgentRuntimeConfig:
             task_type=task_type,
         )
         config = get_models_config()
-        if provider in {"xai", "openrouter"}:
+        if provider in {"xai", "openrouter", "minimax"}:
             resolved_model = resolve_coordinator_config(config, provider).model_id
         else:
             resolved_model = model_router.select_model(
@@ -411,53 +422,69 @@ def _determine_task_type(state: GraphState) -> str:
     """Determine task type from state using fast keyword classification.
 
     Routing priority:
-    1. Fast keyword classification from message content (<5ms)
-    2. Attachment-based log detection (only if keywords didn't match, ~200ms)
+    1. Explicit tactical overrides (legacy `agent_type=log_analysis`) when mode permits
+    2. Fast keyword hints from message content (<5ms)
+    3. Attachment-based log detection for subagent hints (~200ms)
     3. Default to "coordinator"
     """
     forwarded_props = getattr(state, "forwarded_props", {}) or {}
+    explicit_mode = forwarded_props.get("agent_mode") or getattr(state, "agent_mode", None)
+    legacy_agent_type = forwarded_props.get("agent_type") or getattr(state, "agent_type", None)
+    effective_mode = resolve_agent_mode(
+        explicit_mode,
+        legacy_agent_type=legacy_agent_type,
+        default=DEFAULT_AGENT_MODE,
+    )
+    forwarded_props["agent_mode"] = effective_mode
+    state.forwarded_props = forwarded_props
+    state.agent_mode = effective_mode
+
+    explicit_agent_type = str(legacy_agent_type or "").strip().lower()
+    if explicit_agent_type == "log_analysis":
+        if mode_allows_log_analysis(effective_mode):
+            forwarded_props["task_detection_method"] = "explicit_override"
+            state.forwarded_props = forwarded_props
+            state.agent_type = "log_analysis"
+            logger.info(
+                "task_type_explicit_override",
+                task_type="log_analysis",
+                mode=effective_mode,
+            )
+            return "log_analysis"
+        logger.info(
+            "task_type_override_blocked_by_mode",
+            requested_task="log_analysis",
+            mode=effective_mode,
+        )
+        forwarded_props["blocked_agent_type_override"] = "log_analysis"
+        forwarded_props.pop("agent_type", None)
+        state.forwarded_props = forwarded_props
+        state.agent_type = None
 
     # 1. Fast path: keyword classification from user message (~5ms)
     user_message = _extract_last_user_message(state)
     fast_task = _fast_classify_task(user_message)
-
-    # If attachments are present, prefer attachment-based routing for log analysis.
-    # Attached logs are handled via deterministic tool calls, so we don't need to
-    # escalate to the heavy coordinator model just because the user used log-ish keywords.
     attachments = getattr(state, "attachments", []) or []
 
-    if fast_task == "log_analysis" and not attachments:
-        logger.info(
-            "task_type_fast_path", task_type="log_analysis", trigger="keyword_match"
-        )
-        forwarded_props["agent_type"] = "log_analysis"
+    # Hint-only classification for future routing/prompting (no mode switches).
+    if fast_task in {"log_analysis", "data_retrieval", "web_research"}:
+        forwarded_props["task_hint"] = fast_task
         forwarded_props["task_detection_method"] = "keyword"
-        state.forwarded_props = forwarded_props
-        state.agent_type = "log_analysis"
-        return "log_analysis"
 
-    # 2. Slow path: attachment-based detection (only if no keyword match, ~200ms)
-    # Skip if no attachments to avoid unnecessary processing
+    # 2. Attachment-based log detection is kept as an internal hint only.
     if attachments:
         detection = _attachments_indicate_logs(state)
         if detection.get("has_log"):
             logger.info(
-                "task_type_slow_path",
-                task_type="log_analysis",
-                trigger="attachment_scan",
+                "task_type_attachment_hint",
+                hint="log_analysis",
+                mode=effective_mode,
             )
-            forwarded_props["agent_type"] = "log_analysis"
             forwarded_props["log_detection"] = detection
+            forwarded_props["task_hint"] = "log_analysis"
             forwarded_props["task_detection_method"] = "attachment"
-            state.forwarded_props = forwarded_props
-            state.agent_type = "log_analysis"
-            # Use the standard coordinator model; per-file log analysis runs via tools.
-            return "coordinator"
 
-    # Hint-only classification for future routing/prompting (no model selection change).
-    if fast_task in {"data_retrieval", "web_research"}:
-        forwarded_props["task_hint"] = fast_task
-        state.forwarded_props = forwarded_props
+    state.forwarded_props = forwarded_props
 
     # 3. Default: coordinator
     return "coordinator"
@@ -510,6 +537,11 @@ async def _ensure_model_selection(state: GraphState) -> ModelSelectionResult:
             api_key_available = bool(settings.xai_api_key)
         elif provider_key == "openrouter":
             api_key_available = bool(getattr(settings, "openrouter_api_key", None))
+        elif provider_key == "minimax":
+            api_key_available = bool(
+                getattr(settings, "minimax_coding_plan_api_key", None)
+                or getattr(settings, "minimax_api_key", None)
+            )
 
         if not api_key_available or not model_router.is_available(state.model):
             fallback_provider = config.fallback.coordinator_provider
@@ -623,7 +655,21 @@ def _build_task_system_prompt(state: GraphState) -> Optional[str]:
 
     current_date = get_current_utc_date()
     forwarded_props = getattr(state, "forwarded_props", {}) or {}
-    if forwarded_props.get("agent_type") == "log_analysis":
+    explicit_mode = forwarded_props.get("agent_mode") or getattr(state, "agent_mode", None)
+    effective_mode = resolve_agent_mode(
+        explicit_mode,
+        legacy_agent_type=forwarded_props.get("agent_type") or getattr(state, "agent_type", None),
+        default=DEFAULT_AGENT_MODE,
+    )
+    log_hint = (
+        forwarded_props.get("task_hint") == "log_analysis"
+        or (forwarded_props.get("log_detection") or {}).get("has_log")
+    )
+    explicit_log_override = (
+        str(forwarded_props.get("agent_type") or getattr(state, "agent_type", "")).strip().lower()
+        == "log_analysis"
+    )
+    if mode_allows_log_analysis(effective_mode) and (explicit_log_override or log_hint):
         rule = (
             "Auto-routing rule: The user provided log file attachments.\n"
             "- Spawn ONE `log_diagnoser` tool call per file.\n"
@@ -637,12 +683,50 @@ def _build_task_system_prompt(state: GraphState) -> Optional[str]:
     return f"{base}\n\nCurrent date: {current_date}"
 
 
+def _coerce_flag(value: Any) -> bool:
+    """Coerce common truthy/falsey inputs from forwarded props."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return False
+
+
+def _build_web_search_enforcement_prompt(state: GraphState) -> Optional[str]:
+    """Return strict web-search guidance when the frontend enabled web mode."""
+    forwarded_props = getattr(state, "forwarded_props", {}) or {}
+    force_websearch = _coerce_flag(forwarded_props.get("force_websearch"))
+    raw_mode = forwarded_props.get("web_search_mode")
+    web_search_mode = str(raw_mode).strip().lower() if isinstance(raw_mode, str) else ""
+    if web_search_mode not in {"on", "off"}:
+        web_search_mode = "on" if force_websearch else "off"
+
+    if web_search_mode != "on" and not force_websearch:
+        return None
+
+    return textwrap.dedent(
+        """
+        <web_search_enforcement>
+        Web search is explicitly enabled for this run.
+
+        Requirements:
+        1) For external-fact questions, run at least one web lookup tool before the final answer.
+        2) For time-sensitive prompts (latest/news/today/current/recent/prices/scores), treat web lookup as mandatory.
+        3) Prefer `minimax_web_search` when available; otherwise use `web_search`, `firecrawl_search`, or `grounding_search`.
+        4) Do NOT claim you inherently cannot browse the internet when web tools are available.
+        5) If web tools fail, report the specific tool failure briefly and continue with best-effort guidance.
+        </web_search_enforcement>
+        """
+    ).strip()
+
+
 def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str:
     """Build skills context for the coordinator.
 
-    We keep non-Zendesk coordinator runs deterministic by defaulting to baseline
-    writing/empathy skills only. Zendesk runs retain auto-detection because ticket
-    flows benefit from domain-specific skill triggers.
+    Dynamic skill auto-detection is enabled for all coordinator modes so newly
+    added skills can activate without hard-coded routing changes.
     """
     try:
         skills_registry = get_skills_registry()
@@ -678,11 +762,7 @@ def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str
             "is_zendesk_ticket": forwarded_props.get("is_zendesk_ticket", False),
         }
 
-        is_zendesk_ticket = bool(skill_context.get("is_zendesk_ticket"))
-        if is_zendesk_ticket:
-            skills_content = skills_registry.get_context_skills_content(skill_context)
-        else:
-            skills_content = skills_registry.get_default_skills_content(skill_context)
+        skills_content = skills_registry.get_context_skills_content(skill_context)
 
         if skills_content:
             logger.debug(
@@ -713,8 +793,20 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
             fallback_provider=runtime.provider,
             fallback_model=runtime.model,
         )
-    is_zendesk = (state.forwarded_props or {}).get("is_zendesk_ticket") is True
-    tools = list(get_registered_tools())
+    forwarded_props = state.forwarded_props or {}
+    is_zendesk = forwarded_props.get("is_zendesk_ticket") is True
+    explicit_mode = forwarded_props.get("agent_mode") or getattr(state, "agent_mode", None)
+    legacy_agent_type = forwarded_props.get("agent_type") or getattr(state, "agent_type", None)
+    effective_mode = resolve_agent_mode(
+        explicit_mode,
+        legacy_agent_type=legacy_agent_type,
+        default=DEFAULT_AGENT_MODE,
+    )
+    state.agent_mode = effective_mode
+    if isinstance(state.forwarded_props, dict):
+        state.forwarded_props["agent_mode"] = effective_mode
+
+    tools = list(get_registered_tools_for_mode(effective_mode, zendesk=is_zendesk))
 
     # Inject workspace tools so agents can read persisted context (e.g. playbooks,
     # similar scenarios, evicted tool results) without keeping large blobs in memory.
@@ -791,10 +883,15 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
             )
         except Exception as exc:  # pragma: no cover - best effort only
             logger.debug("subagent_workspace_bridge_unavailable", error=str(exc)[:180])
-    logger.debug("tool_registry_selected", mode="support" if is_zendesk else "standard")
+    logger.debug(
+        "tool_registry_selected",
+        mode=effective_mode,
+        zendesk=is_zendesk,
+    )
     subagents: list[Any] = get_subagent_specs(
         provider=runtime.provider,
         zendesk=is_zendesk,
+        agent_mode=effective_mode,
         workspace_tools=workspace_tools,
     )
     if is_zendesk:
@@ -831,13 +928,16 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         model=runtime.model,
         provider=state.provider or runtime.provider,
         zendesk=is_zendesk,
+        agent_mode=effective_mode,
     )
 
     # Build skills context for auto-detected writing/empathy skills
     skills_context = _build_skills_context(state, runtime)
+    web_search_requirement = _build_web_search_enforcement_prompt(state)
 
     system_prompt_parts = [
         coordinator_prompt,
+        web_search_requirement,
         skills_context,
         todo_prompt,
         BASE_AGENT_PROMPT,
@@ -1040,6 +1140,7 @@ def _build_runnable_config(
     configurable_updates = {
         "provider": state.provider,
         "model": state.model,
+        "agent_mode": getattr(state, "agent_mode", None),
         "use_server_memory": state.use_server_memory,
     }
     configurable.update(configurable_updates)
@@ -1049,6 +1150,7 @@ def _build_runnable_config(
     metadata.setdefault("trace_id", state.trace_id)
     metadata.setdefault("resolved_task_type", runtime.task_type)
     metadata.setdefault("resolved_model", runtime.model)
+    metadata.setdefault("effective_agent_mode", getattr(state, "agent_mode", None))
 
     model_selection = None
     if isinstance(state.scratchpad, dict):
@@ -1075,6 +1177,7 @@ def _build_runnable_config(
         "sparrow-unified",
         state.provider or None,
         state.model or None,
+        f"mode:{getattr(state, 'agent_mode', DEFAULT_AGENT_MODE)}",
         f"resolved-model:{runtime.model}",
         f"resolved-task:{runtime.task_type}",
     ):
@@ -1104,11 +1207,19 @@ async def _maybe_autoroute_log_analysis(
     """
     detection = _attachments_indicate_logs(state)
     forwarded_props = getattr(state, "forwarded_props", {}) or {}
+    effective_mode = resolve_agent_mode(
+        forwarded_props.get("agent_mode") or getattr(state, "agent_mode", None),
+        legacy_agent_type=forwarded_props.get("agent_type") or getattr(state, "agent_type", None),
+        default=DEFAULT_AGENT_MODE,
+    )
+    if not mode_allows_log_analysis(effective_mode):
+        return None
+
     if detection.get("has_log"):
-        forwarded_props["agent_type"] = "log_analysis"
         forwarded_props["log_detection"] = detection
+        forwarded_props["task_hint"] = "log_analysis"
+        forwarded_props["agent_mode"] = effective_mode
         state.forwarded_props = forwarded_props
-        state.agent_type = "log_analysis"
     else:
         return None
 
@@ -1741,6 +1852,8 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
         meta["trace_id"] = state.trace_id
     if state.agent_type:
         meta["agent_type"] = state.agent_type
+    if getattr(state, "agent_mode", None):
+        meta["agent_mode"] = state.agent_mode
     meta["fact_strategy"] = "sentence_extract"
 
     if mem0_enabled:
@@ -2198,6 +2311,16 @@ async def run_unified_agent(
     )
 
     try:
+        forwarded_props = getattr(state, "forwarded_props", {}) or {}
+        effective_mode = resolve_agent_mode(
+            forwarded_props.get("agent_mode") or getattr(state, "agent_mode", None),
+            legacy_agent_type=forwarded_props.get("agent_type") or getattr(state, "agent_type", None),
+            default=DEFAULT_AGENT_MODE,
+        )
+        state.agent_mode = effective_mode
+        if isinstance(state.forwarded_props, dict):
+            state.forwarded_props["agent_mode"] = effective_mode
+
         # 1. Model selection with health check
         await _ensure_model_selection(state)
         runtime = _resolve_runtime_config(state)

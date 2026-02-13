@@ -1709,32 +1709,303 @@
   /* overflow: hidden removed - was preventing textarea text wrapping */
 }
 
-.lc-web-mode-select-wrap {
+.lc-command-menu-anchor {
+  position: relative;
   display: flex;
   align-items: center;
+  align-self: center;
   flex-shrink: 0;
 }
 
-.lc-web-mode-select {
-  appearance: none;
-  -webkit-appearance: none;
-  border: 1px solid var(--lc-border-light);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
-    var(--lc-surface-tertiary);
-  color: var(--lc-text-secondary);
-  border-radius: 10px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  cursor: pointer;
-  line-height: 1.1;
+.lc-command-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lc-text-tertiary);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
-.lc-web-mode-select:focus-visible {
+.lc-command-trigger svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.lc-command-trigger:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--lc-text-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.lc-command-trigger.open {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 8px 22px rgba(0, 0, 0, 0.3);
+}
+
+.lc-command-trigger:focus-visible {
   outline: 2px solid var(--lc-accent);
   outline-offset: 1px;
+}
+
+.lc-command-menu {
+  position: absolute;
+  left: 0;
+  width: 252px;
+  padding: 8px;
+  border-radius: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background:
+    radial-gradient(circle at 16% 14%, rgba(255, 255, 255, 0.06), transparent 58%),
+    linear-gradient(180deg, rgba(46, 46, 46, 0.94), rgba(31, 31, 31, 0.94));
+  box-shadow:
+    0 18px 38px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  z-index: 40;
+  backdrop-filter: blur(10px) saturate(120%);
+  animation: lc-command-fade-in 160ms ease;
+}
+
+.lc-command-menu.down {
+  top: calc(100% + 10px);
+  bottom: auto;
+  transform-origin: top left;
+}
+
+.lc-command-menu.up {
+  top: auto;
+  bottom: calc(100% + 10px);
+  transform-origin: bottom left;
+}
+
+.lc-command-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lc-text-secondary);
+  border-radius: 9px;
+  padding: 9px 10px;
+  font-family: var(--lc-font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.lc-command-item:hover,
+.lc-command-item.active {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--lc-text-primary);
+}
+
+.lc-command-item.selected {
+  border-color: rgba(14, 165, 233, 0.22);
+  background: rgba(14, 165, 233, 0.16);
+  color: #7cc8ff;
+}
+
+.lc-command-item-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lc-command-item-icon {
+  flex-shrink: 0;
+  color: rgba(197, 197, 210, 0.86);
+}
+
+.lc-command-item-trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lc-command-item-toggle {
+  cursor: pointer;
+}
+
+.lc-command-toggle {
+  display: inline-flex;
+  align-items: center;
+  width: 40px;
+  height: 22px;
+  padding: 1px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background-color: rgba(0, 0, 0, 0.26);
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.lc-command-toggle-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background-color: rgba(248, 250, 252, 0.96);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transform: translateX(0);
+  transition: transform 0.18s ease;
+}
+
+.lc-command-toggle.on {
+  border-color: rgba(37, 99, 235, 0.65);
+  background-color: rgba(37, 99, 235, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.24);
+}
+
+.lc-command-toggle.on .lc-command-toggle-thumb {
+  transform: translateX(18px);
+}
+
+.lc-command-separator {
+  height: 1px;
+  margin: 6px 2px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04),
+    rgba(255, 255, 255, 0.16),
+    rgba(255, 255, 255, 0.04)
+  );
+}
+
+.lc-command-item-with-meta {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lc-command-item-with-meta small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--lc-text-tertiary);
+}
+
+.lc-command-submenu-anchor {
+  position: relative;
+}
+
+.lc-command-submenu {
+  position: absolute;
+  left: calc(100% + 8px);
+  width: 252px;
+  padding: 8px;
+  border-radius: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background:
+    radial-gradient(circle at 15% 12%, rgba(255, 255, 255, 0.06), transparent 58%),
+    linear-gradient(180deg, rgba(46, 46, 46, 0.95), rgba(31, 31, 31, 0.95));
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.48);
+  z-index: 41;
+  backdrop-filter: blur(10px) saturate(120%);
+  animation: lc-command-fade-in 160ms ease;
+}
+
+.lc-command-submenu.down {
+  top: -6px;
+  bottom: auto;
+  transform-origin: top left;
+}
+
+.lc-command-submenu.up {
+  top: auto;
+  bottom: -6px;
+  transform-origin: bottom left;
+}
+
+@keyframes lc-command-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+[data-theme="light"] .lc-command-trigger {
+  border-color: rgba(17, 24, 39, 0.12);
+  background: transparent;
+  color: #374151;
+}
+
+[data-theme="light"] .lc-command-trigger:hover,
+[data-theme="light"] .lc-command-trigger.open {
+  border-color: rgba(17, 24, 39, 0.2);
+  background: rgba(17, 24, 39, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+[data-theme="light"] .lc-command-menu,
+[data-theme="light"] .lc-command-submenu {
+  border-color: rgba(17, 24, 39, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.14);
+}
+
+[data-theme="light"] .lc-command-item {
+  color: #374151;
+}
+
+[data-theme="light"] .lc-command-item:hover,
+[data-theme="light"] .lc-command-item.active {
+  border-color: rgba(17, 24, 39, 0.14);
+  background-color: rgba(17, 24, 39, 0.05);
+  color: #111827;
+}
+
+[data-theme="light"] .lc-command-item-icon {
+  color: #6b7280;
+}
+
+[data-theme="light"] .lc-command-toggle {
+  border-color: rgba(17, 24, 39, 0.2);
+  background-color: rgba(17, 24, 39, 0.12);
+}
+
+[data-theme="light"] .lc-command-toggle-thumb {
+  background-color: #ffffff;
+}
+
+[data-theme="light"] .lc-command-toggle.on {
+  border-color: rgba(37, 99, 235, 0.45);
+  background-color: rgba(37, 99, 235, 0.75);
+}
+
+[data-theme="light"] .lc-command-separator {
+  background: linear-gradient(
+    90deg,
+    rgba(17, 24, 39, 0.02),
+    rgba(17, 24, 39, 0.14),
+    rgba(17, 24, 39, 0.02)
+  );
 }
 
 .lc-input-box:focus-within {
@@ -1830,6 +2101,25 @@
     width: 100%;
     justify-content: flex-start;
   }
+
+  .lc-command-menu {
+    width: min(78vw, 260px);
+  }
+
+  .lc-command-submenu {
+    left: 0;
+    width: min(84vw, 280px);
+  }
+
+  .lc-command-submenu.down {
+    top: calc(100% + 6px);
+    bottom: auto;
+  }
+
+  .lc-command-submenu.up {
+    top: auto;
+    bottom: calc(100% + 6px);
+  }
 }
 
 .lc-stop-btn {
@@ -1874,6 +2164,20 @@
 .lc-web-mode-badge.off {
   border-color: var(--lc-border-light);
   color: var(--lc-text-tertiary);
+}
+
+.lc-expert-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(14, 116, 144, 0.24);
+  color: rgba(224, 242, 254, 0.98);
 }
 
 /* Landing page */
@@ -3267,6 +3571,11 @@
   .lc-think-evidence-card,
   .lc-think-more-cards,
   .lc-action-btn,
+  .lc-command-item,
+  .lc-command-menu,
+  .lc-command-submenu,
+  .lc-command-toggle,
+  .lc-command-toggle-thumb,
   .lc-send-btn,
   .lc-steering-btn,
   .lc-soft-timeout-btn,

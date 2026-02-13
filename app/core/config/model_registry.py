@@ -57,7 +57,13 @@ class ModelSpec:
 def _sanitize_display_name(model_id: str) -> str:
     """Sanitize model ID into a safe display name."""
     safe_id = re.sub(r"[<>&\"']", "", model_id)
-    display = safe_id.replace("-", " ").replace("_", " ").replace("/", " ")
+    normalized = safe_id.replace("-", " ").replace("_", " ").replace("/", " ")
+    deduped_tokens: list[str] = []
+    for token in normalized.split():
+        if deduped_tokens and deduped_tokens[-1].casefold() == token.casefold():
+            continue
+        deduped_tokens.append(token)
+    display = " ".join(deduped_tokens)
     return display.title()[:64]
 
 
@@ -242,6 +248,7 @@ class ModelRegistry:
             "google": "Google Gemini",
             "xai": "xAI Grok",
             "openrouter": "OpenRouter",
+            "minimax": "MiniMax",
         }
 
     def get_fallback_chain(self, provider: str = "google") -> dict[str, str | None]:

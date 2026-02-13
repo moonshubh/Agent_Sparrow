@@ -1,7 +1,7 @@
 """Minimax MCP tools for Agent Sparrow.
 
 Provides web search and image understanding capabilities via Minimax's Coding Plan API.
-These tools use the same API key as the Minimax M2.1 model.
+These tools use the same API key as the Minimax M2.5 model.
 
 Minimax Coding Plan MCP Reference:
 - https://platform.minimax.io/docs/coding-plan/mcp-guide
@@ -405,6 +405,18 @@ def _resolve_mcp_timeout() -> Optional[float]:
     return timeout
 
 
+def _resolve_mcp_tools_load_timeout() -> Optional[float]:
+    """Resolve timeout for MCP `get_tools` handshake.
+
+    We keep this lower than per-call timeouts so broken stdio sessions fail fast
+    and the direct HTTP fallback path can continue the user request.
+    """
+    timeout = _resolve_mcp_timeout()
+    if timeout is None:
+        return 8.0
+    return max(3.0, min(timeout, 8.0))
+
+
 def _resolve_mcp_circuit_threshold() -> int:
     try:
         threshold = int(
@@ -555,7 +567,7 @@ async def _get_minimax_mcp_tool(tool_name: str) -> Optional[BaseTool]:
     if cached is not None:
         return cached
 
-    timeout = _resolve_mcp_timeout()
+    timeout = _resolve_mcp_tools_load_timeout()
     reset_reason: Optional[str] = None
 
     async with _mcp_tools_lock:

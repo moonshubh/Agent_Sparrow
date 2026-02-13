@@ -81,9 +81,9 @@ coordinators:
 
   # Default coordinator for Minimax provider (uses direct Minimax API)
   # Requires MINIMAX_API_KEY to be set. Routes through OpenRouter code path.
-  # Minimax M2.1 uses Interleaved Thinking - reasoning_details preserved automatically.
+  # Minimax M2.5 uses Interleaved Thinking - reasoning_details preserved automatically.
   minimax:
-    model_id: "minimax/MiniMax-M2.1"
+    model_id: "minimax/MiniMax-M2.5"
     provider: "openrouter"        # Uses OpenRouter code path, auto-routed to Minimax API
     temperature: 1.0
     top_p: 0.95
@@ -94,7 +94,7 @@ coordinators:
       rpd: 5000
 
   minimax_with_subagents:
-    model_id: "minimax/MiniMax-M2.1"
+    model_id: "minimax/MiniMax-M2.5"
     provider: "openrouter"
     temperature: 1.0
     top_p: 0.95
@@ -143,7 +143,7 @@ internal:
 
   # Minimax MCP tools (web search + image understanding)
   minimax_tools:
-    model_id: "minimax/MiniMax-M2.1"
+    model_id: "minimax/MiniMax-M2.5"
     provider: "openrouter"
     temperature: 1.0
     top_p: 0.95
@@ -191,14 +191,14 @@ internal:
 # Each subagent can have its own model, or fallback to default
 # -----------------------------------------------------------------------------
 subagents:
-  # Default model for all subagents - Minimax M2.1
+  # Default model for all subagents - Minimax M2.5
   # Uses Minimax API via OpenAI-compatible wrapper when MINIMAX_API_KEY is set.
-  # Minimax M2.1 features:
+  # Minimax M2.5 features:
   # - 200K context window
   # - Interleaved Thinking (reasoning preserved across turns)
   # - Optimized for coding and agentic workflows
   _default:
-    model_id: "minimax/MiniMax-M2.1"
+    model_id: "minimax/MiniMax-M2.5"
     provider: "openrouter"            # Routes to Minimax API when MINIMAX_API_KEY set
     temperature: 1.0
     top_p: 0.95
@@ -209,27 +209,27 @@ subagents:
       rpd: 1000
 
   # IMPORTANT: Keys are the runtime subagent names (match `subagents.py`).
-  # All subagents now use Minimax M2.1 via _default
+  # All subagents now use Minimax M2.5 via _default
   research-agent:
-    # Uses _default (Minimax M2.1)
+    # Uses _default (Minimax M2.5)
 
   log-diagnoser:
-    # Uses _default (Minimax M2.1)
+    # Uses _default (Minimax M2.5)
 
   db-retrieval:
-    # Uses _default (Minimax M2.1)
+    # Uses _default (Minimax M2.5)
 
   # Explorer subagent - broad discovery
   explorer:
-    # Uses _default (Minimax M2.1)
+    # Uses _default (Minimax M2.5)
 
   # Draft writer subagent - structured writing and response composition
   draft-writer:
-    # Uses _default (Minimax M2.1)
+    # Uses _default (Minimax M2.5)
 
   # Data analyst subagent - data retrieval and trend analysis
   data-analyst:
-    # Uses _default (Minimax M2.1)
+    # Uses _default (Minimax M2.5)
 
 # -----------------------------------------------------------------------------
 # ZENDESK MODELS - Separate coordinator/subagent config and quotas
@@ -289,7 +289,7 @@ zendesk:
         rpd: 600
   subagents:
     _default:
-      model_id: "minimax/MiniMax-M2.1"
+      model_id: "minimax/MiniMax-M2.5"
       provider: "openrouter"
       temperature: 1.0
       top_p: 0.95
@@ -299,7 +299,7 @@ zendesk:
         rpm: 60
         rpd: 1000
 
-    # Explicit null entries fall back to _default (Minimax M2.1).
+    # Explicit null entries fall back to _default (Minimax M2.5).
     research-agent:
     log-diagnoser:
     db-retrieval:

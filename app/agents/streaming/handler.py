@@ -409,6 +409,9 @@ class StreamEventHandler:
         # Best-effort aggregate of user-visible text emitted on the main stream.
         # Used to backfill final content when model stream events terminate early.
         self._visible_text_buffer: str = ""
+        # Count emitted artifact custom events to avoid replacing valid artifact-first
+        # outcomes with degraded text fallback or recovery reinvocation.
+        self._artifact_events_emitted: int = 0
 
         # Get tracer if available
         self._tracer = trace.get_tracer(__name__) if OTEL_AVAILABLE else None
@@ -486,7 +489,21 @@ class StreamEventHandler:
         prefix = f"SYSTEM INSTRUCTIONS:\n{system_text}"
         for idx, message in enumerate(non_system):
             if isinstance(message, HumanMessage):
-                coerced = HumanMessage(content=f"{prefix}\n\n{message.content}")
+                merged_content = f"{prefix}\n\n{message.content}"
+                if hasattr(message, "model_copy"):
+                    coerced = message.model_copy(update={"content": merged_content})
+                elif hasattr(message, "copy"):
+                    coerced = message.copy(update={"content": merged_content})
+                else:
+                    coerced = HumanMessage(
+                        content=merged_content,
+                        additional_kwargs=getattr(message, "additional_kwargs", {}),
+                        id=getattr(message, "id", None),
+                        name=getattr(message, "name", None),
+                        response_metadata=getattr(
+                            message, "response_metadata", {}
+                        ),
+                    )
                 return [*non_system[:idx], coerced, *non_system[idx + 1 :]]
 
         return [HumanMessage(content=prefix), *non_system]
@@ -929,9 +946,35 @@ class StreamEventHandler:
                 run_span.set_attribute("agui.provider", str(cfg.get("provider") or ""))
                 run_span.set_attribute("agui.model", str(cfg.get("model") or ""))
 
+            stream_inputs = self._agent_inputs()
+            provider = str(cfg.get("provider") or "").lower()
+            model = str(cfg.get("model") or "").lower()
+            should_coerce_minimax = provider == "minimax" or "minimax" in model
+            if should_coerce_minimax:
+                original_messages = list(stream_inputs.get("messages") or [])
+                has_system_message = any(
+                    isinstance(message, SystemMessage) for message in original_messages
+                )
+                if has_system_message:
+                    logger.warning(
+                        "stream_system_role_coerced",
+                        provider=cfg.get("provider"),
+                        model=cfg.get("model"),
+                    )
+                    if run_span is not None:
+                        run_span.set_attribute(
+                            "agui.stream_system_role_coerced", "true"
+                        )
+                stream_inputs = {
+                    **stream_inputs,
+                    "messages": self._coerce_system_messages_to_user(
+                        original_messages
+                    ),
+                }
+
             try:
                 async for event in self.agent.astream_events(
-                    self._agent_inputs(),
+                    stream_inputs,
                     config=self.config,
                     version="v2",
                 ):
@@ -1020,9 +1063,18 @@ class StreamEventHandler:
             run_id_str = str(run_id)
             self._tool_run_ids.add(run_id_str)
 
-        tool_data = event.get("data", {})
-        tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
+        tool_data = event.get("data", {}) or {}
+        tool_call_id = (
+            self._normalize_tool_call_id(
+                tool_data.get("tool_call_id") or tool_data.get("id")
+            )
+            or (f"run-{run_id_str}" if run_id_str else "unknown")
+        )
         tool_name = self._extract_tool_name(event.get("name"), tool_call_id)
+        if tool_name in {"tool", "unknown", tool_call_id}:
+            tool_name = (
+                self._extract_tool_name_from_output(tool_data.get("output")) or tool_name
+            )
         event["name"] = tool_name
 
         tool_input = tool_data.get("input") or tool_data.get("tool_input")
@@ -1195,18 +1247,32 @@ class StreamEventHandler:
         if run_id is not None:
             run_id_str = str(run_id)
             self._tool_run_ids.discard(run_id_str)
-        tool_data = event.get("data", {})
+        tool_data = event.get("data", {}) or {}
         output = tool_data.get("output")
-        tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
-        tool_name = self._extract_tool_name(event.get("name"), tool_call_id)
-        event["name"] = tool_name
 
         if run_id_str:
             tool_meta = self._tool_run_metadata.pop(run_id_str, None)
-            if tool_meta and tool_meta.get("tool_name") == "task":
-                self.emitter.flush_subagent_thinking(
-                    tool_meta.get("tool_call_id", tool_call_id)
-                )
+        tool_call_id = (
+            self._normalize_tool_call_id(
+                tool_data.get("tool_call_id") or tool_data.get("id")
+            )
+            or self._normalize_tool_call_id((tool_meta or {}).get("tool_call_id"))
+            or self._extract_tool_call_id_from_output(output)
+            or (f"run-{run_id_str}" if run_id_str else "unknown")
+        )
+        tool_name = self._extract_tool_name(event.get("name"), tool_call_id)
+        if tool_name in {"tool", "unknown", tool_call_id}:
+            tool_name = (
+                (tool_meta or {}).get("tool_name")
+                or self._extract_tool_name_from_output(output)
+                or tool_name
+            )
+        event["name"] = tool_name
+
+        if tool_meta and tool_meta.get("tool_name") == "task":
+            self.emitter.flush_subagent_thinking(
+                tool_meta.get("tool_call_id", tool_call_id)
+            )
         if tool_name == "trace_update":
             return
 
@@ -1314,20 +1380,29 @@ class StreamEventHandler:
             run_id_str = str(run_id)
             self._tool_run_ids.discard(run_id_str)
         tool_data = event.get("data", {}) or {}
-        tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
         raw_error = (
             tool_data.get("error")
             or tool_data.get("error_message")
             or event.get("error")
         )
-        tool_name = event.get("name") or tool_call_id or "tool"
 
         if run_id_str:
             tool_meta = self._tool_run_metadata.pop(run_id_str, None)
-            if tool_meta and tool_meta.get("tool_name") == "task":
-                self.emitter.flush_subagent_thinking(
-                    tool_meta.get("tool_call_id", tool_call_id)
-                )
+        tool_call_id = (
+            self._normalize_tool_call_id(
+                tool_data.get("tool_call_id") or tool_data.get("id")
+            )
+            or self._normalize_tool_call_id((tool_meta or {}).get("tool_call_id"))
+            or (f"run-{run_id_str}" if run_id_str else "unknown")
+        )
+        tool_name = self._extract_tool_name(event.get("name"), tool_call_id)
+        if tool_name in {"tool", "unknown", tool_call_id}:
+            tool_name = (tool_meta or {}).get("tool_name") or tool_name
+
+        if tool_meta and tool_meta.get("tool_name") == "task":
+            self.emitter.flush_subagent_thinking(
+                tool_meta.get("tool_call_id", tool_call_id)
+            )
 
         if tool_name not in {"write_todos", "trace_update"}:
             subagent_type = tool_meta.get("subagent_type") if tool_meta else None
@@ -2101,6 +2176,13 @@ class StreamEventHandler:
         - On Google overload errors, try the configured fallback agent factory.
         - Always preserve any already streamed visible text as a last-resort output.
         """
+        if self._artifact_events_emitted > 0:
+            logger.info(
+                "skipping_final_output_recovery_artifacts_present",
+                artifact_count=self._artifact_events_emitted,
+            )
+            return
+
         logger.warning(
             "stream_missing_final_output_recovery_started",
             visible_chars=len(self._visible_text_buffer),
@@ -2369,6 +2451,80 @@ class StreamEventHandler:
         if tool_call_id and tool_call_id != "unknown":
             return tool_call_id
         return "tool"
+
+    def _normalize_tool_call_id(self, value: Any) -> str | None:
+        """Normalize tool-call IDs and drop empty/unknown placeholders."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+        else:
+            normalized = str(value).strip()
+        if not normalized or normalized.lower() == "unknown":
+            return None
+        return normalized
+
+    def _extract_tool_call_id_from_output(self, output: Any) -> str | None:
+        """Best-effort extraction of tool_call_id from tool output payloads."""
+        from langchain_core.messages import ToolMessage
+
+        if isinstance(output, ToolMessage):
+            return self._normalize_tool_call_id(getattr(output, "tool_call_id", None))
+
+        if isinstance(output, dict):
+            return self._normalize_tool_call_id(
+                output.get("tool_call_id") or output.get("toolCallId") or output.get("id")
+            )
+
+        if isinstance(output, list):
+            for item in output:
+                candidate = self._extract_tool_call_id_from_output(item)
+                if candidate:
+                    return candidate
+            return None
+
+        update = getattr(output, "update", None)
+        if isinstance(update, dict):
+            messages = update.get("messages")
+            if isinstance(messages, list):
+                for message in messages:
+                    candidate = self._extract_tool_call_id_from_output(message)
+                    if candidate:
+                        return candidate
+
+        return None
+
+    def _extract_tool_name_from_output(self, output: Any) -> str | None:
+        """Best-effort extraction of tool name from tool output payloads."""
+        from langchain_core.messages import ToolMessage
+
+        if isinstance(output, ToolMessage):
+            name = getattr(output, "name", None)
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+
+        if isinstance(output, dict):
+            name = output.get("name") or output.get("tool_name") or output.get("toolName")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+
+        if isinstance(output, list):
+            for item in output:
+                candidate = self._extract_tool_name_from_output(item)
+                if candidate:
+                    return candidate
+            return None
+
+        update = getattr(output, "update", None)
+        if isinstance(update, dict):
+            messages = update.get("messages")
+            if isinstance(messages, list):
+                for message in messages:
+                    candidate = self._extract_tool_name_from_output(message)
+                    if candidate:
+                        return candidate
+
+        return None
 
     def _build_planning_phase_detail(self) -> str:
         """Build a lightweight planning detail string for the phase step."""
@@ -3073,6 +3229,7 @@ class StreamEventHandler:
             aspect_ratio=raw_output.get("aspect_ratio"),
             resolution=raw_output.get("resolution"),
         )
+        self._artifact_events_emitted += 1
         logger.info(
             "image_artifact_emitted: aspect=%s, resolution=%s",
             raw_output.get("aspect_ratio"),
@@ -3289,6 +3446,19 @@ class StreamEventHandler:
                 title=title,
                 images=normalized_images,
             )
+            self._artifact_events_emitted += 1
+
+            # Reliability fallback: emit individual image artifacts so users can
+            # view/download images even if article markdown rendering fails.
+            for index, image in enumerate(normalized_images[:5], start=1):
+                self.emitter.emit_image_artifact(
+                    image_url=image.get("url"),
+                    title=f"{title} - Visual {index}",
+                    prompt=image.get("alt"),
+                    page_url=image.get("page_url"),
+                )
+                self._artifact_events_emitted += 1
+
             logger.info(
                 "article_artifact_emitted: title=%s, content_length=%d, images=%d",
                 title,

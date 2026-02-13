@@ -324,6 +324,13 @@ class GraphState(BaseModel):
         default=None,
         description="Model identifier override (e.g., 'gemini-2.5-flash').",
     )
+    agent_mode: Optional[str] = Field(
+        default=None,
+        description=(
+            "Frontend-selected hard mode switch "
+            "(general|mailbird_expert|research_expert|creative_expert)."
+        ),
+    )
     agent_type: Optional[str] = Field(
         default=None,
         description="Calling agent type or persona hint forwarded by the client.",

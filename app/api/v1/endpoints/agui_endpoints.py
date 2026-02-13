@@ -67,6 +67,12 @@ from app.core.config import (
     get_models_config,
     resolve_coordinator_config,
 )
+from app.agents.streaming.handler import ThinkingBlockTracker
+from app.agents.unified.agent_modes import (
+    DEFAULT_AGENT_MODE,
+    normalize_agent_mode,
+    resolve_agent_mode,
+)
 from app.core.settings import get_settings
 
 router = APIRouter()
@@ -380,6 +386,8 @@ async def _degraded_direct_response_fallback(
     provider: str,
     model: str,
     user_query: str,
+    agent_mode: str,
+    force_websearch: bool = False,
 ) -> str:
     """Generate a direct fallback response when AG-UI stream yields no text."""
     if not user_query:
@@ -388,12 +396,36 @@ async def _degraded_direct_response_fallback(
     from app.agents.unified.provider_factory import build_chat_model
 
     fallback_model = build_chat_model(provider=provider, model=model, role="coordinator")
+    resolved_mode = normalize_agent_mode(agent_mode, default=DEFAULT_AGENT_MODE)
+    if resolved_mode == "mailbird_expert":
+        mode_instruction = (
+            "Answer as a Mailbird specialist with concise, practical troubleshooting guidance."
+        )
+    elif resolved_mode == "research_expert":
+        mode_instruction = (
+            "Answer as a research specialist with concise evidence-aware guidance."
+        )
+    elif resolved_mode == "creative_expert":
+        mode_instruction = (
+            "Answer as a creative specialist with clear, polished deliverable-oriented guidance."
+        )
+    else:
+        mode_instruction = "Answer as a general assistant with clear, practical guidance."
+
     fallback_messages: List[BaseMessage] = [
         SystemMessage(
             content=(
-                "You are Agent Sparrow handling a production support incident. "
-                "Provide a complete response with: customer update, internal triage owners/ETA, "
-                "risk assessment, and immediate next actions."
+                "You are generating a direct user-facing fallback response because streamed text "
+                "was unavailable. "
+                f"{mode_instruction} "
+                "Do not mention incidents, internal routing, tool calls, metadata, or hidden reasoning. "
+                + (
+                    "Web search was enabled for this run. Do not claim you inherently lack browsing "
+                    "capabilities; if live retrieval failed, state that retrieval was temporarily "
+                    "unavailable and provide best-effort guidance."
+                    if force_websearch
+                    else ""
+                )
             )
         ),
         HumanMessage(content=user_query),
@@ -416,7 +448,9 @@ async def _degraded_direct_response_fallback(
         logging.exception("agui_degraded_direct_fallback_failed")
         return ""
 
-    content = _coerce_text(getattr(response, "content", "")).strip()
+    content = ThinkingBlockTracker.sanitize_final_content(
+        _coerce_text(getattr(response, "content", "")).strip()
+    ).strip()
     if content:
         return content
     return ""
@@ -425,7 +459,7 @@ async def _degraded_direct_response_fallback(
 def _strip_reasoning_details(value: Any) -> Any:
     """Remove large / sensitive fields from JSON-like debug payloads.
 
-    MiniMax M2.1 can emit large `reasoning_details` blocks (especially in streaming
+    MiniMax M2.5 can emit large `reasoning_details` blocks (especially in streaming
     chunks). Attachments can also contain base64 `data:` URLs. These should not be
     sent to the browser as part of RAW debug events.
     """
@@ -745,7 +779,7 @@ def _merge_agui_context(
     Inject per-request AG-UI context (provider, session, attachments) into state and config.
 
     This function:
-    1. Extracts properties: session_id, trace_id, provider, model, agent_type, etc.
+    1. Extracts properties: session_id, trace_id, provider, model, agent_type/agent_mode, etc.
     2. Validates and sanitizes attachments
     3. Merges into state dict (for GraphState)
     4. Merges into config.configurable (for LangGraph execution)
@@ -775,6 +809,7 @@ def _merge_agui_context(
     provider = _get_first("provider")
     model = _get_first("model")
     agent_type = _get_first("agent_type")
+    agent_mode_raw = _get_first("agent_mode")
     force_websearch = _get_first("force_websearch")
     websearch_max_results = _get_first("websearch_max_results")
     websearch_profile = _get_first("websearch_profile")
@@ -782,7 +817,13 @@ def _merge_agui_context(
     use_server_memory = _get_first("use_server_memory")
 
     models_config = get_models_config()
-    allowed_providers = {"google", "xai", "openrouter"}
+    requested_provider = str(provider or "").strip().lower()
+    allowed_providers = {"google", "xai", "openrouter", "minimax"}
+    agent_mode = resolve_agent_mode(
+        agent_mode_raw,
+        legacy_agent_type=agent_type,
+        default=DEFAULT_AGENT_MODE,
+    )
 
     # Validate model override (must exist in models.yaml)
     if model:
@@ -800,7 +841,12 @@ def _merge_agui_context(
             logging.warning("agui_unknown_model_override: %s", model)
             model = None
         else:
-            provider = model_cfg.provider
+            if requested_provider == "minimax" and "minimax" in str(model).lower():
+                # Preserve explicit MiniMax coordinator selection even though
+                # the transport path may be OpenRouter-compatible.
+                provider = "minimax"
+            else:
+                provider = model_cfg.provider
 
     # Normalize provider override
     provider = (provider or "google").lower()
@@ -814,6 +860,8 @@ def _merge_agui_context(
             model = resolve_coordinator_config(models_config, "xai").model_id
         elif provider == "openrouter":
             model = resolve_coordinator_config(models_config, "openrouter").model_id
+        elif provider == "minimax":
+            model = resolve_coordinator_config(models_config, "minimax").model_id
         else:
             model = resolve_coordinator_config(models_config, "google").model_id
 
@@ -843,6 +891,8 @@ def _merge_agui_context(
         configurable["model"] = str(model)
     if agent_type:
         configurable["agent_type"] = str(agent_type)
+    if agent_mode:
+        configurable["agent_mode"] = str(agent_mode)
     if force_websearch is not None:
         configurable["force_websearch"] = force_websearch
     if websearch_max_results is not None:
@@ -870,6 +920,7 @@ def _merge_agui_context(
         "provider": provider or "unknown",
         "model": model or "unknown",
         "agent_type": agent_type or "primary",
+        "agent_mode": agent_mode,
     }
 
     # Feature flags for tracking usage patterns
@@ -892,7 +943,7 @@ def _merge_agui_context(
 
     # Enhanced tags for filtering and analysis in LangSmith
     tags = list(configurable.get("tags") or [])
-    tag_candidates = ["agui-stream", agent_type, provider]
+    tag_candidates = ["agui-stream", agent_type, provider, f"mode:{agent_mode}"]
 
     # Memory and attachment tags
     if use_server_memory:
@@ -931,6 +982,8 @@ def _merge_agui_context(
         state["model"] = str(model)
     if agent_type:
         state["agent_type"] = str(agent_type)
+    if agent_mode:
+        state["agent_mode"] = str(agent_mode)
     if force_websearch is not None:
         state["force_websearch"] = force_websearch
     if websearch_max_results is not None:
@@ -953,6 +1006,7 @@ def _merge_agui_context(
             "provider": provider,
             "model": model,
             "agent_type": agent_type,
+            "agent_mode": agent_mode,
             "attachments_count": len(attachments),
             "use_server_memory": use_server_memory,
             "force_websearch": force_websearch,
@@ -1019,6 +1073,7 @@ async def agui_stream(
                 ),
                 "session_id_present": "session_id" in forwarded,
                 "trace_id_present": "trace_id" in forwarded,
+                "agent_mode_present": "agent_mode" in forwarded,
                 "attachments_present": "attachments" in forwarded,
                 "attachments_count": (
                     len(forwarded.get("attachments", []))
@@ -1049,6 +1104,12 @@ async def agui_stream(
                 span.set_attribute("agui.model", str(forwarded.get("model") or ""))
                 span.set_attribute(
                     "agui.agent_type", str(forwarded.get("agent_type") or "")
+                )
+                span.set_attribute(
+                    "agui.agent_mode",
+                    str(
+                        forwarded.get("agent_mode") or DEFAULT_AGENT_MODE
+                    ),
                 )
                 att_count = len(
                     forwarded.get("attachments", [])
@@ -1221,6 +1282,7 @@ async def agui_stream(
             terminal_emitted = False
             saw_text_end = False
             streamed_text_chars = 0
+            artifact_events_emitted = 0
             try:
                 cfg = config_dict.get("configurable", {})
                 run_span.set_attribute(
@@ -1402,6 +1464,10 @@ async def agui_stream(
                                 delta = getattr(event, "delta", None)
                                 if isinstance(delta, str):
                                     streamed_text_chars += len(delta)
+                            elif event_type == EventType.CUSTOM:
+                                event_name = getattr(event, "name", None)
+                                if event_name in ("image_artifact", "article_artifact"):
+                                    artifact_events_emitted += 1
                             # Encode event using AG-UI EventEncoder for proper SSE formatting.
                             # If a single event fails to encode, skip it rather than aborting
                             # the entire stream before terminal completion.
@@ -1440,14 +1506,18 @@ async def agui_stream(
                             except Exception:
                                 pass
 
-                    if streamed_text_chars <= 0:
+                    if streamed_text_chars <= 0 and artifact_events_emitted <= 0:
                         provider_value = str(cfg.get("provider") or "google").strip()
                         model_value = str(cfg.get("model") or "").strip()
+                        mode_value = str(cfg.get("agent_mode") or DEFAULT_AGENT_MODE).strip()
+                        force_websearch_value = bool(cfg.get("force_websearch"))
                         user_query = _extract_last_user_text(merged_messages)
                         fallback_text = await _degraded_direct_response_fallback(
                             provider=provider_value or "google",
                             model=model_value,
                             user_query=user_query,
+                            agent_mode=mode_value or DEFAULT_AGENT_MODE,
+                            force_websearch=force_websearch_value,
                         )
                         if fallback_text:
                             fallback_message_id = f"fallback-{run_id}"
@@ -1481,8 +1551,18 @@ async def agui_stream(
                                     "provider": provider_value,
                                     "model": model_value,
                                     "chars": len(fallback_text),
+                                    "artifact_events_emitted": artifact_events_emitted,
                                 },
                             )
+                    elif streamed_text_chars <= 0 and artifact_events_emitted > 0:
+                        logging.info(
+                            "agui_stream_degraded_fallback_skipped_artifacts_present",
+                            extra={
+                                "thread_id": thread_id,
+                                "run_id": run_id,
+                                "artifact_events_emitted": artifact_events_emitted,
+                            },
+                        )
 
                     # Defensive: if the underlying generator completes without a terminal
                     # event, emit one to keep clients out of perpetual "running" state.

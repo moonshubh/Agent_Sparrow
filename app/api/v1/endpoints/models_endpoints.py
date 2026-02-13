@@ -6,7 +6,8 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.core.settings import settings
-from app.core.config import get_registry
+from app.core.config import get_models_config, get_registry, resolve_coordinator_config
+from app.agents.unified.agent_modes import DEFAULT_AGENT_MODE, normalize_agent_mode
 
 # Initialize rate limiter for model endpoints
 limiter = Limiter(key_func=get_remote_address)
@@ -16,12 +17,44 @@ router = APIRouter()
 # Type aliases for documentation (not used in function signatures due to Pydantic issues)
 Provider = Literal["google", "xai", "openrouter", "minimax"]
 AgentType = Literal["primary", "log_analysis"]
+AgentMode = Literal[
+    "general",
+    "mailbird_expert",
+    "research_expert",
+    "creative_expert",
+]
 
 
 def _get_provider_models() -> dict[str, list[str]]:
     """Get available models per provider from registry."""
     registry = get_registry()
-    return registry.get_available_models_for_api()
+    provider_models = registry.get_available_models_for_api()
+    minimax_ready = bool(
+        getattr(settings, "minimax_coding_plan_api_key", None)
+        or getattr(settings, "minimax_api_key", None)
+    )
+
+    # Expose Minimax as a first-class provider in API responses.
+    # The runtime routes Minimax through the OpenRouter code path, but UX should
+    # still present it as its own coordinator provider.
+    minimax_models = [
+        model_id
+        for model_id in provider_models.get("openrouter", [])
+        if "minimax" in model_id.lower()
+    ]
+    if minimax_models:
+        provider_models["minimax"] = minimax_models
+        # Only remove Minimax models from OpenRouter when MiniMax credentials are
+        # configured and the dedicated provider will be exposed. Otherwise keep
+        # them visible under OpenRouter for backward compatibility.
+        if minimax_ready:
+            provider_models["openrouter"] = [
+                model_id
+                for model_id in provider_models.get("openrouter", [])
+                if "minimax" not in model_id.lower()
+            ]
+
+    return provider_models
 
 
 def get_available_providers() -> dict[str, bool]:
@@ -44,12 +77,19 @@ async def list_models(
     agent_type: str = Query(
         "primary", description="Agent type: primary or log_analysis"
     ),
+    agent_mode: str = Query(
+        DEFAULT_AGENT_MODE,
+        description=(
+            "Hard-switch mode: general, mailbird_expert, research_expert, creative_expert"
+        ),
+    ),
 ):
     """
     Returns available models by provider for the requested agent type.
     Only returns providers that have API keys configured.
     """
-    # TODO: Implement agent-type-specific model filtering when requirements are defined
+    # TODO: Implement mode-specific model filtering when requirements are defined.
+    _ = normalize_agent_mode(agent_mode, default=DEFAULT_AGENT_MODE)
     _ = agent_type  # Silence unused parameter warning until filtering is implemented
     available = get_available_providers()
 
@@ -62,16 +102,6 @@ async def list_models(
         for provider, models in provider_models.items()
         if available.get(provider, False)
     }
-
-    # Expose Minimax models separately when configured (routes via OpenRouter path).
-    if available.get("minimax"):
-        minimax_models = [
-            model_id
-            for model_id in provider_models.get("openrouter", [])
-            if "minimax" in model_id.lower()
-        ]
-        if minimax_models:
-            providers["minimax"] = minimax_models
 
     # Always include Google as fallback if nothing else is configured
     if not providers and settings.gemini_api_key:
@@ -124,6 +154,22 @@ async def get_model_config(request: Request):
                 "supports_vision": model.supports_vision,
             }
 
+    # Ensure Minimax coordinator model is visible as a first-class provider.
+    # Internally this model may be tagged as openrouter for transport purposes.
+    models_config = get_models_config()
+    minimax_default = resolve_coordinator_config(models_config, "minimax").model_id
+    minimax_info = models.get(minimax_default)
+    if minimax_info is not None:
+        models[minimax_default] = {**minimax_info, "provider": "minimax"}
+    else:
+        models[minimax_default] = {
+            "display_name": "MiniMax M2.5",
+            "provider": "minimax",
+            "tier": "standard",
+            "supports_reasoning": True,
+            "supports_vision": True,
+        }
+
     exposed_ids = set(models.keys())
 
     def _filter_fallback_chain(
@@ -144,6 +190,7 @@ async def get_model_config(request: Request):
         "google": registry.coordinator_google.id,
         "xai": registry.coordinator_xai.id,
         "openrouter": registry.coordinator_openrouter.id,
+        "minimax": minimax_default,
     }
 
     # Fallback chains
@@ -151,6 +198,7 @@ async def get_model_config(request: Request):
         "google": _filter_fallback_chain(registry.get_fallback_chain("google")),
         "xai": _filter_fallback_chain(registry.get_fallback_chain("xai")),
         "openrouter": _filter_fallback_chain(registry.get_fallback_chain("openrouter")),
+        "minimax": _filter_fallback_chain({minimax_default: None}),
     }
 
     return {

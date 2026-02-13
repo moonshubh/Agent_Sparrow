@@ -23,6 +23,7 @@ import {
   AgentProvider,
   type SerializedArtifact,
   type WebSearchMode,
+  type AgentMode,
 } from "@/features/librechat/AgentContext";
 import {
   ArtifactProvider,
@@ -168,6 +169,7 @@ const DEFAULT_MODELS: Record<Provider, string> = {
   google: "gemini-3-flash-preview",
   xai: "grok-4-1-fast-reasoning",
   openrouter: "x-ai/grok-4.1-fast",
+  minimax: "minimax/MiniMax-M2.5",
 };
 
 // Chat configuration constants
@@ -193,6 +195,16 @@ const getWebSearchModeFromMetadata = (
   return raw === "on" ? "on" : "off";
 };
 
+const getAgentModeFromMetadata = (
+  metadata?: Record<string, unknown>,
+): AgentMode => {
+  const raw = metadata?.agent_mode;
+  if (raw === "mailbird_expert") return "mailbird_expert";
+  if (raw === "research_expert") return "research_expert";
+  if (raw === "creative_expert") return "creative_expert";
+  return "general";
+};
+
 export default function LibreChatClient() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [traceId, setTraceId] = useState<string>("");
@@ -210,6 +222,7 @@ export default function LibreChatClient() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const conversationsRef = useRef<Conversation[]>([]);
   const latestWebModeIntentRef = useRef<Record<string, WebSearchMode>>({});
+  const latestAgentModeIntentRef = useRef<Record<string, AgentMode>>({});
   const [currentConversationId, setCurrentConversationId] = useState<
     string | undefined
   >();
@@ -231,7 +244,10 @@ export default function LibreChatClient() {
 
     const normalizedProvider = String(candidateProvider).toLowerCase();
     const resolvedProvider: Provider =
-      normalizedProvider === "google" || normalizedProvider === "xai"
+      normalizedProvider === "google" ||
+      normalizedProvider === "xai" ||
+      normalizedProvider === "openrouter" ||
+      normalizedProvider === "minimax"
         ? normalizedProvider
         : "google";
 
@@ -252,7 +268,7 @@ export default function LibreChatClient() {
 
       try {
         const config = await modelsAPI.getConfig();
-        const preferredProviders: Provider[] = ["google", "xai"];
+        const preferredProviders: Provider[] = ["google", "xai", "minimax"];
         const availableProvider = preferredProviders.find(
           (p) => config.available_providers[p],
         ) as Provider | undefined;
@@ -280,7 +296,11 @@ export default function LibreChatClient() {
           id: String(s.id),
           title: s.title || "Untitled Chat",
           timestamp: s.created_at ? new Date(s.created_at) : undefined,
-          metadata: isRecord(s.metadata) ? s.metadata : undefined,
+          metadata: {
+            ...(isRecord(s.metadata) ? s.metadata : {}),
+            agent_mode:
+              typeof s.agent_mode === "string" ? s.agent_mode : undefined,
+          },
         }));
 
         // Enforce conversation limit on load: delete oldest if over max
@@ -336,12 +356,14 @@ export default function LibreChatClient() {
 
         const newTraceId = `trace-${mostRecent.id}`;
         const inferredAgentType = inferSessionAgentType(messages);
+        const sessionAgentMode = getAgentModeFromMetadata(mostRecent.metadata);
         const newAgent = createSparrowAgent({
           sessionId: mostRecent.id,
           traceId: newTraceId,
           provider: activeProvider,
           model: activeModel,
           agentType: inferredAgentType,
+          agentMode: sessionAgentMode,
         });
 
         // Set loaded messages on the agent
@@ -358,6 +380,7 @@ export default function LibreChatClient() {
         // No existing sessions, create a new one in backend
         const backendSession = await sessionsAPI.create("primary", "New Chat", {
           web_search_mode: "off",
+          agent_mode: "general",
         });
         const newSessionId = String(backendSession.id);
         const newTraceId = `trace-${newSessionId}`;
@@ -368,6 +391,7 @@ export default function LibreChatClient() {
           provider: activeProvider,
           model: activeModel,
           agentType: "primary",
+          agentMode: "general",
         });
 
         setSessionId(newSessionId);
@@ -379,7 +403,7 @@ export default function LibreChatClient() {
             id: newSessionId,
             title: "New Chat",
             timestamp: new Date(),
-            metadata: { web_search_mode: "off" },
+            metadata: { web_search_mode: "off", agent_mode: "general" },
           },
         ]);
       }
@@ -444,6 +468,7 @@ export default function LibreChatClient() {
       // Create session in backend and use its ID
       const backendSession = await sessionsAPI.create("primary", "New Chat", {
         web_search_mode: "off",
+        agent_mode: "general",
       });
       const newSessionId = String(backendSession.id);
       const newTraceId = `trace-${newSessionId}`;
@@ -455,6 +480,7 @@ export default function LibreChatClient() {
         provider: selectedProvider,
         model: selectedModel,
         agentType: "primary",
+        agentMode: "general",
       });
 
       // Reset artifacts for new chat
@@ -475,7 +501,7 @@ export default function LibreChatClient() {
           id: newSessionId,
           title: "New Chat",
           timestamp: new Date(),
-          metadata: { web_search_mode: "off" },
+          metadata: { web_search_mode: "off", agent_mode: "general" },
         },
         ...prev,
       ]);
@@ -509,12 +535,19 @@ export default function LibreChatClient() {
         // Create agent for selected conversation
         const selectedTraceId = `trace-${conversationId}`;
         const inferredAgentType = inferSessionAgentType(messages);
+        const selectedConversation = conversationsRef.current.find(
+          (item) => item.id === conversationId,
+        );
+        const sessionAgentMode = getAgentModeFromMetadata(
+          selectedConversation?.metadata,
+        );
         const newAgent = createSparrowAgent({
           sessionId: conversationId,
           traceId: selectedTraceId,
           provider: selectedProvider,
           model: selectedModel,
           agentType: inferredAgentType,
+          agentMode: sessionAgentMode,
         });
 
         // Set loaded messages on the agent
@@ -619,6 +652,14 @@ export default function LibreChatClient() {
     return getWebSearchModeFromMetadata(conversation?.metadata);
   }, [conversations, currentConversationId]);
 
+  const activeAgentMode = useMemo<AgentMode>(() => {
+    if (!currentConversationId) return "general";
+    const conversation = conversations.find(
+      (item) => item.id === currentConversationId,
+    );
+    return getAgentModeFromMetadata(conversation?.metadata);
+  }, [conversations, currentConversationId]);
+
   const handleWebSearchModeChange = useCallback(
     async (mode: WebSearchMode, targetSessionId?: string) => {
       const conversationId = targetSessionId ?? currentConversationId;
@@ -670,6 +711,70 @@ export default function LibreChatClient() {
           ),
         );
         toast.error("Could not save Web mode", {
+          description: "Your setting was restored. Please try again.",
+        });
+      }
+    },
+    [currentConversationId],
+  );
+
+  const handleAgentModeChange = useCallback(
+    async (mode: AgentMode, targetSessionId?: string) => {
+      const conversationId = targetSessionId ?? currentConversationId;
+      if (!conversationId) return;
+
+      latestAgentModeIntentRef.current[conversationId] = mode;
+
+      const existingConversation = conversationsRef.current.find(
+        (item) => item.id === conversationId,
+      );
+      const nextMetadata = {
+        ...(existingConversation?.metadata ?? {}),
+        agent_mode: mode,
+      };
+      const previousMetadata = { ...(existingConversation?.metadata ?? {}) };
+
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.id === conversationId
+            ? { ...conversation, metadata: nextMetadata }
+            : conversation,
+        ),
+      );
+
+      try {
+        await sessionsAPI.update(conversationId, {
+          agent_mode: mode,
+          metadata: nextMetadata,
+        });
+        const latestIntent = latestAgentModeIntentRef.current[conversationId];
+        if (latestIntent && latestIntent !== mode) {
+          const latestConversation = conversationsRef.current.find(
+            (item) => item.id === conversationId,
+          );
+          const latestMetadata = {
+            ...(latestConversation?.metadata ?? {}),
+            agent_mode: latestIntent,
+          };
+          await sessionsAPI.update(conversationId, {
+            agent_mode: latestIntent,
+            metadata: latestMetadata,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to persist agent mode:", err);
+        const latestIntent = latestAgentModeIntentRef.current[conversationId];
+        if (latestIntent !== mode) {
+          return;
+        }
+        setConversations((prev) =>
+          prev.map((conversation) =>
+            conversation.id === conversationId
+              ? { ...conversation, metadata: previousMetadata }
+              : conversation,
+          ),
+        );
+        toast.error("Could not save expert mode", {
           description: "Your setting was restored. Please try again.",
         });
       }
@@ -738,7 +843,9 @@ export default function LibreChatClient() {
         agent={agent}
         sessionId={sessionId || undefined}
         initialWebSearchMode={activeWebSearchMode}
+        initialAgentMode={activeAgentMode}
         onWebSearchModeChange={handleWebSearchModeChange}
+        onAgentModeChange={handleAgentModeChange}
       >
         <LibreChatView
           sessionId={sessionId || undefined}

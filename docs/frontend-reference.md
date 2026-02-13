@@ -43,8 +43,8 @@ The main chat interface, styled as a ChatGPT-like UI. This is the most complex f
 | `LibreChatView` | `components/LibreChatView.tsx` | Layout shell (sidebar + header + message list + input + artifact panel) |
 | `MessageList` | `components/MessageList.tsx` | Scrollable message list with auto-scroll |
 | `MessageItem` | `components/MessageItem.tsx` | Individual message rendering (markdown, attachments, thinking panel, feedback) |
-| `ChatInput` | `components/ChatInput.tsx` | Message composer with file attachment support |
-| `Header` | `components/Header.tsx` | Model selector, memory toggle, web search toggle |
+| `ChatInput` | `components/ChatInput.tsx` | Message composer with command menu (attachments, web search toggle, expert-mode selector) |
+| `Header` | `components/Header.tsx` | Provider/model selection and top-level chat controls |
 | `Sidebar` | `components/Sidebar.tsx` | Conversation history sidebar with rename/delete |
 | `Landing` | `components/Landing.tsx` | Empty-state landing with suggested prompts |
 | `ThinkingPanel` | `components/ThinkingPanel.tsx` | Collapsible panel showing agent reasoning, objectives, evidence |
@@ -53,6 +53,23 @@ The main chat interface, styled as a ChatGPT-like UI. This is the most complex f
 | `FeedbackPopover` | `components/FeedbackPopover.tsx` | Thumbs up/down feedback with memory confidence updates |
 | `ToolIndicator` | `components/ToolIndicator.tsx` | Active tool call indicators |
 | `ResearchProgress` | `components/ResearchProgress.tsx` | Research subagent progress bar |
+
+#### Command Menu and Hard Mode Selector
+
+`ChatInput` now hosts a two-level command menu:
+- Primary actions: attach files/photos, web search toggle, expert mode menu.
+- Expert mode submenu: `general`, `mailbird_expert`, `research_expert`, `creative_expert`.
+- Selection is keyboard/mouse accessible (`Escape` close, outside-click close, ARIA menu roles).
+
+`AgentContext` keeps mode as first-class run/session state:
+- `agentMode` + `setAgentMode(...)` in context API.
+- Each send operation stamps `agent_mode` into message metadata and AG-UI forwarded props.
+- Log attachments do not force mode flips; they only influence backend hinting/subagent behavior inside the selected mode.
+
+`LibreChatClient` persists mode per session:
+- Loads mode from session metadata (`metadata.agent_mode`).
+- Persists user changes through `sessionsAPI.update(..., { agent_mode, metadata })`.
+- Defaults legacy/new sessions to `general`.
 
 #### Artifacts System
 
@@ -84,7 +101,7 @@ The adapter exposes `usePanelEventAdapter()` hook with `panelState`, `applyCusto
 
 1. User types in `ChatInput` and submits.
 2. `AgentContext.sendMessage()` adds the user message, resets panel state, and calls `agent.runAgent()`.
-3. The `SparrowAgent` POSTs to `/api/v1/agui/stream` and reads the SSE stream.
+3. The `SparrowAgent` POSTs to `/api/v1/agui/stream` with forwarded props including `web_search_mode` and `agent_mode`, then reads the SSE stream.
 4. Text deltas accumulate in a buffer and update the assistant message incrementally.
 5. Custom events (thinking traces, tool evidence, artifacts) are dispatched to the panel adapter and artifact store.
 6. On completion, user and assistant messages are persisted via `sessionsAPI`.
@@ -239,7 +256,7 @@ The Memory UI uses **TanStack React Query** hooks (`frontend/src/features/memory
 
 | File | Purpose |
 |------|---------|
-| `client.ts` | `createSparrowAgent()` factory, auth token resolution, SSE stream reading, event processing |
+| `client.ts` | `createSparrowAgent()` factory, auth token resolution, SSE stream reading/event processing, AG-UI state initialization (`agent_mode`, `web_search_mode`) |
 | `types.ts` | `AttachmentInput`, `BinaryInputContent`, `TextInputContent`, `InterruptPayload`, `AgentState`, content creation helpers |
 | `event-types.ts` | TypeScript types for all custom events, `AgentCustomEvent` discriminated union, `KNOWN_EVENT_NAMES`, type guards |
 | `validators.ts` | Zod schemas for runtime validation of all custom event payloads, `validateCustomEvent()` router |
@@ -254,8 +271,8 @@ The Memory UI uses **TanStack React Query** hooks (`frontend/src/features/memory
 | `api-request-manager.ts` | Request deduplication and lifecycle management |
 | `api.ts` | Base API configuration |
 | `api-keys.ts` | API key management client |
-| `endpoints/sessions.ts` | Chat session CRUD (list, create, rename, delete, messages) |
-| `endpoints/models.ts` | Model registry and provider availability |
+| `endpoints/sessions.ts` | Chat session CRUD plus per-session mode persistence (`agent_mode`) |
+| `endpoints/models.ts` | Model registry/provider availability; sends `agent_mode` with model-list requests |
 | `endpoints/agents.ts` | Agent endpoint client |
 | `endpoints/rateLimitApi.ts` | Rate limit status/metrics client |
 | `endpoints/metadata.ts` | Metadata/link preview client |

@@ -28,6 +28,15 @@ class AgentType(str, Enum):
     ROUTER = "router"
 
 
+class AgentMode(str, Enum):
+    """Hard-switch user-selected mode for coordinator behavior."""
+
+    GENERAL = "general"
+    MAILBIRD_EXPERT = "mailbird_expert"
+    RESEARCH_EXPERT = "research_expert"
+    CREATIVE_EXPERT = "creative_expert"
+
+
 # Base Models
 
 
@@ -39,6 +48,10 @@ class ChatSessionBase(BaseModel):
     )
     agent_type: AgentType = Field(
         default=AgentType.PRIMARY, description="Agent type handling this session"
+    )
+    agent_mode: AgentMode = Field(
+        default=AgentMode.GENERAL,
+        description="Hard-switch mode handling this session",
     )
     metadata: dict[str, Any] = Field(
         default_factory=dict, description="Additional metadata"
@@ -126,6 +139,9 @@ class ChatSessionUpdate(BaseModel):
         None, min_length=1, max_length=255, description="Updated session title"
     )
     is_active: Optional[bool] = Field(None, description="Updated active status")
+    agent_mode: Optional[AgentMode] = Field(
+        default=None, description="Updated hard-switch mode"
+    )
     metadata: Optional[dict[str, Any]] = Field(None, description="Updated metadata")
 
     @field_validator("title")
@@ -206,6 +222,7 @@ class ChatSessionListRequest(BaseModel):
     """Request model for listing chat sessions"""
 
     agent_type: Optional[AgentType] = Field(None, description="Filter by agent type")
+    agent_mode: Optional[AgentMode] = Field(None, description="Filter by agent mode")
     is_active: Optional[bool] = Field(None, description="Filter by active status")
     page: int = Field(default=1, ge=1, description="Page number")
     page_size: int = Field(

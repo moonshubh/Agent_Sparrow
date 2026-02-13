@@ -4,19 +4,23 @@ import React, {
   useCallback,
   useState,
   useRef,
+  useEffect,
   ChangeEvent,
   useLayoutEffect,
-  KeyboardEvent,
+  KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { useAgent } from "@/features/librechat/AgentContext";
+import { useAgent, type AgentMode } from "@/features/librechat/AgentContext";
 import {
-  Sparkles,
   ArrowUp,
   Command,
-  PenTool,
   MessageSquare,
   Zap,
+  Plus,
+  Check,
+  ChevronRight,
   Paperclip,
+  Globe,
+  Sparkles,
   SquarePen,
 } from "lucide-react";
 import type { AttachmentInput } from "@/services/ag-ui/types";
@@ -28,11 +32,6 @@ interface LandingProps {
   onStarterClick?: (prompt: string) => void;
 }
 
-interface AgentState {
-  model?: string;
-  [key: string]: unknown;
-}
-
 const ACTION_PILLS = [
   { icon: Zap, label: "Skills", action: "skills" },
   { icon: SquarePen, label: "Rephrase", action: "rephrase" },
@@ -40,13 +39,41 @@ const ACTION_PILLS = [
   { icon: Command, label: "Prompt", action: "prompt" },
 ];
 
+const AGENT_MODE_LABELS: Record<AgentMode, string> = {
+  general: "General Assistant",
+  mailbird_expert: "Mailbird Expert",
+  research_expert: "Research Expert",
+  creative_expert: "Creative Expert",
+};
+
+const AGENT_MODE_OPTIONS: AgentMode[] = [
+  "general",
+  "mailbird_expert",
+  "research_expert",
+  "creative_expert",
+];
+
+type CommandMenuDirection = "down" | "up";
+
 export function Landing({ onStarterClick }: LandingProps) {
-  const { agent, sendMessage } = useAgent();
+  const {
+    sendMessage,
+    webSearchMode,
+    setWebSearchMode,
+    agentMode,
+    setAgentMode,
+  } = useAgent();
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentInput[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isCommandMenuOpen, setCommandMenuOpen] = useState(false);
+  const [isExpertSubmenuOpen, setExpertSubmenuOpen] = useState(false);
+  const [commandMenuDirection, setCommandMenuDirection] =
+    useState<CommandMenuDirection>("down");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const commandMenuRef = useRef<HTMLDivElement>(null);
+  const commandTriggerRef = useRef<HTMLButtonElement>(null);
   const maxTextareaHeight = 200;
 
   const normalizePastedText = useCallback((value: string): string => {
@@ -183,8 +210,61 @@ export function Landing({ onStarterClick }: LandingProps) {
     fileInputRef.current?.click();
   }, []);
 
+  useEffect(() => {
+    if (!isCommandMenuOpen) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (commandMenuRef.current?.contains(target)) return;
+      setCommandMenuOpen(false);
+      setExpertSubmenuOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setCommandMenuOpen(false);
+      setExpertSubmenuOpen(false);
+      commandTriggerRef.current?.focus();
+    };
+
+    document.addEventListener("mousedown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isCommandMenuOpen]);
+
+  const updateCommandMenuDirection = useCallback(() => {
+    const trigger = commandTriggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+    const estimatedMenuHeight = 300;
+    const viewportPadding = 12;
+    const spaceBelow = viewportHeight - rect.bottom - viewportPadding;
+    const spaceAbove = rect.top - viewportPadding;
+    const shouldOpenUp = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
+    setCommandMenuDirection(shouldOpenUp ? "up" : "down");
+  }, []);
+
+  useEffect(() => {
+    if (!isCommandMenuOpen) return;
+
+    const onViewportChange = () => updateCommandMenuDirection();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [isCommandMenuOpen, updateCommandMenuDirection]);
+
   const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         if (inputValue.trim() || attachments.length > 0) {
@@ -246,8 +326,24 @@ export function Landing({ onStarterClick }: LandingProps) {
     [inputValue, normalizePastedText, resizeTextarea],
   );
 
-  // Force display of 3.0 Flash for landing page visual consistency
-  const modelName = "Gemini 3.0 Flash";
+  const openAttachmentPickerFromMenu = useCallback(() => {
+    setCommandMenuOpen(false);
+    setExpertSubmenuOpen(false);
+    openFilePicker();
+  }, [openFilePicker]);
+
+  const toggleWebSearchMode = useCallback(() => {
+    setWebSearchMode(webSearchMode === "on" ? "off" : "on");
+  }, [setWebSearchMode, webSearchMode]);
+
+  const selectAgentMode = useCallback(
+    (mode: AgentMode) => {
+      setAgentMode(mode);
+      setCommandMenuOpen(false);
+      setExpertSubmenuOpen(false);
+    },
+    [setAgentMode],
+  );
 
   return (
     <div className="lc-landing">
@@ -292,15 +388,111 @@ export function Landing({ onStarterClick }: LandingProps) {
             )}
 
             <div className="flex items-center w-full">
-              {/* Attachment Button */}
-              <button
-                className="lc-action-btn ml-2"
-                onClick={openFilePicker}
-                aria-label="Attach file"
-                type="button"
+              <div
+                className="lc-command-menu-anchor"
+                ref={commandMenuRef}
+                onMouseLeave={() => setExpertSubmenuOpen(false)}
               >
-                <Paperclip size={18} />
-              </button>
+                <button
+                  ref={commandTriggerRef}
+                  className={`lc-command-trigger ${isCommandMenuOpen ? "open" : ""}`}
+                  onClick={() => {
+                    setCommandMenuOpen((prev) => {
+                      const nextOpen = !prev;
+                      if (nextOpen) {
+                        updateCommandMenuDirection();
+                      } else {
+                        setExpertSubmenuOpen(false);
+                      }
+                      return nextOpen;
+                    });
+                  }}
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={isCommandMenuOpen}
+                  aria-label="Open composer tools"
+                >
+                  <Plus size={15} />
+                </button>
+                {isCommandMenuOpen && (
+                  <div className={`lc-command-menu ${commandMenuDirection}`} role="menu">
+                    <button
+                      className="lc-command-item"
+                      onClick={openAttachmentPickerFromMenu}
+                      role="menuitem"
+                      type="button"
+                    >
+                      <span className="lc-command-item-main">
+                        <Paperclip size={15} className="lc-command-item-icon" />
+                        <span>Add files or photos</span>
+                      </span>
+                    </button>
+                    <button
+                      className="lc-command-item lc-command-item-toggle"
+                      onClick={toggleWebSearchMode}
+                      role="menuitemcheckbox"
+                      aria-checked={webSearchMode === "on"}
+                      type="button"
+                    >
+                      <span className="lc-command-item-main">
+                        <Globe size={15} className="lc-command-item-icon" />
+                        <span>Web search</span>
+                      </span>
+                      <span className="lc-command-item-trailing">
+                        <span
+                          className={`lc-command-toggle ${webSearchMode === "on" ? "on" : "off"}`}
+                          aria-hidden="true"
+                        >
+                          <span className="lc-command-toggle-thumb" />
+                        </span>
+                      </span>
+                    </button>
+                    <div className="lc-command-separator" aria-hidden="true" />
+                    <div
+                      className="lc-command-submenu-anchor"
+                      onMouseEnter={() => setExpertSubmenuOpen(true)}
+                    >
+                      <button
+                        className={`lc-command-item ${isExpertSubmenuOpen ? "active" : ""}`}
+                        onClick={() => setExpertSubmenuOpen((prev) => !prev)}
+                        role="menuitem"
+                        aria-haspopup="menu"
+                        aria-expanded={isExpertSubmenuOpen}
+                        type="button"
+                      >
+                        <span className="lc-command-item-main">
+                          <Sparkles size={15} className="lc-command-item-icon" />
+                          <span className="lc-command-item-with-meta">
+                            Expert mode
+                            <small>{AGENT_MODE_LABELS[agentMode]}</small>
+                          </span>
+                        </span>
+                        <ChevronRight size={14} />
+                      </button>
+                      {isExpertSubmenuOpen && (
+                        <div
+                          className={`lc-command-submenu ${commandMenuDirection}`}
+                          role="menu"
+                        >
+                          {AGENT_MODE_OPTIONS.map((mode) => (
+                            <button
+                              key={mode}
+                              className={`lc-command-item ${agentMode === mode ? "selected" : ""}`}
+                              onClick={() => selectAgentMode(mode)}
+                              role="menuitemradio"
+                              aria-checked={agentMode === mode}
+                              type="button"
+                            >
+                              <span>{AGENT_MODE_LABELS[mode]}</span>
+                              {agentMode === mode && <Check size={14} />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <input
                 ref={fileInputRef}

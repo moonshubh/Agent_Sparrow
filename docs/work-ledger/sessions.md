@@ -1,5 +1,174 @@
 # Session Work Ledger
 
+## 2026-02-13 - Ref MCP Tool-Binding Audit + AG-UI Tool Identity Refactor
+
+### Completed
+
+- Pulled official LangGraph/LangChain docs via Ref MCP for tool binding/execution semantics and event contracts:
+  - `create_react_agent` contract and tool loop behavior
+  - `ToolNode` execution model (`AIMessage.tool_calls` -> `ToolMessage`)
+  - `ToolCall.id` / `ToolMessage.tool_call_id` correlation requirement
+  - `astream_events` v2 event schema (`on_tool_start` / `on_tool_end` + `run_id`)
+- Confirmed docs-aligned gap in local stream handling: missing/`unknown` `tool_call_id` values caused ambiguous tool correlation in AG-UI event flow.
+- Implemented correlation hardening:
+  - `app/patches/agui_custom_events.py`
+    - Backfill `data.tool_call_id` on `on_tool_end` when output already contains `ToolMessage.tool_call_id` (including `Command(update={"messages": [...]})` forms).
+  - `app/agents/streaming/handler.py`
+    - Added robust tool identity resolution:
+      - synthetic per-run IDs (`run-<run_id>`) when tool call id is missing
+      - fallback name/id resolution from run metadata and tool output payloads
+      - avoided `unknown` collisions across concurrent tool calls.
+- Added regression tests:
+  - `tests/test_injected_tools.py`
+    - `test_agui_custom_events_tool_end_backfills_tool_call_id_from_tool_message`
+    - `test_agui_custom_events_tool_end_backfills_tool_call_id_inside_command`
+  - `tests/agents/test_stream_event_handler_tool_identity.py`
+    - validates run-metadata fallback for missing tool IDs on tool end/error paths.
+
+### Verification
+
+- Lint:
+  - `ruff check app/patches/agui_custom_events.py app/agents/streaming/handler.py tests/test_injected_tools.py tests/agents/test_stream_event_handler_tool_identity.py`
+- Focused tests:
+  - `pytest -q tests/test_injected_tools.py::test_agui_custom_events_tool_end_backfills_tool_call_id_from_tool_message tests/test_injected_tools.py::test_agui_custom_events_tool_end_backfills_tool_call_id_inside_command tests/agents/test_stream_event_handler_tool_identity.py tests/api/test_agui_degraded_fallback_gating.py tests/agents/test_stream_event_handler_artifact_recovery.py tests/agents/test_write_article_image_handling.py`
+  - Result: pass.
+- Live AG-UI re-check:
+  - `python -u scripts/agui_live_capability_matrix.py --base-url http://127.0.0.1:8000 --backend-log system_logs/backend/backend.log --timeout-sec 120 --output system_logs/qa_runs/agui_live_matrix_after_docs_refactor_2026-02-13.json`
+  - Result: `2/6` pass (`C1`, `C6`), `4/6` fail (`C2`, `C3`, `C4`, `C5`).
+
+### Current Status / Residual Issue
+
+- Tool-call identity is now deterministic (synthetic run IDs replace `unknown` collisions), but AG-UI image/artifact paths still fail in live runs because:
+  - `generate_image_tool_invoked` appears in backend logs, yet no corresponding `image_artifact` custom event is emitted.
+  - stream frequently falls into `agui_stream_degraded_fallback_emitted` and `agui_stream_missing_terminal_event_recovered`.
+- This indicates remaining instability in stream finalization/tool-end completion, beyond ID correlation.
+
+## 2026-02-13 - AG-UI Live Verification Matrix (Round 2)
+
+### Completed
+
+- Built and added a reproducible live AG-UI verifier script:
+  - `scripts/agui_live_capability_matrix.py`
+  - Runs six end-to-end prompts against `/api/v1/agui/stream` and captures:
+    - SSE event/tool evidence
+    - per-run backend log slice matching
+    - pass/fail verdicts and reasons
+    - runtime env-key snapshot from app settings
+- Executed fresh live verification matrices and saved JSON artifacts:
+  - `system_logs/qa_runs/agui_live_matrix_latest_v2.json`
+  - `system_logs/qa_runs/agui_live_matrix_latest_v3.json`
+- Produced evidence report with root-cause hypotheses and code-path references:
+  - `docs/reviews/agui-live-capability-matrix-round2-2026-02-13.md`
+
+### Findings Snapshot
+
+- v3 matrix summary: 2 pass / 4 fail
+  - PASS: C1 `web_search_minimax`, C6 `dynamic_skill_loading`
+  - FAIL: C2 `web_search_escalation`, C3 `image_generation_primary`, C4 `image_generation_fallback`, C5 `artifact_generation`
+- Observed intermittent/flaky behavior:
+  - C5 passed in v2 (`write_article_tool_success` + `article_artifact_emitted`) but failed in v3.
+- Strong recurring log signals:
+  - `firecrawl_agent_disabled` (credit exhaustion path)
+  - Minimax MCP `BrokenResourceError` from `langchain_mcp_adapters` stdio sessions
+  - `agui_degraded_direct_fallback_failed` and `stream_missing_final_output_recovery_started`
+  - `generate_image_tool_invoked` without corresponding reliable artifact emission events
+
+### Verification Commands
+
+- `python -m py_compile scripts/agui_live_capability_matrix.py`
+- `python -u scripts/agui_live_capability_matrix.py --base-url http://127.0.0.1:8000 --backend-log system_logs/backend/backend.log --timeout-sec 120 --output system_logs/qa_runs/agui_live_matrix_latest_v2.json`
+- `python -u scripts/agui_live_capability_matrix.py --base-url http://127.0.0.1:8000 --backend-log system_logs/backend/backend.log --timeout-sec 120 --output system_logs/qa_runs/agui_live_matrix_latest_v3.json`
+
+## 2026-02-13 - Web Search / Image Fallback / Dynamic Skills Hardening
+
+### Completed
+
+- Added resilient web-search fallback routing in `app/agents/unified/tools.py`:
+  - `web_search` now falls back to `minimax_web_search` when Tavily quota is exhausted or retries fail.
+  - `firecrawl_search` now falls back to `minimax_web_search` when Firecrawl credits/quota/rate limits fail or the Firecrawl circuit is open.
+  - `firecrawl_search` now accepts optional `location` in tool arguments to avoid function-signature tool-call failures.
+- Hardened image generation in `app/agents/unified/tools.py`:
+  - Enforced primary/fallback model sequence (`gemini-3-pro-image-preview` → `gemini-2.5-flash-image`).
+  - Added alias normalization (`nano-banana-pro`, `nano-banana`) and fallback metadata in tool responses.
+- Restored dynamic coordinator skill activation in all modes:
+  - `_build_skills_context` now uses `get_context_skills_content(...)` for non-Zendesk and Zendesk runs alike (`app/agents/unified/agent_sparrow.py`).
+- Expanded coordinator mode tool parity:
+  - `mailbird_expert` and `research_expert` now register `generate_image` and artifact tooling consistently (`app/agents/unified/tools.py`).
+- Reduced Minimax MCP stall impact:
+  - Added shorter MCP tools-load timeout path for faster failover to direct Minimax HTTP search (`app/agents/unified/minimax_tools.py`).
+
+### Verification
+
+- `ruff check app/agents/unified/tools.py app/agents/unified/agent_sparrow.py app/agents/unified/minimax_tools.py tests/agents/test_agent_mode_hard_switch.py`
+- `pytest -q tests/agents/test_agent_mode_hard_switch.py tests/api/test_agui_mode_contract.py`
+- Live provider checks:
+  - Minimax search endpoint returns `200`.
+  - Tavily returns quota limit (`432`) and Firecrawl returns credit exhaustion (`402`), with fallback-to-Minimax validated in tool execution.
+  - Gemini model availability confirmed for `gemini-3-pro-image-preview` and `gemini-2.5-flash-image`.
+
+## 2026-02-13 - Prompt/Mode Hard-Switch Regression Remediation
+
+### Completed
+
+- Delivered forensic report artifact: `docs/reviews/prompt-routing-regression-forensic-report-2026-02-13.md` (Tasks 1-6 with file/line/commit evidence).
+- Standardized coordinator + subagent prompt layering on canonical 9-step base with mode overlays:
+  - Added mode role layers in `app/agents/unified/prompts.py`
+  - Applied shared reasoning base to coordinator and subagent prompts
+- Enforced hard mode switch end-to-end:
+  - Added `app/agents/unified/agent_modes.py`
+  - Propagated/validated `agent_mode` in AG-UI ingest, graph state, coordinator runtime, subagent selection, and chat sessions APIs.
+- Rebuilt mode-scoped tool registry and restored image capability:
+  - `get_registered_tools_for_mode(...)` in `app/agents/unified/tools.py`
+  - `generate_image` restored for `general` and `creative_expert`
+- Replaced degraded fallback support-incident scaffold with mode-aware neutral fallback and sanitizer parity in `app/api/v1/endpoints/agui_endpoints.py`.
+- Implemented frontend command-menu expert selector and mode plumbing:
+  - `frontend/src/features/librechat/components/ChatInput.tsx`
+  - `frontend/src/features/librechat/AgentContext.tsx`
+  - `frontend/src/features/librechat/LibreChatClient.tsx`
+  - `frontend/src/services/ag-ui/client.ts`
+  - `frontend/src/services/api/endpoints/sessions.ts`
+  - `frontend/src/services/api/endpoints/models.ts`
+
+### Regression Root-Cause Mapping
+
+- `a141af0`: degraded fallback injected user-visible support-incident framing; fixed by mode-aware neutral fallback prompt + final sanitize.
+- `ed5b3d8`: `generate_image` tool existed but dropped from active registration path; fixed by mode-scoped registries with explicit creative/general inclusion.
+- Pre-hard-switch prompt/routing drift: legacy `agent_type` and broad Mailbird framing leaked into default behavior; fixed by explicit mode resolution and role overlays.
+
+### Verification
+
+- Backend tests:
+  - `pytest -q tests/agents/test_agent_mode_hard_switch.py tests/api/test_agui_mode_contract.py`
+- Frontend checks:
+  - `cd frontend && pnpm -s typecheck`
+
+---
+
+## 2026-02-12 - MiniMax M2.5 Subagent Upgrade
+
+### Completed
+
+- Created dedicated branch `upgrade/minimax-m2-5-subagents` for the migration work.
+- Upgraded MiniMax model IDs from `MiniMax-M2.1` to `MiniMax-M2.5` across runtime config:
+  - `app/core/config/models.yaml` (coordinators, internal `minimax_tools`, subagent defaults, zendesk subagent defaults)
+  - `app/core/config/models_config.py` fallback defaults
+  - `app/feedme/tasks.py` explicit MiniMax summarization path
+- Updated provider/frontend/model metadata references:
+  - `frontend/src/services/api/endpoints/models.ts` fallback model IDs, labels, and fallback chains
+  - `app/agents/unified/provider_factory.py`, `app/agents/unified/prompts.py`, `app/agents/unified/subagents.py`
+  - `app/agents/unified/openrouter_chat_openai.py`, `app/agents/unified/minimax_tools.py`
+  - `app/api/v1/endpoints/agui_endpoints.py`, `app/core/config/health_check.py`
+- Updated architecture/model docs to match runtime model source-of-truth:
+  - `docs/backend-architecture.md`
+  - `docs/model-catalog.md`
+
+### Verification
+
+- Residual scan confirms no remaining `MiniMax-M2.1`/`minimax-m2.1` references in tracked runtime/frontend/docs files.
+- Full verification run (tests + live MiniMax API checks + AG-UI path + Railway deploy check) executed in the same migration session.
+
+---
+
 ## 2026-02-12 - Documentation Split + Alignment Pass (Parallel Audit)
 
 ### Completed
@@ -564,3 +733,54 @@ All 7 phases of the Context Engineering Improvements plan are now complete:
 ### Notes
 - Failed-only rerun policy was used for follow-up validation to control external API cost.
 - LangSmith 429 traces remained observable noise in some runs but were not the primary cause of zero-text user responses.
+
+## 2026-02-13 - Command Menu Direction + Web-On Reliability Polish
+
+### Completed
+- Removed the per-message `Web On/Off` badge beside `Agent Sparrow` in chat transcript headers.
+- Added dynamic command-menu direction logic for both composer variants:
+  - menu opens downward when space is available (centered composer),
+  - menu flips upward when the composer is docked near the bottom.
+- Centered the plus trigger within the input rail and aligned submenu direction classes for desktop/mobile behavior.
+- Hardened Minimax display-name sanitization to avoid duplicated provider tokens (e.g., `Minimax Minimax M2.5`).
+- Added explicit coordinator prompt enforcement for `force_websearch/web_search_mode=on` runs to require web lookup before answering external/time-sensitive queries and avoid false “cannot browse” phrasing.
+- Updated degraded AG-UI fallback prompt to stay mode-aware and avoid claiming lack of browsing capability when web mode was enabled.
+- Improved local startup persistence in `start_system.sh` by launching backend/frontend/celery through detached `setsid`/`nohup` wrappers with stdin closed.
+
+### Files Modified
+- `frontend/src/features/librechat/components/MessageItem.tsx`
+- `frontend/src/features/librechat/components/ChatInput.tsx`
+- `frontend/src/features/librechat/components/Landing.tsx`
+- `frontend/src/features/librechat/components/Header.tsx`
+- `frontend/src/features/librechat/styles/chat.css`
+- `app/core/config/model_registry.py`
+- `app/agents/unified/agent_sparrow.py`
+- `app/api/v1/endpoints/agui_endpoints.py`
+- `scripts/start_on_macos/start_system.sh`
+- `docs/work-ledger/sessions.md`
+
+### Validation
+- `cd frontend && pnpm eslint src/features/librechat/components/ChatInput.tsx src/features/librechat/components/Landing.tsx src/features/librechat/components/MessageItem.tsx src/features/librechat/components/Header.tsx` ✅
+- `cd frontend && pnpm typecheck` ✅
+- `ruff check app/agents/unified/agent_sparrow.py app/api/v1/endpoints/agui_endpoints.py app/core/config/model_registry.py` ✅
+- `bash -n scripts/start_on_macos/start_system.sh` ✅
+
+## 2026-02-13 - Round 2 Capability Debug (Search/Image/Artifact/Skills)
+
+### Completed
+- Pulled and analyzed the latest 6 production query traces (sessions `1569`, `1570`) from backend logs + persisted chat messages.
+- Confirmed recurrent AG-UI degraded fallback behavior as the primary reason tool-backed responses were bypassed in those runs.
+- Verified external provider health:
+  - Tavily usage-limit exhaustion (`HTTP 432`)
+  - Firecrawl credit exhaustion (`HTTP 402`)
+  - Gemini image models reachable for both primary/fallback IDs (`HTTP 200`).
+- Hardened subagent shared-tool parity so every subagent now includes shared web-search/image/artifact/skill tools in addition to domain-specialized tools.
+
+### Files Modified
+- `app/agents/unified/subagents.py`
+- `docs/work-ledger/sessions.md`
+
+### Validation
+- `pytest -q tests/agents/test_agent_mode_hard_switch.py tests/api/test_agui_mode_contract.py` ✅
+- `ruff check app/agents/unified/subagents.py` ✅
+- Runtime audit script: coordinator/subagent tool parity check ✅

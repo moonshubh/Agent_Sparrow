@@ -37,9 +37,14 @@ from app.schemas.chat_schemas import (
     ChatMessageListRequest,
     UserChatStats,
     AgentType,
+    AgentMode,
     MessageType,
 )
 from pydantic import BaseModel, Field
+from app.agents.unified.agent_modes import (
+    DEFAULT_AGENT_MODE,
+    resolve_agent_mode,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -117,6 +122,45 @@ def _store_local_message(
 
 def _enum_value(value: Any) -> Any:
     return value.value if hasattr(value, "value") else value
+
+
+def _resolve_session_agent_mode(
+    *,
+    agent_type: Any,
+    explicit_mode: Any = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    meta_mode = metadata.get("agent_mode") if isinstance(metadata, dict) else None
+    return resolve_agent_mode(
+        explicit_mode or meta_mode,
+        legacy_agent_type=_enum_value(agent_type),
+        default=DEFAULT_AGENT_MODE,
+    )
+
+
+def _metadata_with_agent_mode(
+    metadata: Optional[Dict[str, Any]],
+    *,
+    mode: str,
+) -> Dict[str, Any]:
+    merged = dict(metadata or {})
+    merged["agent_mode"] = mode
+    return merged
+
+
+def _annotate_session_with_mode(session: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = session.get("metadata")
+    mode = _resolve_session_agent_mode(
+        agent_type=session.get("agent_type"),
+        explicit_mode=session.get("agent_mode"),
+        metadata=metadata if isinstance(metadata, dict) else None,
+    )
+    session["agent_mode"] = mode
+    session["metadata"] = _metadata_with_agent_mode(
+        metadata if isinstance(metadata, dict) else {},
+        mode=mode,
+    )
+    return session
 
 
 class ChatMessageAppendRequest(BaseModel):
@@ -361,9 +405,16 @@ def create_chat_session_in_db(
             # Create the new session
             import json
 
-            metadata_json = (
-                json.dumps(session_data.metadata) if session_data.metadata else "{}"
+            resolved_mode = _resolve_session_agent_mode(
+                agent_type=session_data.agent_type,
+                explicit_mode=session_data.agent_mode,
+                metadata=session_data.metadata,
             )
+            metadata_payload = _metadata_with_agent_mode(
+                session_data.metadata,
+                mode=resolved_mode,
+            )
+            metadata_json = json.dumps(metadata_payload) if metadata_payload else "{}"
 
             cur.execute(
                 """
@@ -382,11 +433,13 @@ def create_chat_session_in_db(
 
             conn.commit()
             session_dict = dict(cur.fetchone())
+            session_dict["agent_mode"] = resolved_mode
+            session_dict["metadata"] = metadata_payload
             logger.info(
                 f"Created session id={session_dict.get('id')} for user={user_id}, "
                 f"agent_type={session_data.agent_type.value}"
             )
-            return session_dict
+            return _annotate_session_with_mode(session_dict)
     except psycopg2.Error as e:
         logger.error(f"Database error in create_chat_session_in_db: {e}")
         conn.rollback()
@@ -405,11 +458,21 @@ async def create_chat_session_in_supabase(
 ) -> Dict[str, Any]:
     """Create a new chat session via Supabase REST."""
 
+    resolved_mode = _resolve_session_agent_mode(
+        agent_type=session_data.agent_type,
+        explicit_mode=session_data.agent_mode,
+        metadata=session_data.metadata,
+    )
+    metadata_payload = _metadata_with_agent_mode(
+        session_data.metadata,
+        mode=resolved_mode,
+    )
+
     payload: Dict[str, Any] = {
         "user_id": user_id,
         "title": session_data.title,
         "agent_type": _enum_value(session_data.agent_type) or "primary",
-        "metadata": session_data.metadata or {},
+        "metadata": metadata_payload,
         "is_active": bool(session_data.is_active),
     }
 
@@ -420,7 +483,10 @@ async def create_chat_session_in_supabase(
     rows = getattr(response, "data", None) or []
     if not rows:
         raise RuntimeError("Supabase insert chat_sessions returned no rows")
-    return dict(rows[0])
+    session = dict(rows[0])
+    session["agent_mode"] = resolved_mode
+    session["metadata"] = metadata_payload
+    return _annotate_session_with_mode(session)
 
 
 # @with_db_connection removed - using Supabase
@@ -428,6 +494,8 @@ def update_chat_session_in_db(
     conn, session_id: int, user_id: str, updates: ChatSessionUpdate
 ) -> Optional[Dict[str, Any]]:
     """Update a chat session in the database"""
+    import json
+
     with conn.cursor() as cur:
         # Build dynamic update query
         update_fields = []
@@ -441,9 +509,33 @@ def update_chat_session_in_db(
             update_fields.append("is_active = %s")
             update_values.append(updates.is_active)
 
-        if updates.metadata is not None:
-            update_fields.append("metadata = %s")
-            update_values.append(updates.metadata)
+        if updates.metadata is not None or updates.agent_mode is not None:
+            cur.execute(
+                """
+                SELECT agent_type, metadata
+                FROM chat_sessions
+                WHERE id = %s AND user_id = %s
+            """,
+                (session_id, user_id),
+            )
+            existing_row = cur.fetchone()
+            if not existing_row:
+                return None
+
+            existing_meta = dict(existing_row.get("metadata") or {})
+            if updates.metadata is not None:
+                existing_meta.update(updates.metadata)
+            resolved_mode = _resolve_session_agent_mode(
+                agent_type=existing_row.get("agent_type"),
+                explicit_mode=updates.agent_mode,
+                metadata=existing_meta,
+            )
+            merged_metadata = _metadata_with_agent_mode(
+                existing_meta,
+                mode=resolved_mode,
+            )
+            update_fields.append("metadata = %s::jsonb")
+            update_values.append(json.dumps(merged_metadata))
 
         if not update_fields:
             return None
@@ -463,7 +555,7 @@ def update_chat_session_in_db(
 
         conn.commit()
         row = cur.fetchone()
-        return dict(row) if row else None
+        return _annotate_session_with_mode(dict(row)) if row else None
 
 
 async def update_chat_session_in_supabase(
@@ -481,8 +573,30 @@ async def update_chat_session_in_supabase(
         payload["title"] = updates.title
     if updates.is_active is not None:
         payload["is_active"] = updates.is_active
-    if updates.metadata is not None:
-        payload["metadata"] = updates.metadata
+    if updates.metadata is not None or updates.agent_mode is not None:
+        existing_response = await client._exec(
+            lambda: client.client.table("chat_sessions")
+            .select("agent_type, metadata")
+            .eq("id", session_id)
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        existing = getattr(existing_response, "data", None)
+        if not existing:
+            return None
+        existing_meta = dict(existing.get("metadata") or {})
+        if updates.metadata is not None:
+            existing_meta.update(updates.metadata)
+        resolved_mode = _resolve_session_agent_mode(
+            agent_type=existing.get("agent_type"),
+            explicit_mode=updates.agent_mode,
+            metadata=existing_meta,
+        )
+        payload["metadata"] = _metadata_with_agent_mode(
+            existing_meta,
+            mode=resolved_mode,
+        )
 
     if not payload:
         return None
@@ -496,7 +610,7 @@ async def update_chat_session_in_supabase(
     )
 
     rows = getattr(response, "data", None) or []
-    return dict(rows[0]) if rows else None
+    return _annotate_session_with_mode(dict(rows[0])) if rows else None
 
 
 # @with_db_connection removed - using Supabase
@@ -840,6 +954,9 @@ def get_chat_sessions_for_user(
         if request.agent_type:
             where_conditions.append("agent_type = %s")
             where_values.append(request.agent_type.value)
+        if request.agent_mode:
+            where_conditions.append("COALESCE(metadata->>'agent_mode', %s) = %s")
+            where_values.extend([DEFAULT_AGENT_MODE, request.agent_mode.value])
 
         if request.is_active is not None:
             where_conditions.append("is_active = %s")
@@ -874,7 +991,7 @@ def get_chat_sessions_for_user(
             where_values + [request.page_size, offset],
         )
 
-        sessions = [dict(row) for row in cur.fetchall()]
+        sessions = [_annotate_session_with_mode(dict(row)) for row in cur.fetchall()]
 
         return {
             "sessions": sessions,
@@ -902,6 +1019,8 @@ async def get_chat_sessions_for_user_in_supabase(
 
     if request.agent_type:
         query = query.eq("agent_type", request.agent_type.value)
+    if request.agent_mode:
+        query = query.contains("metadata", {"agent_mode": request.agent_mode.value})
 
     if request.is_active is not None:
         query = query.eq("is_active", request.is_active)
@@ -924,7 +1043,7 @@ async def get_chat_sessions_for_user_in_supabase(
     )
 
     return {
-        "sessions": [dict(row) for row in sessions],
+        "sessions": [_annotate_session_with_mode(dict(row)) for row in sessions],
         "total_count": total_count,
         "page": request.page,
         "page_size": request.page_size,
@@ -1150,7 +1269,7 @@ async def create_chat_session(
             try:
                 session_dict = create_chat_session_in_db(conn, session_data, user_id)
                 logger.info("Successfully created chat session: %s", session_dict["id"])
-                return ChatSession(**session_dict)
+                return ChatSession(**_annotate_session_with_mode(session_dict))
             except psycopg2.Error as e:
                 logger.error("Database error creating chat session: %s", e)
                 logger.error(
@@ -1178,7 +1297,7 @@ async def create_chat_session(
                         "Created chat session via Supabase REST: %s",
                         session_dict.get("id"),
                     )
-                    return ChatSession(**session_dict)
+                    return ChatSession(**_annotate_session_with_mode(session_dict))
                 except Exception as exc:
                     logger.error("Supabase error creating chat session: %s", exc)
                     logger.warning("Falling back to in-memory chat session storage")
@@ -1188,12 +1307,22 @@ async def create_chat_session(
         import uuid
 
         now = datetime.utcnow()
+        resolved_mode = _resolve_session_agent_mode(
+            agent_type=session_data.agent_type,
+            explicit_mode=session_data.agent_mode,
+            metadata=session_data.metadata,
+        )
+        metadata_payload = _metadata_with_agent_mode(
+            session_data.metadata,
+            mode=resolved_mode,
+        )
         mock_session = {
             "id": abs(hash(str(uuid.uuid4()))) % (10**8),
             "user_id": user_id,
             "agent_type": _enum_value(session_data.agent_type) or "primary",
+            "agent_mode": resolved_mode,
             "title": session_data.title or "New Chat",
-            "metadata": session_data.metadata or {},
+            "metadata": metadata_payload,
             "is_active": True,
             "created_at": now,
             "updated_at": now,
@@ -1202,7 +1331,7 @@ async def create_chat_session(
         }
         _persist_local_session(user_id, mock_session)
         logger.info("Created mock chat session in local mode: %s", mock_session["id"])
-        return ChatSession(**mock_session)
+        return ChatSession(**_annotate_session_with_mode(mock_session))
     except Exception as e:
         logger.error("Error creating chat session: %s", e)
         logger.error("Error type: %s", type(e).__name__)
@@ -1227,6 +1356,7 @@ async def list_chat_sessions(
     request: Request,
     response: Response,
     agent_type: Optional[AgentType] = Query(None, description="Filter by agent type"),
+    agent_mode: Optional[AgentMode] = Query(None, description="Filter by agent mode"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(
@@ -1256,6 +1386,7 @@ async def list_chat_sessions(
 
                 request = ChatSessionListRequest(
                     agent_type=agent_type,
+                    agent_mode=agent_mode,
                     is_active=is_active,
                     page=page,
                     page_size=page_size,
@@ -1263,7 +1394,10 @@ async def list_chat_sessions(
                 )
 
                 result = get_chat_sessions_for_user(conn, user_id, request)
-                sessions = [ChatSession(**session) for session in result["sessions"]]
+                sessions = [
+                    ChatSession(**_annotate_session_with_mode(session))
+                    for session in result["sessions"]
+                ]
 
                 logger.debug(
                     "Returning %s sessions, agent_type=%s", len(sessions), agent_type
@@ -1295,6 +1429,7 @@ async def list_chat_sessions(
                 try:
                     request_model = ChatSessionListRequest(
                         agent_type=agent_type,
+                        agent_mode=agent_mode,
                         is_active=effective_is_active,
                         page=page,
                         page_size=page_size,
@@ -1306,7 +1441,8 @@ async def list_chat_sessions(
                         request=request_model,
                     )
                     sessions = [
-                        ChatSession(**session) for session in result["sessions"]
+                        ChatSession(**_annotate_session_with_mode(session))
+                        for session in result["sessions"]
                     ]
                     return ChatSessionListResponse(
                         sessions=sessions,
@@ -1324,10 +1460,16 @@ async def list_chat_sessions(
 
         sessions = LOCAL_CHAT_SESSIONS.get(user_id, [])
         agent_filter = agent_type.value if agent_type else None
+        mode_filter = agent_mode.value if agent_mode else None
         filtered = [
             session
             for session in sessions
             if (agent_filter is None or session["agent_type"] == agent_filter)
+            and (
+                mode_filter is None
+                or str((session.get("metadata") or {}).get("agent_mode") or DEFAULT_AGENT_MODE)
+                == mode_filter
+            )
             and (
                 effective_is_active is None
                 or session["is_active"] == effective_is_active
@@ -1341,7 +1483,9 @@ async def list_chat_sessions(
         window = filtered[start:end]
 
         return ChatSessionListResponse(
-            sessions=[ChatSession(**session) for session in window],
+            sessions=[
+                ChatSession(**_annotate_session_with_mode(session)) for session in window
+            ],
             total_count=len(filtered),
             page=page,
             page_size=page_size,
@@ -1385,7 +1529,7 @@ async def get_chat_session(
             if not session_dict:
                 raise HTTPException(status_code=404, detail="Chat session not found")
 
-            session = ChatSession(**session_dict)
+            session = ChatSession(**_annotate_session_with_mode(session_dict))
 
             if include_messages:
                 message_request = ChatMessageListRequest(page=1, page_size=200)
@@ -1406,7 +1550,7 @@ async def get_chat_session(
         if not session_dict:
             raise HTTPException(status_code=404, detail="Chat session not found")
 
-        session = ChatSession(**session_dict)
+        session = ChatSession(**_annotate_session_with_mode(session_dict))
 
         if include_messages:
             message_request = ChatMessageListRequest(page=1, page_size=200)
@@ -1453,7 +1597,7 @@ async def update_chat_session(
                     raise HTTPException(
                         status_code=404, detail="Chat session not found"
                     )
-                return ChatSession(**updated_session)
+                return ChatSession(**_annotate_session_with_mode(updated_session))
 
             supabase = get_supabase_chat_storage()
             if supabase is not None:
@@ -1467,7 +1611,7 @@ async def update_chat_session(
                     raise HTTPException(
                         status_code=404, detail="Chat session not found"
                     )
-                return ChatSession(**updated_session)
+                return ChatSession(**_annotate_session_with_mode(updated_session))
 
             # Fallback for authenticated users when persistent storage is unavailable
             user_id = current_user.sub
@@ -1482,12 +1626,24 @@ async def update_chat_session(
             session["title"] = updates.title
         if updates.is_active is not None:
             session["is_active"] = updates.is_active
-        if updates.metadata is not None:
-            session["metadata"] = updates.metadata
+        if updates.metadata is not None or updates.agent_mode is not None:
+            existing_metadata = dict(session.get("metadata") or {})
+            if updates.metadata is not None:
+                existing_metadata.update(updates.metadata)
+            resolved_mode = _resolve_session_agent_mode(
+                agent_type=session.get("agent_type"),
+                explicit_mode=updates.agent_mode,
+                metadata=existing_metadata,
+            )
+            session["agent_mode"] = resolved_mode
+            session["metadata"] = _metadata_with_agent_mode(
+                existing_metadata,
+                mode=resolved_mode,
+            )
 
         session["updated_at"] = datetime.utcnow()
         _persist_local_session(user_id, session)
-        return ChatSession(**session)
+        return ChatSession(**_annotate_session_with_mode(session))
     except HTTPException:
         raise
     except Exception as e:
@@ -2033,8 +2189,46 @@ async def get_user_chat_stats(current_user: TokenPayload = Depends(get_current_u
                     "oldest_session": oldest,
                 }
 
-        stats = get_user_stats(current_user.sub)
-        return UserChatStats(**stats)
+        conn = get_db_connection()
+        if conn is not None:
+            try:
+                stats = get_user_stats(conn, current_user.sub)
+                return UserChatStats(**stats)
+            finally:
+                conn.close()
+
+        # Local fallback when persistent storage is unavailable.
+        user_id = current_user.sub
+        sessions = LOCAL_CHAT_SESSIONS.get(user_id, [])
+        session_ids = {session["id"] for session in sessions}
+        total_messages = sum(
+            len(LOCAL_CHAT_MESSAGES.get(session_id, [])) for session_id in session_ids
+        )
+        sessions_by_agent_type: Dict[str, int] = defaultdict(int)
+        most_recent = None
+        oldest = None
+        active_sessions = 0
+
+        for session in sessions:
+            agent_type = str(session.get("agent_type") or "primary")
+            sessions_by_agent_type[agent_type] += 1
+            if session.get("is_active") is True:
+                active_sessions += 1
+            created_at = session.get("created_at")
+            if most_recent is None or (created_at and created_at > most_recent):
+                most_recent = created_at
+            if oldest is None or (created_at and created_at < oldest):
+                oldest = created_at
+
+        return UserChatStats(
+            user_id=user_id,
+            total_sessions=len(sessions),
+            active_sessions=active_sessions,
+            total_messages=total_messages,
+            sessions_by_agent_type=dict(sessions_by_agent_type),
+            most_recent_session=most_recent,
+            oldest_session=oldest,
+        )
 
     except Exception as e:
         logger.error(f"Error getting user chat stats: {e}")

@@ -75,6 +75,30 @@ def _normalize_tool_end_output(event: Any) -> Any:
     if not isinstance(data, dict):
         return event
 
+    def _coerce_tool_call_id(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+        else:
+            normalized = str(value).strip()
+        if not normalized or normalized.lower() == "unknown":
+            return None
+        return normalized
+
+    def _ensure_data_tool_call_id(data_payload: dict[str, Any], value: Any) -> dict[str, Any]:
+        existing = _coerce_tool_call_id(
+            data_payload.get("tool_call_id") or data_payload.get("id")
+        )
+        if existing:
+            return data_payload
+        candidate = _coerce_tool_call_id(value)
+        if not candidate:
+            return data_payload
+        updated_payload = dict(data_payload)
+        updated_payload["tool_call_id"] = candidate
+        return updated_payload
+
     def _coerce_tool_name(value: Any) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -104,9 +128,12 @@ def _normalize_tool_end_output(event: Any) -> Any:
     if isinstance(output, (ToolMessage, Command)):
         if isinstance(output, ToolMessage):
             updated_tool_msg = _ensure_tool_message_name(output, fallback_tool_name)
-            if updated_tool_msg is output:
+            normalized = _ensure_data_tool_call_id(
+                dict(data),
+                getattr(updated_tool_msg, "tool_call_id", None),
+            )
+            if updated_tool_msg is output and normalized == data:
                 return event
-            normalized = dict(data)
             normalized["output"] = updated_tool_msg
             updated = dict(event)
             updated["data"] = normalized
@@ -129,12 +156,21 @@ def _normalize_tool_end_output(event: Any) -> Any:
                             normalized_messages.append(normalized_msg)
                         else:
                             normalized_messages.append(msg)
-                    if not changed:
+                    first_tool_call_id = None
+                    for msg in normalized_messages:
+                        if isinstance(msg, ToolMessage):
+                            first_tool_call_id = getattr(msg, "tool_call_id", None)
+                            break
+                    normalized = _ensure_data_tool_call_id(
+                        dict(data),
+                        first_tool_call_id,
+                    )
+
+                    if not changed and normalized == data:
                         return event
 
                     new_update = dict(update)
                     new_update["messages"] = normalized_messages
-                    normalized = dict(data)
                     normalized["output"] = Command(
                         graph=getattr(output, "graph", None),
                         update=new_update,
@@ -156,7 +192,10 @@ def _normalize_tool_end_output(event: Any) -> Any:
         output = [
             _ensure_tool_message_name(item, fallback_tool_name) for item in output
         ]
-        normalized = dict(data)
+        normalized = _ensure_data_tool_call_id(
+            dict(data),
+            getattr(output[0], "tool_call_id", None),
+        )
         normalized["output"] = Command(update={"messages": output})
         updated = dict(event)
         updated["data"] = normalized

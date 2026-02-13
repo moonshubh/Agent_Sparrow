@@ -63,6 +63,12 @@ const FALLBACK_PROVIDERS: ProviderInfo[] = [
     icon: "/icons/xai.svg",
     models: [{ id: "grok-4-1-fast-reasoning", name: "Grok 4.1 Fast" }],
   },
+  {
+    id: "minimax",
+    name: "MiniMax",
+    icon: "/icons/openrouter.svg",
+    models: [{ id: "minimax/MiniMax-M2.5", name: "MiniMax M2.5" }],
+  },
 ];
 
 // Helper to find model info from nested structure
@@ -83,9 +89,20 @@ const PROVIDER_ICONS: Record<ProviderId, string> = {
   google: "/icons/google.svg",
   xai: "/icons/xai.svg",
   openrouter: "/icons/openrouter.svg",
+  minimax: "/icons/openrouter.svg",
 };
 
 const TIER_ORDER: Record<ModelTier, number> = { pro: 0, standard: 1, lite: 2 };
+
+function normalizeProviderModelName(
+  displayName: string,
+  providerId: ProviderId,
+): string {
+  if (providerId === "minimax") {
+    return displayName.replace(/^minimax\s+minimax\b/i, "MiniMax").trim();
+  }
+  return displayName;
+}
 
 export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
   const { agent, resolvedModel } = useAgent();
@@ -117,14 +134,15 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
     void (async () => {
       try {
         const config = await modelsAPI.getConfig();
-        const providerOrder: ProviderId[] = ["google", "xai"];
+        const providerOrder: ProviderId[] = ["google", "xai", "minimax"];
         const allowedModelsByProvider: Record<
           ProviderId,
           ReadonlySet<string>
         > = {
           google: new Set(["gemini-3-flash-preview"]),
           xai: new Set(["grok-4-1-fast-reasoning"]),
-          openrouter: new Set(),
+          openrouter: new Set(["x-ai/grok-4.1-fast"]),
+          minimax: new Set(["minimax/MiniMax-M2.5"]),
         };
 
         const nextProviders: ProviderInfo[] = providerOrder
@@ -141,7 +159,7 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
               })
               .map(([modelId, info]) => ({
                 id: modelId,
-                name: info.display_name,
+                name: normalizeProviderModelName(info.display_name, id),
               }));
 
             return {

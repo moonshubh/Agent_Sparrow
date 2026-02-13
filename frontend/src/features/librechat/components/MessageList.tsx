@@ -3,7 +3,6 @@
 import React, { useEffect, useRef, memo, useCallback } from "react";
 import type { Message } from "@/services/ag-ui/client";
 import { MessageItem } from "./MessageItem";
-import { ThinkingStickyRail } from "./ThinkingPanel";
 import { useAgent } from "../AgentContext";
 import { sessionsAPI } from "@/services/api/endpoints/sessions";
 import type { AttachmentInput } from "@/services/ag-ui/types";
@@ -66,12 +65,6 @@ export const MessageList = memo(function MessageList({
     panelState,
     webSearchMode,
   } = useAgent();
-
-  const showStickyRail =
-    messages.length > 0 &&
-    (isStreaming ||
-      Object.keys(panelState.objectives).length > 0 ||
-      todos.length > 0);
 
   const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -146,19 +139,6 @@ export const MessageList = memo(function MessageList({
 
   return (
     <>
-      {showStickyRail && (
-        <div className="lc-thinking-rail-container" aria-live="off">
-          <div className="lc-messages-inner">
-            <ThinkingStickyRail
-              panelState={panelState}
-              isStreaming={isStreaming}
-              todos={todos}
-              activeTools={activeTools}
-              webSearchMode={webSearchMode}
-            />
-          </div>
-        </div>
-      )}
       <div
         ref={messagesContainerRef}
         className="lc-messages"

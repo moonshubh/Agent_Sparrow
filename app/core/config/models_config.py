@@ -117,14 +117,14 @@ def _default_models_config_dict() -> dict[str, Any]:
         "rate_limiting": {"safety_margin": 0.1},
         "internal": {
             "minimax_tools": {
-                "model_id": "minimax/MiniMax-M2.1",
+                "model_id": "minimax/MiniMax-M2.5",
                 "context_window": 204800,
                 "rate_limits": {"rpm": 2, "rpd": 20},
             }
         },
         "subagents": {
             "_default": {
-                "model_id": "minimax/MiniMax-M2.1",
+                "model_id": "minimax/MiniMax-M2.5",
                 "context_window": 204800,
                 "rate_limits": {"rpm": 2, "rpd": 20},
             }

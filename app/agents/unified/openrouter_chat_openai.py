@@ -1,6 +1,6 @@
 """OpenRouter-specific ChatOpenAI wrapper.
 
-OpenRouter's MiniMax M2.1 (and some other reasoning models) recommend preserving
+OpenRouter's MiniMax M2.5 (and some other reasoning models) recommend preserving
 `reasoning_details` across turns, especially around tool-calling.
 
 LangChain's ChatOpenAI currently drops `reasoning_details` fields in both:

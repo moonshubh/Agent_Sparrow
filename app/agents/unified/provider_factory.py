@@ -363,7 +363,7 @@ def _is_minimax_model(model: str) -> bool:
         model: The model identifier.
 
     Returns:
-        True if the model is a Minimax model (e.g., minimax/MiniMax-M2.1).
+        True if the model is a Minimax model (e.g., minimax/MiniMax-M2.5).
     """
     model_lower = model.lower()
     return "minimax" in model_lower
@@ -399,7 +399,7 @@ def _build_openrouter_model(
         )
         api_key = minimax_api_key
 
-        # Extract the actual model name (e.g., "minimax/MiniMax-M2.1" -> "MiniMax-M2.1")
+        # Extract the actual model name (e.g., "minimax/MiniMax-M2.5" -> "MiniMax-M2.5")
         actual_model = model.split("/")[-1] if "/" in model else model
 
         logger.info(
@@ -409,10 +409,10 @@ def _build_openrouter_model(
             base_url=base_url,
         )
 
-        # Minimax M2.1 Interleaved Thinking requirements:
+        # Minimax M2.5 Interleaved Thinking requirements:
         # - reasoning_split=True: Separates thinking into `reasoning_details` field
         # - Our OpenRouterChatOpenAI wrapper preserves reasoning_details across turns
-        # - This enables M2.1's chain-of-thought to remain uninterrupted
+        # - This enables M2.5's chain-of-thought to remain uninterrupted
         # See: https://platform.minimax.io/docs/guides/text-m2-function-call
         minimax_extra_body: Dict[str, Any] = {"reasoning_split": True}
         if top_k is not None:
@@ -509,7 +509,10 @@ def get_available_providers() -> dict[str, bool]:
         "google": bool(settings.gemini_api_key),
         "xai": bool(settings.xai_api_key),
         "openrouter": bool(getattr(settings, "openrouter_api_key", None)),
-        "minimax": bool(getattr(settings, "minimax_api_key", None)),
+        "minimax": bool(
+            getattr(settings, "minimax_coding_plan_api_key", None)
+            or getattr(settings, "minimax_api_key", None)
+        ),
     }
 
 
@@ -527,5 +530,6 @@ def get_default_model_for_provider(provider: str) -> str:
         "google": config.coordinators["google"].model_id,
         "xai": config.coordinators["xai"].model_id,
         "openrouter": config.coordinators["openrouter"].model_id,
+        "minimax": config.coordinators["minimax"].model_id,
     }
     return defaults.get(provider.lower(), config.coordinators["google"].model_id)

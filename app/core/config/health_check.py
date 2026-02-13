@@ -56,7 +56,7 @@ def _normalize_google_model_id(model_id: str) -> str:
 
 
 def _is_minimax_model(model_id: str) -> bool:
-    """Check whether a model_id targets Minimax (e.g., minimax/MiniMax-M2.1)."""
+    """Check whether a model_id targets Minimax (e.g., minimax/MiniMax-M2.5)."""
     return "minimax" in (model_id or "").lower()
 
 

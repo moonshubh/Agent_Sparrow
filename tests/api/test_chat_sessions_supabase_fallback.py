@@ -76,6 +76,75 @@ def test_create_chat_session_uses_supabase_when_db_unavailable(
     assert called["count"] == 1
 
 
+def test_create_chat_session_defaults_agent_mode_to_general(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setattr(chat_session_endpoints, "get_db_connection", lambda: None)
+    monkeypatch.setattr(
+        chat_session_endpoints, "get_supabase_chat_storage", lambda: object()
+    )
+
+    async def _fake_create(_client, *, session_data, user_id: str):
+        assert user_id == "user-123"
+        assert session_data.agent_mode.value == "general"
+        row = _session_row(session_id=457)
+        row["metadata"] = {"agent_mode": "general"}
+        row["agent_mode"] = "general"
+        return row
+
+    monkeypatch.setattr(
+        chat_session_endpoints, "create_chat_session_in_supabase", _fake_create
+    )
+
+    res = client.post(
+        "/api/v1/chat-sessions",
+        json={"title": "New Chat", "agent_type": "primary"},
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["id"] == 457
+    assert body["agent_mode"] == "general"
+    assert body["metadata"]["agent_mode"] == "general"
+
+
+def test_create_chat_session_persists_explicit_agent_mode(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setattr(chat_session_endpoints, "get_db_connection", lambda: None)
+    monkeypatch.setattr(
+        chat_session_endpoints, "get_supabase_chat_storage", lambda: object()
+    )
+
+    async def _fake_create(_client, *, session_data, user_id: str):
+        assert user_id == "user-123"
+        assert session_data.agent_mode.value == "creative_expert"
+        row = _session_row(session_id=458)
+        row["metadata"] = {"foo": "bar", "agent_mode": "creative_expert"}
+        row["agent_mode"] = "creative_expert"
+        return row
+
+    monkeypatch.setattr(
+        chat_session_endpoints, "create_chat_session_in_supabase", _fake_create
+    )
+
+    res = client.post(
+        "/api/v1/chat-sessions",
+        json={
+            "title": "Creative Chat",
+            "agent_type": "primary",
+            "agent_mode": "creative_expert",
+            "metadata": {"foo": "bar"},
+        },
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["id"] == 458
+    assert body["agent_mode"] == "creative_expert"
+    assert body["metadata"]["agent_mode"] == "creative_expert"
+
+
 def test_list_chat_sessions_uses_supabase_when_db_unavailable(
     monkeypatch: pytest.MonkeyPatch, client: TestClient
 ) -> None:

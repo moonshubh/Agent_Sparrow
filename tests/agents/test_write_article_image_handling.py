@@ -76,7 +76,7 @@ class _FakeEmitter:
 
 
 @pytest.mark.asyncio
-async def test_handle_article_generation_emits_single_article_artifact_only() -> None:
+async def test_handle_article_generation_emits_article_and_per_image_artifacts() -> None:
     emitter = _FakeEmitter()
     handler = StreamEventHandler(
         agent=SimpleNamespace(),
@@ -103,5 +103,7 @@ async def test_handle_article_generation_emits_single_article_artifact_only() ->
 
     assert len(emitter.article_calls) == 1
     assert emitter.article_calls[0]["title"] == "Release notes"
-    assert len(emitter.image_calls) == 0
-
+    assert len(emitter.image_calls) == 1
+    assert emitter.image_calls[0]["title"] == "Release notes - Visual 1"
+    assert emitter.image_calls[0]["image_url"] == "https://images.example.com/hero.png"
+    assert emitter.image_calls[0]["page_url"] == "https://example.com/release"

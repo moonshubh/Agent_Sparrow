@@ -152,19 +152,22 @@ All queries flow through a **single coordinator agent** that:
 
 ### Task Classification
 
-Task classification uses a fast O(n) keyword approach:
+Task classification now runs under a **hard user-selected mode switch**:
 
-| Task Type | Pattern Examples |
-|-----------|------------------|
-| `log_analysis` | `.log`, `error`, `exception`, `traceback`, `crash`, `imap`, `smtp`, `oauth.*fail` |
-| `coordinator_heavy` | `detailed analysis`, `step-by-step`, `comprehensive`, `compare and contrast` |
-| `coordinator` | Default for general queries |
+| Mode | Key | Behavior |
+|------|-----|----------|
+| General Assistant | `general` | Broad assistant behavior with full general toolset |
+| Mailbird Expert | `mailbird_expert` | Support-focused behavior, Zendesk-safe guidance |
+| Research Expert | `research_expert` | Evidence-first research and synthesis |
+| Creative Expert | `creative_expert` | Artifact-first creative execution (image/article workflows) |
 
-**Detection Priority**:
-1. Explicit `coordinator_mode` from `forwarded_props`
-2. Fast keyword classification from message content
-3. Attachment-based log detection (slower, ~200ms)
-4. Default to `coordinator`
+**Routing Priority** (source: `app/agents/unified/agent_sparrow.py`):
+1. Resolve effective mode from `forwarded_props.agent_mode` (explicit), else map legacy `agent_type`, else default to `general`.
+2. Allow legacy tactical override `agent_type=log_analysis` only when mode permits (`general`, `mailbird_expert`, `research_expert`).
+3. Apply fast keyword and attachment detection as **hints only** (`task_hint`, `log_detection`) without mode switching.
+4. Default coordinator execution path remains `coordinator`.
+
+This prevents automatic cross-mode persona flips while retaining internal subagent orchestration inside the chosen mode.
 
 ### Model Selection
 
@@ -184,7 +187,7 @@ The model router performs health-aware selection:
 |--------|-------|
 | Google Standard | `gemini-3-flash-preview` -> `gemini-2.5-flash` -> `gemini-2.5-flash-lite` |
 | Google Heavy | `gemini-3-pro-preview` -> `gemini-2.5-pro` -> `gemini-2.5-flash` -> `gemini-2.5-flash-lite` |
-| OpenRouter | `x-ai/grok-4.1-fast` -> `minimax/minimax-m2.1` |
+| OpenRouter | `x-ai/grok-4.1-fast` -> `minimax/minimax-m2.5` |
 | XAI | `grok-4-1-fast-reasoning` (no fallback) |
 
 ### Subagent Architecture
@@ -195,14 +198,14 @@ The coordinator delegates to specialized subagents via the `task` tool:
 
 | Subagent | Purpose | Default Model |
 |----------|---------|---------------|
-| **research-agent** | Web research, evidence gathering | Minimax M2.1 (via `_default`) |
-| **log-diagnoser** | Log analysis, error diagnosis | Minimax M2.1 (via `_default`) |
-| **db-retrieval** | KB/macro/FeedMe lookups | Minimax M2.1 (via `_default`) |
-| **explorer** | Broad discovery | Minimax M2.1 (via `_default`) |
-| **draft-writer** | Structured writing and response composition | Minimax M2.1 (via `_default`) |
-| **data-analyst** | Data retrieval and trend analysis | Minimax M2.1 (via `_default`) |
+| **research-agent** | Web research, evidence gathering | Minimax M2.5 (via `_default`) |
+| **log-diagnoser** | Log analysis, error diagnosis | Minimax M2.5 (via `_default`) |
+| **db-retrieval** | KB/macro/FeedMe lookups | Minimax M2.5 (via `_default`) |
+| **explorer** | Broad discovery | Minimax M2.5 (via `_default`) |
+| **draft-writer** | Structured writing and response composition | Minimax M2.5 (via `_default`) |
+| **data-analyst** | Data retrieval and trend analysis | Minimax M2.5 (via `_default`) |
 
-All subagents default to `minimax/MiniMax-M2.1` via the `_default` key in `models.yaml` `subagents` section. Subagent models are configured independently from the coordinator.
+All subagents default to `minimax/MiniMax-M2.5` via the `_default` key in `models.yaml` `subagents` section. Subagent models are configured independently from the coordinator.
 
 **Per-Subagent Summarization Thresholds**:
 
@@ -282,7 +285,7 @@ internal:
   embedding:                 # Vector embeddings (gemini-embedding-001)
 
 subagents:
-  _default:                  # Default model for all subagents (Minimax M2.1)
+  _default:                  # Default model for all subagents (Minimax M2.5)
   research-agent:            # Falls back to _default
   log-diagnoser:             # Falls back to _default
   db-retrieval:              # Falls back to _default
@@ -306,7 +309,7 @@ fallback:
 | `google` | `gemini-3-flash-preview` | 1.0 | 1,048,576 | 1000 | 10000 |
 | `xai` | `grok-4-1-fast-reasoning` | 0.2 | 2,000,000 | 60 | 1000 |
 | `openrouter` | `x-ai/grok-4.1-fast` | 0.2 | 2,000,000 | 60 | 1000 |
-| `minimax` | `minimax/MiniMax-M2.1` | 1.0 | 204,800 | 100 | 5000 |
+| `minimax` | `minimax/MiniMax-M2.5` | 1.0 | 204,800 | 100 | 5000 |
 
 ### Internal Models (from models.yaml)
 
@@ -414,13 +417,21 @@ GET /api/v1/models/config -- Full model configuration (registry + providers + fa
 
 | Tier | Agents | Reasoning | Temperature |
 |------|--------|-----------|-------------|
-| **Heavy** | Coordinator, Log Analysis | Full 9-step framework | Per models.yaml |
-| **Standard** | Research | 4-step workflow (Search -> Evaluate -> Synthesize -> Cite) | Per models.yaml |
-| **Lite** | DB Retrieval | Minimal task-focused | Per models.yaml |
+| **Coordinator** | Main coordinator | Canonical 9-step base + mode role overlay | Per models.yaml |
+| **Subagents** | `log-diagnoser`, `research-agent`, `explorer`, `db-retrieval`, `draft-writer`, `data-analyst` | Canonical 9-step base + task-specific output contract | Per models.yaml |
+| **Zendesk Addendum** | Coordinator in Zendesk / Mailbird contexts | Policy overlays (`ZENDESK_TICKET_GUIDANCE`, conflict resolution) | N/A |
 
-### Google's 9-Step Reasoning Framework (Heavy Tier)
+### Canonical 9-Step Reasoning Base
 
-The coordinator prompt includes a `<reasoning_framework>` block:
+`NINE_STEP_REASONING_BASE` is the shared canonical reasoning framework used by coordinator and subagents.
+The block is injected into:
+- Coordinator prompt static section
+- `LOG_ANALYSIS_PROMPT`
+- `RESEARCH_PROMPT`
+- `EXPLORER_PROMPT`
+- `DATABASE_RETRIEVAL_PROMPT`
+- `DRAFT_WRITER_PROMPT`
+- `DATA_ANALYST_PROMPT`
 
 1. **Logical Dependencies** -- Analyze constraints, prerequisites, order of operations. Resolve conflicts by priority: Policies > Prerequisites > User preferences.
 2. **Risk Assessment** -- LOW for exploratory actions (searches); HIGH for state-changing actions.
@@ -434,20 +445,20 @@ The coordinator prompt includes a `<reasoning_framework>` block:
 
 ### Coordinator Prompt Structure
 
-The coordinator prompt is cache-optimized for Gemini implicit caching (large static content first, dynamic content last):
+The coordinator prompt is cache-optimized for Gemini implicit caching (large static content first, dynamic content last), with **mode-specific role overlays**:
 
 ```
 <reasoning_framework>
-  [9-step reasoning for heavy tier]
+  [NINE_STEP_REASONING_BASE]
 </reasoning_framework>
 
 <instructions>
   [4-step process: PLAN -> EXECUTE -> VALIDATE -> FORMAT]
 </instructions>
 
-<mailbird_expertise>
-  [Domain-specific knowledge]
-</mailbird_expertise>
+<mode_role>
+  [GENERAL_ASSISTANT_ROLE | MAILBIRD_EXPERT_ROLE | RESEARCH_EXPERT_ROLE | CREATIVE_EXPERT_ROLE]
+</mode_role>
 
 <tool_usage>
   [Tool priority and subagent guidance]
@@ -461,7 +472,15 @@ The coordinator prompt is cache-optimized for Gemini implicit caching (large sta
   [write_article, generate_image guidance]
 </creative_tools>
 
-[Dynamic: model name, provider, skills context, workspace files]
+[Optional mode/context overlays]
+- Zendesk ticket guidance (ticket contexts)
+- Zendesk conflict resolution addendum (Zendesk and Mailbird Expert mode)
+
+[Dynamic tail]
+- model name
+- current date
+- effective mode marker
+- skills context
 ```
 
 ### Grok Prompt Addendum
@@ -491,7 +510,12 @@ When trace mode is `narrated`, a `<trace_updates>` block instructs the agent to 
 
 **Location**: `app/agents/unified/tools.py`
 
-Tools are registered using LangChain's `@tool` decorator and organized by function. The coordinator uses the full tool registry via `get_registered_tools()`.
+Tools are registered using LangChain's `@tool` decorator and selected through a mode-scoped registry:
+- `get_registered_tools_for_mode(mode, zendesk=False)` (authoritative)
+- `get_registered_tools()` (backward-compatible alias to `general`)
+- `get_registered_support_tools()` (Mailbird/Zendesk projection)
+
+Image generation (`generate_image`) is registered in all coordinator modes (`general`, `mailbird_expert`, `research_expert`, `creative_expert`) so image generation remains system-wide regardless of active expert mode.
 
 ### Tool Categories
 
@@ -539,12 +563,16 @@ For Zendesk tickets:
 db-retrieval (macros/KB) -> kb_search -> feedme_search -> Minimax web search -> Tavily -> Firecrawl -> grounding_search
 ```
 
-### Support vs Standard Tools
+### Mode-Scoped Tool Registry
 
-| Mode | Use Case | Description |
-|------|----------|-------------|
-| **Standard** | General queries | Full tool registry (`get_registered_tools()`) |
-| **Support** | Zendesk tickets | Curated subset (`get_registered_support_tools()`) excluding image generation |
+| Mode | Registry Function | Tooling Profile |
+|------|-------------------|-----------------|
+| `general` | `_general_mode_tools()` | Full general toolset: retrieval + web + artifacts + optional image generation |
+| `mailbird_expert` | `_mailbird_mode_tools()` | Support retrieval + full web suite + artifact/image tools |
+| `research_expert` | `_research_mode_tools()` | Retrieval + full web suite + synthesis/article + image tools |
+| `creative_expert` | `_creative_mode_tools()` | Image generation + article/artifact workflows + web support |
+
+Zendesk contexts force Mailbird-mode tool selection via `get_registered_tools_for_mode(..., zendesk=True)`.
 
 ### Input Hardening
 
@@ -606,6 +634,7 @@ The orchestration graph is a `StateGraph(GraphState)` with three nodes:
 | `user_id` | `Optional[str]` | Replace | Authenticated user for memory scoping |
 | `messages` | `List[BaseMessage]` | `bounded_add_messages(30)` | Conversation history with dedup |
 | `attachments` | `List[Attachment]` | Replace | Client-provided attachments (max 10 MiB each) |
+| `agent_mode` | `Optional[str]` | Replace | Frontend-selected hard mode (`general`, `mailbird_expert`, `research_expert`, `creative_expert`) |
 | `scratchpad` | `Dict[str, Any]` | `merge_scratchpad` | Deep-merged internal state |
 | `forwarded_props` | `Dict[str, Any]` | `merge_forwarded_props` | Shallow-merged client properties |
 

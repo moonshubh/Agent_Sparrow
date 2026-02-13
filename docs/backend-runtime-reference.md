@@ -130,22 +130,31 @@ See `docs/feedme-hardening-notes.md` for the full FeedMe hardening sprint detail
 | `trace_id` | string | Trace ID for LangSmith correlation |
 | `provider` | string | LLM provider (`google`, `xai`, `openrouter`, `minimax`) |
 | `model` | string | Model identifier |
-| `agent_type` | string | Agent type (`primary`, `log_analysis`) |
+| `agent_mode` | string | Hard mode switch (`general`, `mailbird_expert`, `research_expert`, `creative_expert`) |
+| `agent_type` | string | Legacy tactical hint (`primary`, `log_analysis`, `research`) |
 | `use_server_memory` | boolean | Enable server-side memory |
 | `force_websearch` | boolean | Force web search execution |
 | `websearch_max_results` | integer | Max web search results |
 | `attachments` | array | File attachments (max 10MB each) |
 
+Mode resolution contract:
+- Explicit `agent_mode` wins.
+- If missing, backend maps legacy `agent_type` to mode.
+- If both missing, defaults to `general`.
+- `agent_type=log_analysis` is treated as tactical override only when current mode allows log-analysis routing.
+
 Response: Server-Sent Events (SSE) stream with AG-UI protocol events.
 
-#### AG-UI Stream Reliability Guards (2026-02-12)
+#### AG-UI Stream Reliability Guards (2026-02-13)
 
 To reduce partial/empty assistant replies during provider or stream-edge failures, the AG-UI endpoint includes additive recovery behavior:
 
-- **Missing-text degraded fallback**: if a stream closes without any `TEXT_MESSAGE_CONTENT`, the endpoint performs a bounded direct `ainvoke` against the selected coordinator model and emits a synthetic AG-UI text triplet:
+- **Missing-text degraded fallback**: if a stream closes without any `TEXT_MESSAGE_CONTENT`, the endpoint performs a bounded direct `ainvoke` against the selected coordinator model (mode-aware) and emits a synthetic AG-UI text triplet:
   - `TEXT_MESSAGE_START`
   - `TEXT_MESSAGE_CONTENT`
   - `TEXT_MESSAGE_END`
+- **Neutral fallback wording**: fallback system prompt no longer uses support-incident scaffolding; it is role/mode aware and user-facing.
+- **Final-content sanitization parity**: fallback output is passed through `ThinkingBlockTracker.sanitize_final_content(...)` to strip hidden reasoning markers and non-user-safe payload artifacts before emission.
 - **Hidden helper output**: internal helper-model calls (rewrite/rerank/summarize) set stream metadata to avoid leaking helper text/tool activity into user-visible output.
 - **Terminal recovery signal**: when terminal events are missing, the stream path still emits completion and logs recovery markers for incident analysis.
 
@@ -166,6 +175,11 @@ These guards are additive and do not change the request contract for `/api/v1/ag
 | `/api/v1/chat-sessions/{session_id}/messages/{message_id}/append` | PATCH | Optional | Append to message |
 | `/api/v1/chat-sessions/stats/user` | GET | Required | User statistics |
 | `/api/v1/chat-sessions/test` | GET | None | API health test |
+
+Session mode contract:
+- `ChatSessionCreate`/`ChatSessionUpdate` accept `agent_mode` (default `general`).
+- Session metadata is normalized to include `metadata.agent_mode`.
+- `GET /api/v1/chat-sessions` supports `agent_mode` query filtering.
 
 ### FeedMe Document Processing
 
@@ -618,6 +632,8 @@ Auto-detected skills based on message content:
 | `pdf`, `docx` | Document handling |
 | `brainstorm` | Creative thinking |
 | `research company` | Business research |
+
+Coordinator skill injection uses context-aware auto-detection for all modes (not just Zendesk), so newly added skills can activate without mode-specific hard-coding.
 
 ---
 

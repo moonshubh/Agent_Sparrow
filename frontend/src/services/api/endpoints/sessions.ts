@@ -1,11 +1,17 @@
 import { apiClient } from "@/services/api/api-client";
 
 export type AgentType = "primary" | "log_analysis" | "research";
+export type AgentMode =
+  | "general"
+  | "mailbird_expert"
+  | "research_expert"
+  | "creative_expert";
 
 export interface ChatSession {
   id: string | number;
   title?: string;
   agent_type?: AgentType;
+  agent_mode?: AgentMode;
   created_at?: string;
   updated_at?: string;
   metadata?: Record<string, unknown>;
@@ -21,6 +27,7 @@ export interface ChatSessionListResponse {
 export interface ChatSessionUpdatePayload {
   title?: string;
   is_active?: boolean;
+  agent_mode?: AgentMode;
   metadata?: Record<string, unknown>;
 }
 
@@ -87,11 +94,13 @@ export const sessionsAPI = {
     title?: string,
     metadata?: Record<string, unknown>,
     options?: RequestInit,
+    agent_mode: AgentMode = "general",
   ): Promise<ChatSession> {
     const normalizedTitle = title?.trim() || "New Chat";
+    const mergedMetadata = { ...(metadata ?? {}), agent_mode };
     return apiClient.post<ChatSession>(
       `/api/v1/chat-sessions`,
-      { agent_type, title: normalizedTitle, metadata },
+      { agent_type, agent_mode, title: normalizedTitle, metadata: mergedMetadata },
       options,
     );
   },

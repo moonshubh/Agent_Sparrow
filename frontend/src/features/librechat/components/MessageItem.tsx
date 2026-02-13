@@ -727,13 +727,6 @@ export const MessageItem = memo(function MessageItem({
                   </select>
                 </label>
               )}
-              {messageWebMode && (
-                <span
-                  className={`lc-web-mode-badge ${messageWebMode === "on" ? "on" : "off"}`}
-                >
-                  Web {messageWebMode === "on" ? "On" : "Off"}
-                </span>
-              )}
             </div>
           )}
         </div>

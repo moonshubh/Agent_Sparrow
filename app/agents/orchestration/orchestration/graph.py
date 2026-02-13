@@ -171,7 +171,8 @@ def _build_tool_node():
     - Rich execution results for observability
     - State tracking via LoopStateTracker for observability
     """
-    from app.agents.unified.tools import get_registered_tools
+    from app.agents.unified.tools import get_registered_tools_for_mode
+    from app.agents.unified.agent_modes import DEFAULT_AGENT_MODE, resolve_agent_mode
     from app.agents.unified.workspace_tools import get_workspace_tools
     from app.agents.tools import ToolExecutor, DEFAULT_TOOL_CONFIGS
     from app.agents.harness.observability import (
@@ -187,13 +188,38 @@ def _build_tool_node():
 
     class ParallelToolNode:
         def __init__(self, max_concurrency: int = 8):
-            self.base_tool_map = {t.name: t for t in get_registered_tools()}
+            self.default_tool_map = {
+                t.name: t
+                for t in get_registered_tools_for_mode(DEFAULT_AGENT_MODE)
+            }
             # Use Claude-style ToolExecutor for reliable execution
             self.executor = ToolExecutor(
                 configs=DEFAULT_TOOL_CONFIGS,
                 max_concurrency=max_concurrency,
                 on_result=record_tool_result,
             )
+
+        def _base_tools_for_state(self, state: GraphState) -> dict[str, Any]:
+            forwarded = getattr(state, "forwarded_props", {}) or {}
+            mode = resolve_agent_mode(
+                forwarded.get("agent_mode") or getattr(state, "agent_mode", None),
+                legacy_agent_type=forwarded.get("agent_type") or getattr(state, "agent_type", None),
+                default=DEFAULT_AGENT_MODE,
+            )
+            zendesk = forwarded.get("is_zendesk_ticket") is True
+            try:
+                return {
+                    tool.name: tool
+                    for tool in get_registered_tools_for_mode(mode, zendesk=zendesk)
+                }
+            except Exception as exc:
+                logger.warning(
+                    "tool_registry_mode_resolution_failed",
+                    mode=mode,
+                    zendesk=zendesk,
+                    error=str(exc),
+                )
+                return dict(self.default_tool_map)
 
         def _workspace_tools_for_state(self, state: GraphState) -> dict:
             """Build workspace tools bound to the current session/customer."""
@@ -242,7 +268,7 @@ def _build_tool_node():
             if not tool_calls:
                 return {}
 
-            tool_map = dict(self.base_tool_map)
+            tool_map = self._base_tools_for_state(state)
             tool_map.update(self._workspace_tools_for_state(state))
 
             executed = set(

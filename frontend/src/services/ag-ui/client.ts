@@ -33,6 +33,7 @@ export interface AgentConfig {
   provider?: string;
   model?: string;
   agentType?: string;
+  agentMode?: string;
   useServerMemory?: boolean;
   attachments?: AttachmentInput[];
 }
@@ -49,6 +50,7 @@ export function getInitialAgentState(
     provider: config.provider || "google",
     model: config.model || "gemini-3-flash-preview",
     agent_type: config.agentType,
+    agent_mode: config.agentMode || "general",
     use_server_memory: config.useServerMemory ?? true,
     attachments: config.attachments || [],
   };

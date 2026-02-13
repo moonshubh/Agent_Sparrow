@@ -6,11 +6,20 @@ import React, {
   useRef,
   useEffect,
   useLayoutEffect,
-  KeyboardEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   ChangeEvent,
 } from "react";
-import { useAgent } from "@/features/librechat/AgentContext";
-import { ArrowUp, Square, Paperclip } from "lucide-react";
+import { useAgent, type AgentMode } from "@/features/librechat/AgentContext";
+import {
+  ArrowUp,
+  Square,
+  Plus,
+  Check,
+  ChevronRight,
+  Paperclip,
+  Globe,
+  Sparkles,
+} from "lucide-react";
 import type { AttachmentInput } from "@/services/ag-ui/types";
 import { toast } from "sonner";
 import { AttachmentPreviewList } from "@/features/librechat/components/AttachmentPreview";
@@ -22,6 +31,22 @@ interface ChatInputProps {
 }
 
 const LONG_RUN_SOFT_TIMEOUT_MS = 120_000;
+
+const AGENT_MODE_LABELS: Record<AgentMode, string> = {
+  general: "General Assistant",
+  mailbird_expert: "Mailbird Expert",
+  research_expert: "Research Expert",
+  creative_expert: "Creative Expert",
+};
+
+const AGENT_MODE_OPTIONS: AgentMode[] = [
+  "general",
+  "mailbird_expert",
+  "research_expert",
+  "creative_expert",
+];
+
+type CommandMenuDirection = "down" | "up";
 
 export function ChatInput({
   initialInput,
@@ -37,16 +62,24 @@ export function ChatInput({
     streamRecovery,
     webSearchMode,
     setWebSearchMode,
+    agentMode,
+    setAgentMode,
   } = useAgent();
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<AttachmentInput[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isCommandMenuOpen, setCommandMenuOpen] = useState(false);
+  const [isExpertSubmenuOpen, setExpertSubmenuOpen] = useState(false);
+  const [commandMenuDirection, setCommandMenuDirection] =
+    useState<CommandMenuDirection>("down");
   const [steeringCountdownMs, setSteeringCountdownMs] = useState(0);
   const [retryCountdownMs, setRetryCountdownMs] = useState(0);
   const [softTimeoutVisible, setSoftTimeoutVisible] = useState(false);
   const [softTimeoutGeneration, setSoftTimeoutGeneration] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const commandMenuRef = useRef<HTMLDivElement>(null);
+  const commandTriggerRef = useRef<HTMLButtonElement>(null);
   const lastAppliedInitialInputRef = useRef<string | null>(null);
   const readersRef = useRef<FileReader[]>([]);
   const isMountedRef = useRef(true);
@@ -149,6 +182,59 @@ export function ChatInput({
   }, []);
 
   useEffect(() => {
+    if (!isCommandMenuOpen) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (commandMenuRef.current?.contains(target)) return;
+      setCommandMenuOpen(false);
+      setExpertSubmenuOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setCommandMenuOpen(false);
+      setExpertSubmenuOpen(false);
+      commandTriggerRef.current?.focus();
+    };
+
+    document.addEventListener("mousedown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isCommandMenuOpen]);
+
+  const updateCommandMenuDirection = useCallback(() => {
+    const trigger = commandTriggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+    const estimatedMenuHeight = 300;
+    const viewportPadding = 12;
+    const spaceBelow = viewportHeight - rect.bottom - viewportPadding;
+    const spaceAbove = rect.top - viewportPadding;
+    const shouldOpenUp = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
+    setCommandMenuDirection(shouldOpenUp ? "up" : "down");
+  }, []);
+
+  useEffect(() => {
+    if (!isCommandMenuOpen) return;
+
+    const onViewportChange = () => updateCommandMenuDirection();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [isCommandMenuOpen, updateCommandMenuDirection]);
+
+  useEffect(() => {
     if (!pendingPromptSteering) {
       setSteeringCountdownMs(0);
       return;
@@ -222,7 +308,7 @@ export function ChatInput({
   }, []);
 
   const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSubmit();
@@ -239,12 +325,20 @@ export function ChatInput({
     [resizeTextarea],
   );
 
-  const handleWebModeChange = useCallback(
-    (e: ChangeEvent<HTMLSelectElement>) => {
-      const nextMode = e.target.value === "on" ? "on" : "off";
+  const selectWebMode = useCallback(
+    (nextMode: "on" | "off") => {
       setWebSearchMode(nextMode);
     },
     [setWebSearchMode],
+  );
+
+  const selectAgentMode = useCallback(
+    (nextMode: AgentMode) => {
+      setAgentMode(nextMode);
+      setCommandMenuOpen(false);
+      setExpertSubmenuOpen(false);
+    },
+    [setAgentMode],
   );
 
   const handlePaste = useCallback(
@@ -383,6 +477,8 @@ export function ChatInput({
   }, []);
 
   const openFilePicker = useCallback(() => {
+    setCommandMenuOpen(false);
+    setExpertSubmenuOpen(false);
     fileInputRef.current?.click();
   }, []);
 
@@ -485,28 +581,113 @@ export function ChatInput({
           role="group"
           aria-label="Message input area"
         >
-          <div className="lc-web-mode-select-wrap">
-            <select
-              className="lc-web-mode-select"
-              value={webSearchMode}
-              onChange={handleWebModeChange}
-              aria-label="Web search mode"
-              title="Web search mode for this conversation"
-            >
-              <option value="off">Web Off</option>
-              <option value="on">Web On</option>
-            </select>
-          </div>
-
-          {/* File attachment button */}
-          <button
-            className="lc-action-btn"
-            onClick={openFilePicker}
-            aria-label="Attach file (images, PDF, text files supported)"
-            type="button"
+          <div
+            className="lc-command-menu-anchor"
+            ref={commandMenuRef}
+            onMouseLeave={() => setExpertSubmenuOpen(false)}
           >
-            <Paperclip size={18} />
-          </button>
+            <button
+              ref={commandTriggerRef}
+              className={`lc-command-trigger ${isCommandMenuOpen ? "open" : ""}`}
+              onClick={() => {
+                setCommandMenuOpen((prev) => {
+                  const nextOpen = !prev;
+                  if (nextOpen) {
+                    updateCommandMenuDirection();
+                  } else {
+                    setExpertSubmenuOpen(false);
+                  }
+                  return nextOpen;
+                });
+              }}
+              aria-label="Open command menu"
+              aria-haspopup="menu"
+              aria-expanded={isCommandMenuOpen}
+              type="button"
+            >
+              <Plus size={16} />
+            </button>
+            {isCommandMenuOpen && (
+              <div className={`lc-command-menu ${commandMenuDirection}`} role="menu">
+                <button
+                  className="lc-command-item"
+                  onClick={openFilePicker}
+                  role="menuitem"
+                  type="button"
+                >
+                  <span className="lc-command-item-main">
+                    <Paperclip size={15} className="lc-command-item-icon" />
+                    <span>Add files or photos</span>
+                  </span>
+                </button>
+                <button
+                  className="lc-command-item lc-command-item-toggle"
+                  onClick={() =>
+                    selectWebMode(webSearchMode === "on" ? "off" : "on")
+                  }
+                  role="menuitemcheckbox"
+                  aria-checked={webSearchMode === "on"}
+                  type="button"
+                >
+                  <span className="lc-command-item-main">
+                    <Globe size={15} className="lc-command-item-icon" />
+                    <span>Web search</span>
+                  </span>
+                  <span className="lc-command-item-trailing">
+                    <span
+                      className={`lc-command-toggle ${webSearchMode === "on" ? "on" : "off"}`}
+                      aria-hidden="true"
+                    >
+                      <span className="lc-command-toggle-thumb" />
+                    </span>
+                  </span>
+                </button>
+                <div className="lc-command-separator" aria-hidden="true" />
+                <div
+                  className="lc-command-submenu-anchor"
+                  onMouseEnter={() => setExpertSubmenuOpen(true)}
+                >
+                  <button
+                    className={`lc-command-item ${isExpertSubmenuOpen ? "active" : ""}`}
+                    onClick={() => setExpertSubmenuOpen((prev) => !prev)}
+                    role="menuitem"
+                    aria-haspopup="menu"
+                    aria-expanded={isExpertSubmenuOpen}
+                    type="button"
+                  >
+                    <span className="lc-command-item-main">
+                      <Sparkles size={15} className="lc-command-item-icon" />
+                      <span className="lc-command-item-with-meta">
+                        Expert mode
+                        <small>{AGENT_MODE_LABELS[agentMode]}</small>
+                      </span>
+                    </span>
+                    <ChevronRight size={14} />
+                  </button>
+                  {isExpertSubmenuOpen && (
+                    <div
+                      className={`lc-command-submenu ${commandMenuDirection}`}
+                      role="menu"
+                    >
+                      {AGENT_MODE_OPTIONS.map((mode) => (
+                        <button
+                          key={mode}
+                          className={`lc-command-item ${agentMode === mode ? "selected" : ""}`}
+                          onClick={() => selectAgentMode(mode)}
+                          role="menuitemradio"
+                          aria-checked={agentMode === mode}
+                          type="button"
+                        >
+                          <span>{AGENT_MODE_LABELS[mode]}</span>
+                          {agentMode === mode && <Check size={14} />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Hidden file input */}
           <input
@@ -563,11 +744,6 @@ export function ChatInput({
         <div id="input-footer" className="lc-input-footer">
           <span>
             Agent Sparrow can make mistakes. Please verify important information.
-          </span>
-          <span
-            className={`lc-web-mode-badge ${webSearchMode === "on" ? "on" : "off"}`}
-          >
-            Next run: Web {webSearchMode === "on" ? "On" : "Off"}
           </span>
         </div>
       </div>

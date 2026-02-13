@@ -58,7 +58,17 @@ from app.agents.unified.mcp_client import invoke_firecrawl_mcp_tool
 import redis
 
 from app.agents.unified.image_store import store_image_bytes, rewrite_base64_images
-from app.agents.unified.minimax_tools import get_minimax_tools, is_minimax_available
+from app.agents.unified.minimax_tools import (
+    get_minimax_tools,
+    is_minimax_available,
+    minimax_understand_image_tool,
+    minimax_web_search_tool,
+)
+from app.agents.unified.agent_modes import (
+    AgentMode,
+    DEFAULT_AGENT_MODE,
+    normalize_agent_mode,
+)
 
 TOOL_RATE_LIMIT_BUCKET = "internal.helper"
 _TAVILY_QUOTA_EXHAUSTED = False
@@ -70,6 +80,16 @@ ALLOWED_SUPABASE_TABLES = {
     "web_research_snapshots",
     # Support/ops lookups (sensitive; outputs are redacted)
     "orders",
+}
+
+_IMAGE_PRIMARY_MODEL = "gemini-3-pro-image-preview"
+_IMAGE_FALLBACK_MODEL = "gemini-2.5-flash-image"
+_IMAGE_MODEL_ALIASES = {
+    "nano-banana-pro": _IMAGE_PRIMARY_MODEL,
+    "gemini-3-pro-image-preview": _IMAGE_PRIMARY_MODEL,
+    "nano-banana": _IMAGE_FALLBACK_MODEL,
+    "gemini-2.5-flash-preview-image": _IMAGE_FALLBACK_MODEL,
+    "gemini-2.5-flash-image": _IMAGE_FALLBACK_MODEL,
 }
 
 # Private IP ranges for SSRF protection
@@ -302,6 +322,90 @@ def _mark_tavily_quota_exhausted(error_message: str) -> None:
         return
     _TAVILY_QUOTA_EXHAUSTED = True
     logger.warning("tavily_quota_exhausted", error=error_message[:200])
+
+
+def _resolve_image_model_alias(model_name: Optional[str]) -> str:
+    normalized = str(model_name or "").strip()
+    if not normalized:
+        return _IMAGE_PRIMARY_MODEL
+    if normalized.lower().startswith("models/"):
+        normalized = normalized.split("/", 1)[1]
+    return _IMAGE_MODEL_ALIASES.get(normalized.lower(), normalized)
+
+
+async def _fallback_to_minimax_web_search(
+    *,
+    query: str,
+    max_results: int,
+    source_tool: str,
+    reason: str,
+    provider_error: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fallback search path when Tavily/Firecrawl are unavailable."""
+
+    if not query.strip():
+        return {
+            "error": f"{source_tool}_failed",
+            "message": provider_error or f"{source_tool} failed",
+            "fallback_attempted": False,
+            "fallback_reason": reason,
+        }
+
+    if not is_minimax_available():
+        return {
+            "error": f"{source_tool}_failed",
+            "message": provider_error
+            or f"{source_tool} failed and Minimax fallback is unavailable",
+            "fallback_attempted": False,
+            "fallback_reason": reason,
+        }
+
+    try:
+        max_results_clamped = max(1, min(int(max_results or 5), 20))
+        minimax_coroutine = getattr(minimax_web_search_tool, "coroutine", None)
+        if callable(minimax_coroutine):
+            fallback = await minimax_coroutine(
+                query=query,
+                max_results=max_results_clamped,
+            )
+        else:
+            fallback = await minimax_web_search_tool.ainvoke(
+                {"query": query, "max_results": max_results_clamped}
+            )
+    except Exception as exc:
+        return {
+            "error": f"{source_tool}_failed",
+            "message": provider_error or f"{source_tool} failed",
+            "fallback_attempted": True,
+            "fallback_provider": "minimax_web_search",
+            "fallback_reason": reason,
+            "fallback_error": str(exc),
+        }
+
+    if isinstance(fallback, dict) and not fallback.get("error"):
+        enriched = dict(fallback)
+        enriched.setdefault("query", query)
+        enriched["fallback_used"] = True
+        enriched["fallback_from"] = source_tool
+        enriched["fallback_reason"] = reason
+        if provider_error:
+            enriched["provider_error"] = provider_error
+        return enriched
+
+    fallback_error = ""
+    if isinstance(fallback, dict):
+        fallback_error = str(fallback.get("error") or fallback.get("message") or "")
+    else:
+        fallback_error = str(fallback)
+
+    return {
+        "error": f"{source_tool}_failed",
+        "message": provider_error or f"{source_tool} failed",
+        "fallback_attempted": True,
+        "fallback_provider": "minimax_web_search",
+        "fallback_reason": reason,
+        "fallback_error": fallback_error,
+    }
 
 
 @lru_cache(maxsize=1)
@@ -1271,6 +1375,10 @@ class FirecrawlSearchInput(BaseModel):
     sources: List[str] = Field(
         default=["web"], description="Sources to search: web, images, news."
     )
+    location: Optional[FirecrawlLocationInput] = Field(
+        default=None,
+        description="Optional geo-targeting metadata for MCP search requests.",
+    )
     scrape_options: Optional[Dict[str, Any]] = Field(
         default=None, description="Options for scraping search results."
     )
@@ -1955,12 +2063,13 @@ async def web_search_tool(
             cached = None
     _cache_hit_miss(False, cache_key)
     if _TAVILY_QUOTA_EXHAUSTED:
-        return {
-            "error": "web_search_failed",
-            "message": "Tavily quota exhausted in this process. Use Minimax or Firecrawl instead.",
-            "quota_exceeded": True,
-            "fallback_suggestion": "Use minimax_web_search or firecrawl_search for web discovery.",
-        }
+        return await _fallback_to_minimax_web_search(
+            query=input.query,
+            max_results=input.max_results,
+            source_tool="web_search",
+            reason="tavily_quota_exhausted",
+            provider_error="Tavily quota exhausted in this process.",
+        )
 
     for attempt in range(max_retries):
         try:
@@ -2018,24 +2127,26 @@ async def web_search_tool(
                 )
                 if tavily_quota:
                     _mark_tavily_quota_exhausted(error_message)
-                return {
-                    "error": "web_search_failed",
-                    "message": error_message,
-                    "quota_exceeded": tavily_quota,
-                    "fallback_suggestion": (
-                        "Use minimax_web_search or firecrawl_search for web discovery."
+                return await _fallback_to_minimax_web_search(
+                    query=input.query,
+                    max_results=input.max_results,
+                    source_tool="web_search",
+                    reason=(
+                        "tavily_quota_exceeded"
                         if tavily_quota
-                        else None
+                        else "tavily_request_failed"
                     ),
-                }
+                    provider_error=error_message,
+                )
             await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
 
-    return {
-        "error": "web_search_failed",
-        "message": "Web search failed after retries.",
-        "quota_exceeded": False,
-        "fallback_suggestion": "Use minimax_web_search or firecrawl_search for web discovery.",
-    }
+    return await _fallback_to_minimax_web_search(
+        query=input.query,
+        max_results=input.max_results,
+        source_tool="web_search",
+        reason="tavily_retries_exhausted",
+        provider_error="Web search failed after retries.",
+    )
 
 
 @tool("tavily_extract", args_schema=TavilyExtractInput)
@@ -2602,6 +2713,7 @@ async def firecrawl_search_tool(
     query: Optional[str] = None,
     limit: int = 5,
     sources: Optional[List[str]] = None,
+    location: Optional[FirecrawlLocationInput] = None,
     scrape_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Search the web with multiple sources (web, images, news).
@@ -2618,6 +2730,7 @@ async def firecrawl_search_tool(
             query=query or "",
             limit=limit,
             sources=sources or ["web"],
+            location=location,
             scrape_options=scrape_options,
         )
 
@@ -2641,7 +2754,13 @@ async def firecrawl_search_tool(
     if _firecrawl_circuit_open():
         reason = _firecrawl_circuit_reason() or "firecrawl_unavailable"
         logger.info("firecrawl_search_circuit_open", reason=reason)
-        return {"error": reason}
+        return await _fallback_to_minimax_web_search(
+            query=input.query,
+            max_results=input.limit,
+            source_tool="firecrawl_search",
+            reason="firecrawl_circuit_open",
+            provider_error=reason,
+        )
 
     mcp_sources = None
     if input.sources:
@@ -2652,10 +2771,18 @@ async def firecrawl_search_tool(
             elif isinstance(source, dict) and source.get("type"):
                 mcp_sources.append({"type": source["type"]})
 
+    mcp_location = None
+    if input.location:
+        if hasattr(input.location, "model_dump"):
+            mcp_location = input.location.model_dump(exclude_none=True)
+        elif isinstance(input.location, dict):
+            mcp_location = input.location
+
     mcp_args = {
         "query": input.query,
         "limit": input.limit,
         "sources": mcp_sources,
+        "location": mcp_location,
         "scrapeOptions": cleaned_scrape_options,
     }
     mcp_args = {k: v for k, v in mcp_args.items() if v not in (None, [], {})}
@@ -2670,7 +2797,13 @@ async def firecrawl_search_tool(
             logger.warning("firecrawl_mcp_search_error", error=err_text or None)
             if err_text and _is_firecrawl_unavailable_error(err_text):
                 _open_firecrawl_circuit(err_text)
-                return {"error": err_text}
+                return await _fallback_to_minimax_web_search(
+                    query=input.query,
+                    max_results=input.limit,
+                    source_tool="firecrawl_search",
+                    reason="firecrawl_mcp_unavailable",
+                    provider_error=err_text,
+                )
         else:
             return mcp_result
 
@@ -2706,7 +2839,13 @@ async def firecrawl_search_tool(
             err_text = str(result.get("error") or "").strip()
             if err_text and _is_firecrawl_unavailable_error(err_text):
                 _open_firecrawl_circuit(err_text)
-                return {"error": err_text}
+                return await _fallback_to_minimax_web_search(
+                    query=input.query,
+                    max_results=input.limit,
+                    source_tool="firecrawl_search",
+                    reason="firecrawl_api_unavailable",
+                    provider_error=err_text,
+                )
             raise RuntimeError(err_text)
         return result
     except Exception as e:
@@ -2719,7 +2858,13 @@ async def firecrawl_search_tool(
         )
         if err_text and _is_firecrawl_unavailable_error(err_text):
             _open_firecrawl_circuit(err_text)
-            return {"error": err_text}
+            return await _fallback_to_minimax_web_search(
+                query=input.query,
+                max_results=input.limit,
+                source_tool="firecrawl_search",
+                reason="firecrawl_exception",
+                provider_error=err_text,
+            )
         return {"error": err_text}
 
 
@@ -2895,67 +3040,52 @@ async def firecrawl_agent_status_tool(
         return {"error": str(e)}
 
 
-def get_registered_tools() -> List[BaseTool]:
-    """Return the tools bound to the unified agent.
+def _dedupe_tools(tools: List[BaseTool]) -> List[BaseTool]:
+    """Deduplicate tools by name while preserving stable order."""
+    seen: set[str] = set()
+    ordered: list[BaseTool] = []
+    for tool_item in tools:
+        name = getattr(tool_item, "name", "")
+        if isinstance(name, str) and name:
+            if name in seen:
+                continue
+            seen.add(name)
+        ordered.append(tool_item)
+    return ordered
 
-    Tool priority order (FIRECRAWL FIRST for web tasks):
 
-    1. FIRECRAWL (PRIMARY for URLs, scraping, research):
-       - firecrawl_fetch: Single page with screenshots, mobile, PDF, branding
-       - firecrawl_map: Site structure discovery
-       - firecrawl_crawl: Multi-page extraction
-       - firecrawl_extract: AI-powered structured extraction
-       - firecrawl_search: Multi-source search (web, images, news)
-       - firecrawl_agent: Autonomous data gathering (NEW - most powerful!)
-
-    2. TAVILY (for general web search):
-       - web_search_tool: Quick web search with images
-
-    3. GEMINI GROUNDING (for quick facts):
-       - grounding_search_tool: Fast factual lookups
-
-    4. MINIMAX (AI-powered search and vision):
-       - minimax_web_search: Web search via Minimax API
-       - minimax_understand_image: Image analysis via Minimax vision
-
-    Caching:
-    - Firecrawl fetch honors max_age for Firecrawl-native caching.
-    - In-process cache (256 entries) for other tools; disable via DISABLE_TOOL_CACHE.
-
-    MCP usage:
-    - Firecrawl tools attempt MCP first when enabled, then fall back to SDK.
-    - Mobile scraping, geo targeting, branding, PDF parsing, proxy modes supported.
-    """
-
-    tools: List[BaseTool] = [
-        kb_search_tool,
-        # Firecrawl tools FIRST - full web scraping and extraction suite
-        firecrawl_fetch_tool,  # Single-page: screenshots, mobile, PDF, branding, geo
-        firecrawl_map_tool,  # URL discovery with sitemap support
-        firecrawl_crawl_tool,  # Multi-page extraction (sync/async)
-        firecrawl_crawl_status_tool,  # Async crawl status
-        firecrawl_extract_tool,  # AI structured extraction with web search
-        firecrawl_search_tool,  # Multi-source search (web, images, news)
+def _firecrawl_suite_tools() -> List[BaseTool]:
+    tools: list[BaseTool] = [
+        firecrawl_fetch_tool,
+        firecrawl_map_tool,
+        firecrawl_crawl_tool,
+        firecrawl_crawl_status_tool,
+        firecrawl_extract_tool,
+        firecrawl_search_tool,
     ]
     if is_firecrawl_agent_enabled():
-        tools.append(
-            firecrawl_agent_tool
-        )  # Autonomous data gathering agent (rate-limited)
+        tools.append(firecrawl_agent_tool)
     tools.append(firecrawl_agent_status_tool)
-    tools.extend(
-        [
-            # Web search tools (secondary)
-            web_search_tool,  # Tavily - general web search
-            tavily_extract_tool,  # Tavily - full-content extraction
-            grounding_search_tool,  # Gemini grounding - quick facts
-        ]
-    )
-    # Minimax tools (AI-powered search and vision) - if API key configured
+    return tools
+
+
+def _web_lookup_tools() -> List[BaseTool]:
+    tools: list[BaseTool] = [
+        *_firecrawl_suite_tools(),
+        web_search_tool,
+        tavily_extract_tool,
+        grounding_search_tool,
+    ]
     if is_minimax_available():
         tools.extend(get_minimax_tools())
-    tools.extend(
+    return tools
+
+
+def _general_mode_tools() -> List[BaseTool]:
+    return _dedupe_tools(
         [
-            # Other tools
+            kb_search_tool,
+            *_web_lookup_tools(),
             feedme_search_tool,
             supabase_query_tool,
             log_diagnoser_tool,
@@ -2963,17 +3093,100 @@ def get_registered_tools() -> List[BaseTool]:
             memory_list_tool,
             memory_feedback_tool,
             session_summary_tool,
-            write_article_tool,  # Rich article/report artifact creation
-            read_skill_tool,  # Progressive skill disclosure - load full skill on demand
+            write_article_tool,
+            generate_image_tool,
+            read_skill_tool,
             get_weather,
             generate_task_steps_generative_ui,
         ]
     )
+
+
+def _mailbird_mode_tools() -> List[BaseTool]:
+    tools: list[BaseTool] = [
+        kb_search_tool,
+        feedme_search_tool,
+        db_unified_search_tool,
+        db_context_search_tool,
+        db_grep_search_tool,
+        *_web_lookup_tools(),
+        supabase_query_tool,
+        log_diagnoser_tool,
+        write_article_tool,
+        generate_image_tool,
+        read_skill_tool,
+        generate_task_steps_generative_ui,
+    ]
+    return _dedupe_tools(tools)
+
+
+def _research_mode_tools() -> List[BaseTool]:
+    return _dedupe_tools(
+        [
+            kb_search_tool,
+            feedme_search_tool,
+            db_unified_search_tool,
+            db_context_search_tool,
+            db_grep_search_tool,
+            *_web_lookup_tools(),
+            supabase_query_tool,
+            memory_search_tool,
+            memory_list_tool,
+            write_article_tool,
+            generate_image_tool,
+            read_skill_tool,
+            generate_task_steps_generative_ui,
+        ]
+    )
+
+
+def _creative_mode_tools() -> List[BaseTool]:
+    return _dedupe_tools(
+        [
+            write_article_tool,
+            generate_image_tool,
+            kb_search_tool,
+            feedme_search_tool,
+            firecrawl_search_tool,
+            firecrawl_fetch_tool,
+            web_search_tool,
+            tavily_extract_tool,
+            minimax_understand_image_tool if is_minimax_available() else web_search_tool,
+            minimax_web_search_tool if is_minimax_available() else web_search_tool,
+            read_skill_tool,
+            generate_task_steps_generative_ui,
+        ]
+    )
+
+
+def get_registered_tools_for_mode(
+    mode: str = DEFAULT_AGENT_MODE,
+    *,
+    zendesk: bool = False,
+) -> List[BaseTool]:
+    """Return the registered tools scoped to the effective hard-switch mode."""
+    effective_mode = (
+        AgentMode.MAILBIRD_EXPERT.value if zendesk else normalize_agent_mode(mode)
+    )
+
+    if effective_mode == AgentMode.MAILBIRD_EXPERT.value:
+        tools = _mailbird_mode_tools()
+    elif effective_mode == AgentMode.RESEARCH_EXPERT.value:
+        tools = _research_mode_tools()
+    elif effective_mode == AgentMode.CREATIVE_EXPERT.value:
+        tools = _creative_mode_tools()
+    else:
+        tools = _general_mode_tools()
+
     if settings.trace_mode in {"narrated", "hybrid"}:
         tools.append(trace_update)
-
     tools.append(write_todos)
-    return tools
+    return _dedupe_tools(tools)
+
+
+def get_registered_tools() -> List[BaseTool]:
+    """Backward-compatible default tool registry (general mode)."""
+    return get_registered_tools_for_mode(DEFAULT_AGENT_MODE)
 
 
 def get_registered_support_tools() -> List[BaseTool]:
@@ -2983,13 +3196,10 @@ def get_registered_support_tools() -> List[BaseTool]:
     - Smaller tool schema payloads (reduces model overhead / quota pressure)
     - Faster, more predictable routing
     """
-    return [
-        kb_search_tool,
-        feedme_search_tool,
-        web_search_tool,
-        supabase_query_tool,
-        log_diagnoser_tool,
-    ]
+    return get_registered_tools_for_mode(
+        AgentMode.MAILBIRD_EXPERT.value,
+        zendesk=True,
+    )
 
 
 class Step(BaseModel):
@@ -4763,10 +4973,10 @@ class ImageGenerationInput(BaseModel):
         description="Resolution of the image. Options: 1K, 2K (4K requests are downgraded to 2K).",
     )
     model: str = Field(
-        default="gemini-3-pro-image-preview",
+        default=_IMAGE_PRIMARY_MODEL,
         description=(
-            "Model to use. Options: gemini-3-pro-image-preview (high-quality), "
-            "gemini-2.5-flash-preview-image (fast)"
+            "Preferred model alias or ID. Supported aliases: nano-banana-pro "
+            "(primary) and nano-banana (fallback)."
         ),
     )
     input_image_base64: Optional[str] = Field(
@@ -4784,6 +4994,11 @@ class ImageGenerationInput(BaseModel):
             return normalized
         return "2K"
 
+    @field_validator("model")
+    @classmethod
+    def normalize_model_name(cls, value: str) -> str:
+        return _resolve_image_model_alias(value)
+
 
 @tool("generate_image", args_schema=ImageGenerationInput)
 async def generate_image_tool(
@@ -4791,12 +5006,12 @@ async def generate_image_tool(
     prompt: Optional[str] = None,
     aspect_ratio: str = "16:9",
     resolution: str = "2K",
-    model: str = "gemini-3-pro-image-preview",
+    model: str = _IMAGE_PRIMARY_MODEL,
     input_image_base64: Optional[str] = None,
     state: Annotated[Optional[GraphState], InjectedState] = None,
     runtime: Optional[ToolRuntime] = None,
 ) -> Dict[str, Any]:
-    """Generate images using Gemini 3 Pro Image.
+    """Generate images via Gemini with automatic primary/fallback handling.
 
     Use this tool to:
     - Generate images from text descriptions
@@ -4824,9 +5039,16 @@ async def generate_image_tool(
     if writer and hasattr(writer, "write"):
         writer.write("Generating image...")
 
+    requested_model = _resolve_image_model_alias(input.model)
+    if requested_model in {_IMAGE_PRIMARY_MODEL, _IMAGE_FALLBACK_MODEL}:
+        model_chain = [_IMAGE_PRIMARY_MODEL, _IMAGE_FALLBACK_MODEL]
+    else:
+        model_chain = [requested_model, _IMAGE_FALLBACK_MODEL]
+
     logger.info(
         f"generate_image_tool_invoked prompt='{input.prompt[:100]}...' "
-        f"aspect_ratio={input.aspect_ratio} resolution={input.resolution}"
+        f"aspect_ratio={input.aspect_ratio} resolution={input.resolution} "
+        f"requested_model={requested_model}"
     )
 
     try:
@@ -4859,41 +5081,67 @@ async def generate_image_tool(
             img = Image.open(io.BytesIO(image_data))
             contents.append(img)
 
-        # Generate content with image modality
-        response = client.models.generate_content(
-            model=input.model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_modalities=["TEXT", "IMAGE"],
-            ),
-        )
-
-        # Extract results
+        # Attempt primary model first, then fallback model on any failure.
         text_output = None
         image_bytes = None
         mime_type = "image/png"
+        model_used = None
+        attempt_errors: list[dict[str, str]] = []
 
-        candidates = response.candidates or []
-        content = candidates[0].content if candidates else None
-        parts = content.parts if content else None
-        if not candidates or not content or not parts:
+        for attempt_idx, candidate_model in enumerate(model_chain, start=1):
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=candidate_model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["TEXT", "IMAGE"],
+                    ),
+                )
+
+                candidates = response.candidates or []
+                content = candidates[0].content if candidates else None
+                parts = content.parts if content else None
+                if not candidates or not content or not parts:
+                    raise RuntimeError("No content generated by the model")
+
+                local_text = None
+                local_image_bytes = None
+                local_mime_type = "image/png"
+                for part in parts:
+                    if hasattr(part, "text") and part.text:
+                        local_text = part.text
+                    elif hasattr(part, "inline_data") and part.inline_data:
+                        local_image_bytes = part.inline_data.data
+                        local_mime_type = part.inline_data.mime_type or "image/png"
+
+                if not local_image_bytes:
+                    raise RuntimeError("No image generated - model returned text only")
+
+                text_output = local_text
+                image_bytes = local_image_bytes
+                mime_type = local_mime_type
+                model_used = candidate_model
+                break
+            except Exception as exc:
+                err_text = str(exc).strip() or type(exc).__name__
+                attempt_errors.append({"model": candidate_model, "error": err_text})
+                logger.warning(
+                    "generate_image_model_failed",
+                    model=candidate_model,
+                    attempt=attempt_idx,
+                    total_attempts=len(model_chain),
+                    error=err_text,
+                )
+
+        if not image_bytes or not model_used:
             return {
                 "success": False,
-                "error": "No content generated by the model",
-            }
-
-        for part in parts:
-            if hasattr(part, "text") and part.text:
-                text_output = part.text
-            elif hasattr(part, "inline_data") and part.inline_data:
-                image_bytes = part.inline_data.data
-                mime_type = part.inline_data.mime_type or "image/png"
-
-        if not image_bytes:
-            return {
-                "success": False,
-                "error": "No image generated - model returned text only",
-                "text_response": text_output,
+                "error": "Image generation failed on primary and fallback models.",
+                "requested_model": requested_model,
+                "primary_model": _IMAGE_PRIMARY_MODEL,
+                "fallback_model": _IMAGE_FALLBACK_MODEL,
+                "attempts": attempt_errors,
             }
 
         try:
@@ -4912,12 +5160,14 @@ async def generate_image_tool(
                 "description": text_output,
                 "aspect_ratio": input.aspect_ratio,
                 "resolution": input.resolution,
+                "model_used": model_used,
+                "fallback_used": model_used != _IMAGE_PRIMARY_MODEL,
                 "_large_payload": True,
             }
 
         logger.info(
             f"generate_image_tool_success prompt='{input.prompt[:50]}...' "
-            f"has_image=True has_text={bool(text_output)}"
+            f"has_image=True has_text={bool(text_output)} model_used={model_used}"
         )
 
         return {
@@ -4929,6 +5179,11 @@ async def generate_image_tool(
             "description": text_output,
             "aspect_ratio": input.aspect_ratio,
             "resolution": input.resolution,
+            "model_used": model_used,
+            "fallback_used": model_used != _IMAGE_PRIMARY_MODEL,
+            "requested_model": requested_model,
+            "primary_model": _IMAGE_PRIMARY_MODEL,
+            "fallback_model": _IMAGE_FALLBACK_MODEL,
             "_storage": {
                 "bucket": stored.bucket,
                 "path": stored.path,

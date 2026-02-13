@@ -81,6 +81,11 @@ export interface SerializedArtifact {
 
 export type SubagentStatus = "running" | "success" | "error";
 export type WebSearchMode = "on" | "off";
+export type AgentMode =
+  | "general"
+  | "mailbird_expert"
+  | "research_expert"
+  | "creative_expert";
 export type PromptRelatednessBand = "related" | "uncertain" | "unrelated";
 export type PromptSteeringChoice = "continue" | "new_topic";
 
@@ -175,6 +180,8 @@ interface AgentContextValue {
   panelState: PanelState;
   webSearchMode: WebSearchMode;
   setWebSearchMode: (mode: WebSearchMode) => void;
+  agentMode: AgentMode;
+  setAgentMode: (mode: AgentMode) => void;
   setActiveTraceStep: (stepId?: string) => void;
   isTraceCollapsed: boolean;
   setTraceCollapsed: (collapsed: boolean) => void;
@@ -202,10 +209,12 @@ interface AgentProviderProps {
   agent: AbstractAgent;
   sessionId?: string;
   initialWebSearchMode?: WebSearchMode;
+  initialAgentMode?: AgentMode;
   onWebSearchModeChange?: (
     mode: WebSearchMode,
     sessionId?: string,
   ) => void;
+  onAgentModeChange?: (mode: AgentMode, sessionId?: string) => void;
 }
 
 // Utility functions moved to ./utils
@@ -726,6 +735,18 @@ const getPersistedAgentTypeFromState = (
   return isPersistedAgentType(agentType) ? agentType : "primary";
 };
 
+const isAgentMode = (value: unknown): value is AgentMode =>
+  value === "general" ||
+  value === "mailbird_expert" ||
+  value === "research_expert" ||
+  value === "creative_expert";
+
+const normalizeAgentMode = (value: unknown): AgentMode => {
+  if (!value || typeof value !== "string") return "general";
+  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  return isAgentMode(normalized) ? normalized : "general";
+};
+
 const normalizeTraceType = (
   rawType: unknown,
   content: string,
@@ -841,14 +862,6 @@ const normalizeTraceStep = (raw: unknown): TraceStep => {
 
 const mapTraceList = (rawList: unknown[]): TraceStep[] =>
   rawList.map(normalizeTraceStep);
-
-const hasLogAttachment = (attachments?: AttachmentInput[]): boolean => {
-  if (!attachments || attachments.length === 0) return false;
-  return attachments.some((att) => {
-    const name = typeof att?.name === "string" ? att.name.toLowerCase() : "";
-    return name.endsWith(".log");
-  });
-};
 
 const looksLikeJsonPayload = (text: string): boolean => {
   const trimmed = stripCodeFence(text).trim();
@@ -1327,7 +1340,9 @@ export function AgentProvider({
   agent,
   sessionId,
   initialWebSearchMode = "off",
+  initialAgentMode = "general",
   onWebSearchModeChange,
+  onAgentModeChange,
 }: AgentProviderProps) {
   const [messages, setMessages] = useState<Message[]>(agent.messages || []);
   const messagesRef = useRef<Message[]>(agent.messages || []);
@@ -1363,6 +1378,9 @@ export function AgentProvider({
   } = usePanelEventAdapter({ batchMs: 200 });
   const [webSearchMode, setWebSearchModeState] =
     useState<WebSearchMode>(initialWebSearchMode);
+  const [agentMode, setAgentModeState] = useState<AgentMode>(
+    normalizeAgentMode(initialAgentMode),
+  );
   const [pendingPromptSteering, setPendingPromptSteering] =
     useState<PendingPromptSteering | null>(null);
   const [activeTraceStepId, setActiveTraceStepId] = useState<
@@ -1416,6 +1434,9 @@ export function AgentProvider({
   const streamingRafRef = useRef<number | null>(null);
   const pendingStreamMessagesRef = useRef<Message[] | null>(null);
   const activeRunWebSearchModeRef = useRef<WebSearchMode>(initialWebSearchMode);
+  const activeRunAgentModeRef = useRef<AgentMode>(
+    normalizeAgentMode(initialAgentMode),
+  );
 
   useEffect(() => {
     researchProgressRef.current = researchProgress;
@@ -1450,6 +1471,14 @@ export function AgentProvider({
 
   useEffect(() => {
     setWebSearchModeState(initialWebSearchMode);
+    const normalizedMode = normalizeAgentMode(initialAgentMode);
+    setAgentModeState(normalizedMode);
+    if (agent) {
+      agent.setState({
+        ...agent.state,
+        agent_mode: normalizedMode,
+      });
+    }
     setPendingPromptSteering(null);
     setStreamRecovery(INITIAL_STREAM_RECOVERY);
     queuedSubmissionRef.current = null;
@@ -1458,7 +1487,7 @@ export function AgentProvider({
     pendingRegenerateSourceMessageIdRef.current = undefined;
     activeRunVersionSeedRef.current = null;
     activeRunRegenerateSourceMessageIdRef.current = undefined;
-  }, [initialWebSearchMode, sessionId]);
+  }, [agent, initialAgentMode, initialWebSearchMode, sessionId]);
 
   const setWebSearchMode = useCallback(
     (mode: WebSearchMode) => {
@@ -1467,6 +1496,21 @@ export function AgentProvider({
       onWebSearchModeChange?.(normalized, sessionId);
     },
     [onWebSearchModeChange, sessionId],
+  );
+
+  const setAgentMode = useCallback(
+    (mode: AgentMode) => {
+      const normalized = normalizeAgentMode(mode);
+      setAgentModeState(normalized);
+      if (agent) {
+        agent.setState({
+          ...agent.state,
+          agent_mode: normalized,
+        });
+      }
+      onAgentModeChange?.(normalized, sessionId);
+    },
+    [agent, onAgentModeChange, sessionId],
   );
 
   const clearResearchTimer = useCallback(() => {
@@ -1860,7 +1904,9 @@ export function AgentProvider({
       setError(null);
       setStreamRecovery(INITIAL_STREAM_RECOVERY);
       const runWebSearchMode = webSearchMode;
+      const runAgentMode = agentMode;
       activeRunWebSearchModeRef.current = runWebSearchMode;
+      activeRunAgentModeRef.current = runAgentMode;
       // Reset per-run UI state
       const panelRunId = crypto.randomUUID();
       resetPanelState(panelRunId);
@@ -1912,7 +1958,10 @@ export function AgentProvider({
           role: "user",
           content,
           created_at: new Date().toISOString(),
-          metadata: { web_search_mode: runWebSearchMode },
+          metadata: {
+            web_search_mode: runWebSearchMode,
+            agent_mode: runAgentMode,
+          },
         };
         lastRunUserMessageIdRef.current = userMessage.id;
 
@@ -1936,6 +1985,7 @@ export function AgentProvider({
         if (sessionId && (trimmedContent || hasPersistableAttachments)) {
           const metadata: Record<string, unknown> = {
             web_search_mode: runWebSearchMode,
+            agent_mode: runAgentMode,
           };
           if (hasPersistableAttachments) {
             metadata.attachments = persistableAttachments;
@@ -1977,14 +2027,6 @@ export function AgentProvider({
             });
         }
 
-        const shouldForceLogAnalysis = hasLogAttachment(attachments);
-        if (shouldForceLogAnalysis) {
-          agent.setState({
-            ...agent.state,
-            agent_type: "log_analysis",
-          });
-        }
-
         // Update agent state with attachments if provided
         if (attachments && attachments.length > 0) {
           agent.setState({
@@ -2003,12 +2045,11 @@ export function AgentProvider({
         const forwardedProps: Record<string, unknown> = {
           force_websearch: webSearchEnabled,
           web_search_mode: runWebSearchMode,
+          agent_mode: runAgentMode,
           // Pass through provider/model to avoid backend defaulting to Gemini
           provider: stateProvider || "google",
           model: stateModel || "gemini-3-flash-preview",
-          agent_type: hasLogAttachment(attachments)
-            ? "log_analysis"
-            : stateAgentType,
+          agent_type: stateAgentType,
           attachments: attachments || [],
         };
         if (overlapContext?.trim()) {
@@ -2109,6 +2150,7 @@ export function AgentProvider({
                   created_at: new Date().toISOString(),
                   metadata: {
                     web_search_mode: activeRunWebSearchModeRef.current,
+                    agent_mode: activeRunAgentModeRef.current,
                   },
                 };
                 return [...prevMessages, assistantMessage];
@@ -2250,14 +2292,6 @@ export function AgentProvider({
               const isLogAnalysis =
                 explicitAgentType === "log_analysis" ||
                 Boolean(inferredLogAnalysis);
-
-              // If we inferred log analysis while in auto mode, tag the agent state so downstream formatting stays consistent.
-              if (!explicitAgentType && inferredLogAnalysis) {
-                agent.setState({
-                  ...agent.state,
-                  agent_type: "log_analysis",
-                });
-              }
 
               if (isLogAnalysis) {
                 const lastToolFormatted = (() => {
@@ -3271,6 +3305,7 @@ export function AgentProvider({
               const baseMetadata = {
                 ...(candidate.metadata ?? {}),
                 web_search_mode: runWebSearchMode,
+                agent_mode: runAgentMode,
                 panel_snapshot_v1: panelSnapshot,
                 panel_versions_v1: panelVersions,
                 panel_provenance_v1: panelProvenance,
@@ -3397,6 +3432,7 @@ export function AgentProvider({
       agent,
       isStreaming,
       sessionId,
+      agentMode,
       webSearchMode,
       applyPanelCustomEvent,
       applyPanelToolCallResult,
@@ -3667,6 +3703,8 @@ export function AgentProvider({
         panelState,
         webSearchMode,
         setWebSearchMode,
+        agentMode,
+        setAgentMode,
         setActiveTraceStep,
         isTraceCollapsed,
         setTraceCollapsed: setTraceCollapsedState,

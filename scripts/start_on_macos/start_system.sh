@@ -145,6 +145,17 @@ kill_process_on_port() {
     fi
 }
 
+start_detached() {
+    local LOG_FILE=$1
+    shift
+    if command -v setsid >/dev/null 2>&1; then
+        nohup setsid "$@" > "$LOG_FILE" 2>&1 < /dev/null &
+    else
+        nohup "$@" > "$LOG_FILE" 2>&1 < /dev/null &
+    fi
+    echo $!
+}
+
 kill_process_on_port 8000
 
 echo "Starting Uvicorn server in the background (venv python)..."
@@ -153,8 +164,7 @@ UVICORN_ARGS=(app.main:app --port 8000)
 if [ "${ENABLE_UVICORN_RELOAD:-true}" = "true" ]; then
     UVICORN_ARGS+=(--reload)
 fi
-nohup "$VENV_PY" -m uvicorn "${UVICORN_ARGS[@]}" > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
-BACKEND_PID=$!
+BACKEND_PID=$(start_detached "$BACKEND_LOG_DIR/backend.log" "$VENV_PY" -m uvicorn "${UVICORN_ARGS[@]}")
 echo "Backend server started with PID: $BACKEND_PID"
 
 verify_backend_pid() {
@@ -171,8 +181,7 @@ if ! verify_backend_pid; then
         echo "Reload mode failed. Retrying without --reload (watch permissions may be restricted)..."
         ENABLE_UVICORN_RELOAD=false
         UVICORN_ARGS=(app.main:app --port 8000)
-        "$VENV_PY" -m uvicorn "${UVICORN_ARGS[@]}" > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
-        BACKEND_PID=$!
+        BACKEND_PID=$(start_detached "$BACKEND_LOG_DIR/backend.log" "$VENV_PY" -m uvicorn "${UVICORN_ARGS[@]}")
         echo "Backend server restarted with PID: $BACKEND_PID"
         if ! verify_backend_pid; then
             echo "Backend server failed to start. Check logs at $BACKEND_LOG_DIR/backend.log"
@@ -222,12 +231,10 @@ else
     
     # Start FeedMe Celery worker
     echo "Starting FeedMe Celery worker in the background (venv python)..."
-    nohup env HEALTH_PORT="$CELERY_HEALTH_PORT" "$VENV_PY" -m celery -A app.feedme.celery_app worker \
+    CELERY_PID=$(start_detached "$CELERY_LOG_DIR/celery_worker.log" env HEALTH_PORT="$CELERY_HEALTH_PORT" "$VENV_PY" -m celery -A app.feedme.celery_app worker \
         --loglevel=info \
         --concurrency=2 \
-        --queues=feedme_default,feedme_processing,feedme_embeddings,feedme_parsing,feedme_health \
-        > "$CELERY_LOG_DIR/celery_worker.log" 2>&1 &
-    CELERY_PID=$!
+        --queues=feedme_default,feedme_processing,feedme_embeddings,feedme_parsing,feedme_health)
     echo "FeedMe Celery worker started with PID: $CELERY_PID"
     
     # Verify Celery worker startup
@@ -254,14 +261,7 @@ pnpm install
 kill_process_on_port 3000
 
 echo "Starting Next.js development server in the background..."
-# Some Next.js/Turbopack setups exit early when launched without a TTY.
-# Use `script` to allocate a pseudo-tty when available.
-if command -v script >/dev/null 2>&1; then
-    nohup script -q /dev/null pnpm run dev > "$FRONTEND_LOG_DIR/frontend.log" 2>&1 &
-else
-    nohup pnpm run dev > "$FRONTEND_LOG_DIR/frontend.log" 2>&1 &
-fi
-FRONTEND_PID=$!
+FRONTEND_PID=$(start_detached "$FRONTEND_LOG_DIR/frontend.log" pnpm run dev)
 echo "Frontend server started with PID: $FRONTEND_PID"
 
 echo "Verifying frontend server startup..."

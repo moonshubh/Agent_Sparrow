@@ -22,6 +22,7 @@ from app.core.config import (
 from app.core.settings import settings
 from app.core.rate_limiting.agent_wrapper import RateLimitedAgent, wrap_gemini_agent
 from .model_router import model_router
+from .agent_modes import AgentMode, DEFAULT_AGENT_MODE, normalize_agent_mode
 
 from .prompts import (
     DATA_ANALYST_PROMPT,
@@ -43,6 +44,8 @@ from .tools import (
     memory_search_tool,
     supabase_query_tool,
     write_article_tool,
+    generate_image_tool,
+    read_skill_tool,
     is_firecrawl_agent_enabled,
     # Firecrawl tools for enhanced web scraping (MCP-backed)
     firecrawl_fetch_tool,
@@ -119,6 +122,15 @@ def _subagent_read_tools() -> List[BaseTool]:
         grounding_search_tool,
         firecrawl_search_tool,
         firecrawl_fetch_tool,
+    ]
+
+
+def _subagent_shared_output_tools() -> List[BaseTool]:
+    """Shared creative/skill tools available to all subagents."""
+    return [
+        write_article_tool,
+        generate_image_tool,
+        read_skill_tool,
     ]
 
 
@@ -333,7 +345,7 @@ def _is_minimax_model(model_id: str) -> bool:
     """Check if a model is a Minimax model.
 
     Args:
-        model_id: The model identifier (e.g., "minimax/MiniMax-M2.1").
+        model_id: The model identifier (e.g., "minimax/MiniMax-M2.5").
 
     Returns:
         True if the model is a Minimax model.
@@ -485,6 +497,7 @@ def _research_subagent(
         web_search_tool,
         tavily_extract_tool,
         grounding_search_tool,
+        *_subagent_shared_output_tools(),
         *_subagent_read_tools(),
     ]
     if use_minimax:
@@ -570,6 +583,7 @@ def _log_diagnoser_subagent(
             model=model_name,
             minimax_tools=["minimax_understand_image", "minimax_web_search"],
         )
+    tools.extend(_subagent_shared_output_tools())
     tools.extend(_subagent_read_tools())
 
     subagent_spec: Dict[str, Any] = {
@@ -652,6 +666,7 @@ def _db_retrieval_subagent(
             minimax_tools=["minimax_web_search", "minimax_understand_image"],
         )
     tools.extend(get_db_retrieval_tools())
+    tools.extend(_subagent_shared_output_tools())
     tools.extend(_subagent_read_tools())
 
     subagent_spec: Dict[str, Any] = {
@@ -722,6 +737,7 @@ def _explorer_subagent(
         web_search_tool,
         tavily_extract_tool,
         grounding_search_tool,
+        *_subagent_shared_output_tools(),
         *_subagent_read_tools(),
     ]
     if use_minimax:
@@ -786,6 +802,7 @@ def _draft_writer_subagent(
         memory_search_tool,
         memory_list_tool,
         *get_db_retrieval_tools(),
+        *_subagent_shared_output_tools(),
         *_subagent_read_tools(),
     ]
     if use_minimax:
@@ -849,6 +866,7 @@ def _data_analyst_subagent(
         memory_search_tool,
         memory_list_tool,
         *get_db_retrieval_tools(),
+        *_subagent_shared_output_tools(),
         *_subagent_read_tools(),
     ]
     if use_minimax:
@@ -895,6 +913,7 @@ def get_subagent_specs(
     provider: str = "google",
     *,
     zendesk: bool = False,
+    agent_mode: str = DEFAULT_AGENT_MODE,
     workspace_tools: Optional[List[BaseTool]] = None,
 ) -> List[Dict[str, Any]]:
     """Return subagent specifications consumed by DeepAgents.
@@ -902,6 +921,7 @@ def get_subagent_specs(
     Args:
         provider: Deprecated; subagents are derived from models.yaml.
         zendesk: When True, use zendesk-specific subagent configs.
+        agent_mode: Effective hard-switch mode selected by the user.
 
     Returns:
         List of subagent specification dicts with:
@@ -919,14 +939,53 @@ def get_subagent_specs(
         provider=default_subagent.provider,
         model=default_subagent.model_id,
     )
-    return [
-        _explorer_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
-        _research_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
-        _log_diagnoser_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
-        _db_retrieval_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
-        _draft_writer_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
-        _data_analyst_subagent(zendesk=zendesk, workspace_tools=workspace_tools),
+    resolved_mode = normalize_agent_mode(agent_mode)
+
+    # Hard-switch mode policy: keep delegation inside the selected mode.
+    if zendesk or resolved_mode == AgentMode.MAILBIRD_EXPERT.value:
+        builders = [
+            _explorer_subagent,
+            _research_subagent,
+            _log_diagnoser_subagent,
+            _db_retrieval_subagent,
+            _draft_writer_subagent,
+            _data_analyst_subagent,
+        ]
+    elif resolved_mode == AgentMode.RESEARCH_EXPERT.value:
+        builders = [
+            _explorer_subagent,
+            _research_subagent,
+            _db_retrieval_subagent,
+            _data_analyst_subagent,
+            _draft_writer_subagent,
+        ]
+    elif resolved_mode == AgentMode.CREATIVE_EXPERT.value:
+        builders = [
+            _explorer_subagent,
+            _research_subagent,
+            _draft_writer_subagent,
+        ]
+    else:
+        builders = [
+            _explorer_subagent,
+            _research_subagent,
+            _log_diagnoser_subagent,
+            _db_retrieval_subagent,
+            _draft_writer_subagent,
+            _data_analyst_subagent,
+        ]
+
+    specs = [
+        builder(zendesk=zendesk, workspace_tools=workspace_tools)
+        for builder in builders
     ]
+    logger.info(
+        "subagent_specs_selected_for_mode",
+        mode=resolved_mode,
+        zendesk=zendesk,
+        subagents=[spec.get("name") for spec in specs],
+    )
+    return specs
 
 
 def get_subagent_by_name(
@@ -934,6 +993,7 @@ def get_subagent_by_name(
     provider: str = "google",
     *,
     zendesk: bool = False,
+    agent_mode: str = DEFAULT_AGENT_MODE,
 ) -> Optional[Dict[str, Any]]:
     """Get a specific subagent specification by name.
 
@@ -945,7 +1005,11 @@ def get_subagent_by_name(
     Returns:
         Subagent spec dict or None if not found.
     """
-    for spec in get_subagent_specs(provider=provider, zendesk=zendesk):
+    for spec in get_subagent_specs(
+        provider=provider,
+        zendesk=zendesk,
+        agent_mode=agent_mode,
+    ):
         if spec["name"] == name:
             return spec
     return None
