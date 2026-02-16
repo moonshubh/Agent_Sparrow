@@ -63,6 +63,7 @@ const defaultFilters: MemoryFilters = {
   entityTypes: [...ALL_ENTITY_TYPES],
   minConfidence: 0,
   sourceType: null,
+  editedState: "all",
   sortBy: "created_at",
   sortOrder: "desc",
 };
@@ -853,29 +854,53 @@ export default function MemoryClient() {
               </div>
 
               {viewMode === "table" && (
-                <div className="memory-header-sort">
-                  <span className="memory-header-sort__label">Created</span>
-                  <select
-                    className="memory-header-sort__select"
-                    value={
-                      filters.sortBy === "created_at" ? filters.sortOrder : ""
-                    }
-                    onChange={(e) => {
-                      const value = e.target.value as "" | "asc" | "desc";
-                      if (!value) return;
-                      setFilters((prev) => ({
-                        ...prev,
-                        sortBy: "created_at",
-                        sortOrder: value,
-                      }));
-                    }}
-                  >
-                    {filters.sortBy !== "created_at" ? (
-                      <option value="">{`Current sort: ${filters.sortBy} (${filters.sortOrder})`}</option>
-                    ) : null}
-                    <option value="desc">Newest → Oldest</option>
-                    <option value="asc">Oldest → Newest</option>
-                  </select>
+                <div className="memory-header-sort-group">
+                  <div className="memory-header-sort">
+                    <span className="memory-header-sort__label">Edit State</span>
+                    <select
+                      className="memory-header-sort__select"
+                      value={filters.editedState}
+                      onChange={(e) => {
+                        const value = e.target.value as
+                          | "all"
+                          | "edited"
+                          | "unedited";
+                        setFilters((prev) => ({
+                          ...prev,
+                          editedState: value,
+                        }));
+                      }}
+                    >
+                      <option value="all">All</option>
+                      <option value="edited">Edited only</option>
+                      <option value="unedited">Unedited only</option>
+                    </select>
+                  </div>
+
+                  <div className="memory-header-sort">
+                    <span className="memory-header-sort__label">Created</span>
+                    <select
+                      className="memory-header-sort__select"
+                      value={
+                        filters.sortBy === "created_at" ? filters.sortOrder : ""
+                      }
+                      onChange={(e) => {
+                        const value = e.target.value as "" | "asc" | "desc";
+                        if (!value) return;
+                        setFilters((prev) => ({
+                          ...prev,
+                          sortBy: "created_at",
+                          sortOrder: value,
+                        }));
+                      }}
+                    >
+                      {filters.sortBy !== "created_at" ? (
+                        <option value="">{`Current sort: ${filters.sortBy} (${filters.sortOrder})`}</option>
+                      ) : null}
+                      <option value="desc">Newest → Oldest</option>
+                      <option value="asc">Oldest → Newest</option>
+                    </select>
+                  </div>
                 </div>
               )}
 

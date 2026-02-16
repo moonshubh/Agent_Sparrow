@@ -870,6 +870,14 @@ class MemoryListResponse(BaseModel):
     offset: int
 
 
+class MemorySearchResponse(BaseModel):
+    """Response for memory text search with truncation metadata."""
+
+    items: List[MemoryRecord] = Field(default_factory=list)
+    truncated: bool = False
+    scan_cap: int | None = None
+
+
 class MemoryEntityRecord(BaseModel):
     """Read model for memory_entities rows."""
 
@@ -1256,6 +1264,65 @@ class ImportZendeskTaggedRequest(BaseModel):
         le=2000,
         description="Max tickets to enqueue for processing.",
     )
+    date_field: Literal["created", "updated"] = Field(
+        default="created",
+        description=(
+            "Zendesk ticket date field used for date filtering. "
+            "Use 'created' for creation-time windows or 'updated' for update-time windows."
+        ),
+    )
+    date_after: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional inclusive start date (YYYY-MM-DD) applied to date_field "
+            "using Zendesk search syntax (>=)."
+        ),
+    )
+    date_before: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional inclusive end date (YYYY-MM-DD) applied to date_field "
+            "using Zendesk search syntax (<=)."
+        ),
+    )
+    status_scope: Literal["resolved_only", "all"] = Field(
+        default="resolved_only",
+        description=(
+            "Ticket status scope. 'resolved_only' searches solved+closed tickets; "
+            "'all' searches all statuses."
+        ),
+    )
+
+    @field_validator("date_after", "date_before")
+    @classmethod
+    def validate_date_filter_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        raw = v.strip()
+        if not raw:
+            return None
+        try:
+            parsed = datetime.strptime(raw, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("Date must be in YYYY-MM-DD format") from exc
+        normalized = parsed.strftime("%Y-%m-%d")
+        if raw != normalized:
+            raise ValueError("Date must use zero-padded YYYY-MM-DD format")
+        return normalized
+
+    @field_validator("date_before")
+    @classmethod
+    def validate_date_range_order(
+        cls, date_before: Optional[str], info
+    ) -> Optional[str]:
+        date_after = info.data.get("date_after")
+        if not date_after or not date_before:
+            return date_before
+        after_dt = datetime.strptime(date_after, "%Y-%m-%d").date()
+        before_dt = datetime.strptime(date_before, "%Y-%m-%d").date()
+        if after_dt > before_dt:
+            raise ValueError("date_after must be less than or equal to date_before")
+        return date_before
 
 
 class ImportZendeskTaggedResponse(BaseModel):
@@ -1281,6 +1348,9 @@ class ImportZendeskTaggedTaskResult(BaseModel):
     imported_memory_ids: List[str] = Field(default_factory=list)
     failed_ticket_ids: List[str] = Field(default_factory=list)
     failure_reasons: Dict[str, str] = Field(default_factory=dict)
+    filters: Dict[str, Optional[str]] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+    error: Optional[str] = Field(default=None)
 
 
 class ImportZendeskTaggedTaskStatusResponse(BaseModel):

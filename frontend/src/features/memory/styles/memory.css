@@ -712,6 +712,12 @@
   gap: 10px;
 }
 
+.memory-header-sort-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .memory-header-sort__label {
   font-size: 12px;
   font-weight: 600;
