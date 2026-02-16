@@ -44,6 +44,10 @@ from app.feedme.zendesk_import_utils import (
     fallback_summary_from_text,
     format_zendesk_memory_content,
 )
+from app.memory.edit_state import (
+    CLEANUP_PROTECTED_MIN_CONFIDENCE,
+    is_cleanup_protected_memory,
+)
 
 try:  # Prefer modern google-genai package when available
     from google import genai  # type: ignore
@@ -829,8 +833,6 @@ def generate_text_chunks_and_embeddings(
 
         # Clear existing chunks
         try:
-            import asyncio
-
             # Use sync client; call async wrapper not available here, using direct table ops handled above in sync
             client.client.table("feedme_text_chunks").delete().eq(
                 "conversation_id", conversation_id
@@ -1732,6 +1734,70 @@ ZENDESK_LOG_READ_CHARS = int(os.getenv("ZENDESK_LOG_READ_CHARS", "120000"))
 ZENDESK_PUBLIC_EXCERPT_CHARS = int(os.getenv("ZENDESK_PUBLIC_EXCERPT_CHARS", "20000"))
 
 
+def _normalize_zendesk_import_date(
+    value: str | None, *, field_name: str
+) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name} must be YYYY-MM-DD; received {value!r}"
+        ) from exc
+    normalized = parsed.strftime("%Y-%m-%d")
+    if raw != normalized:
+        raise ValueError(
+            f"{field_name} must use zero-padded YYYY-MM-DD; received {value!r}"
+        )
+    return normalized
+
+
+def _build_zendesk_tagged_search_queries(
+    *,
+    tag_tokens: list[str],
+    date_field: str = "created",
+    date_after: str | None = None,
+    date_before: str | None = None,
+    status_scope: str = "resolved_only",
+) -> list[str]:
+    safe_date_field = (
+        "updated" if (date_field or "").strip().lower() == "updated" else "created"
+    )
+    safe_status_scope = (
+        "all" if (status_scope or "").strip().lower() == "all" else "resolved_only"
+    )
+    safe_date_after = _normalize_zendesk_import_date(
+        date_after, field_name="date_after"
+    )
+    safe_date_before = _normalize_zendesk_import_date(
+        date_before, field_name="date_before"
+    )
+    if safe_date_after and safe_date_before:
+        after_dt = datetime.strptime(safe_date_after, "%Y-%m-%d").date()
+        before_dt = datetime.strptime(safe_date_before, "%Y-%m-%d").date()
+        if after_dt > before_dt:
+            raise ValueError("date_after must be less than or equal to date_before")
+
+    date_tokens: list[str] = []
+    if safe_date_after:
+        date_tokens.append(f"{safe_date_field}>={safe_date_after}")
+    if safe_date_before:
+        date_tokens.append(f"{safe_date_field}<={safe_date_before}")
+    date_suffix = f" {' '.join(date_tokens)}" if date_tokens else ""
+
+    queries: list[str] = []
+    for tag_name in tag_tokens or ["mb_playbook"]:
+        if safe_status_scope == "all":
+            queries.append(f"type:ticket tags:{tag_name}{date_suffix}")
+            continue
+        queries.append(f"type:ticket tags:{tag_name} status:solved{date_suffix}")
+        queries.append(f"type:ticket tags:{tag_name} status:closed{date_suffix}")
+
+    return queries
+
+
 def _strip_html(text: str) -> str:
     if not text:
         return ""
@@ -1927,9 +1993,15 @@ async def _analyze_log_file(
     bind=True, base=CallbackTask, name="app.feedme.tasks.import_zendesk_tagged"
 )
 def import_zendesk_tagged(
-    self, tag: str = "mb_playbook", limit: int = 200
+    self,
+    tag: str = "mb_playbook",
+    limit: int = 200,
+    date_field: str = "created",
+    date_after: str | None = None,
+    date_before: str | None = None,
+    status_scope: str = "resolved_only",
 ) -> dict[str, Any]:
-    """Queue ingestion of solved/closed Zendesk tickets tagged for MB_playbook learning."""
+    """Queue ingestion of Zendesk tickets tagged for MB_playbook learning."""
 
     async def _run() -> dict[str, Any]:
         from app.integrations.zendesk.client import ZendeskClient, ZendeskRateLimitError
@@ -1953,6 +2025,19 @@ def import_zendesk_tagged(
             ]
         tag_value = ",".join(tag_tokens) if tag_tokens else "mb_playbook"
         ticket_limit = max(1, int(limit))
+        safe_date_field = (
+            "updated" if (date_field or "").strip().lower() == "updated" else "created"
+        )
+        safe_status_scope = (
+            "all" if (status_scope or "").strip().lower() == "all" else "resolved_only"
+        )
+        requested_filters = {
+            "date_field": date_field,
+            "date_after": date_after,
+            "date_before": date_before,
+            "status_scope": status_scope,
+        }
+        warnings: list[str] = []
 
         settings = current_settings()
         if not (
@@ -1973,6 +2058,8 @@ def import_zendesk_tagged(
                 "imported_memory_ids": [],
                 "failed_ticket_ids": [],
                 "failure_reasons": {},
+                "filters": requested_filters,
+                "warnings": warnings,
                 "error": "Zendesk credentials missing",
             }
 
@@ -1983,10 +2070,52 @@ def import_zendesk_tagged(
             dry_run=bool(getattr(settings, "zendesk_dry_run", True)),
         )
 
-        queries: list[str] = []
-        for tag_name in tag_tokens or ["mb_playbook"]:
-            queries.append(f"type:ticket tags:{tag_name} status:solved")
-            queries.append(f"type:ticket tags:{tag_name} status:closed")
+        try:
+            queries = _build_zendesk_tagged_search_queries(
+                tag_tokens=tag_tokens,
+                date_field=safe_date_field,
+                date_after=date_after,
+                date_before=date_before,
+                status_scope=safe_status_scope,
+            )
+        except ValueError as exc:
+            logger.error("zendesk_import_invalid_filters tag=%s error=%s", tag_value, exc)
+            return {
+                "imported": 0,
+                "skipped": 0,
+                "failed": 0,
+                "tag": tag_value,
+                "processed_tickets": 0,
+                "imported_memory_ids": [],
+                "failed_ticket_ids": [],
+                "failure_reasons": {},
+                "filters": requested_filters,
+                "warnings": warnings,
+                "error": str(exc),
+            }
+
+        effective_filters = {
+            "date_field": safe_date_field,
+            "date_after": _normalize_zendesk_import_date(
+                date_after, field_name="date_after"
+            ),
+            "date_before": _normalize_zendesk_import_date(
+                date_before, field_name="date_before"
+            ),
+            "status_scope": safe_status_scope,
+        }
+        if safe_status_scope == "all":
+            status_warning = (
+                "status_scope=all includes unresolved tickets and may increase "
+                "noise in imported memories."
+            )
+            warnings.append(status_warning)
+            logger.warning("zendesk_import_broad_status_scope tag=%s", tag_value)
+        logger.info(
+            "zendesk_import_effective_filters tag=%s filters=%s",
+            tag_value,
+            effective_filters,
+        )
         tickets: list[dict[str, Any]] = []
         for q in queries:
             try:
@@ -2030,6 +2159,8 @@ def import_zendesk_tagged(
                 "imported_memory_ids": [],
                 "failed_ticket_ids": [],
                 "failure_reasons": {},
+                "filters": effective_filters,
+                "warnings": warnings,
                 "error": "SUPABASE_SERVICE_KEY is required for memory imports",
             }
         service = get_memory_ui_service()
@@ -2434,7 +2565,7 @@ def import_zendesk_tagged(
                 "agent_id": agent_id,
                 "tenant_id": tenant_id,
                 "review_status": "pending_review",
-                "confidence_score": 0.6,
+                "confidence_score": CLEANUP_PROTECTED_MIN_CONFIDENCE,
                 "embedding": embedding,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -2443,12 +2574,30 @@ def import_zendesk_tagged(
             try:
                 existing = await supabase._exec(
                     lambda: supabase.client.table("memories")
-                    .select("id")
+                    .select(
+                        "id,confidence_score,created_at,updated_at,reviewed_by,metadata"
+                    )
                     .eq("id", memory_id)
                     .limit(1)
                     .execute()
                 )
-                exists = bool(existing.data)
+                existing_row = (existing.data or [None])[0]
+                exists = bool(existing_row)
+
+                if exists and isinstance(existing_row, dict):
+                    if is_cleanup_protected_memory(
+                        existing_row,
+                        min_confidence=CLEANUP_PROTECTED_MIN_CONFIDENCE,
+                    ):
+                        skipped += 1
+                        logger.info(
+                            "zendesk_import_skip_protected_existing "
+                            "ticket_id=%s memory_id=%s confidence=%s",
+                            ticket_id,
+                            memory_id,
+                            existing_row.get("confidence_score"),
+                        )
+                        continue
 
                 if exists:
                     update_payload = {
@@ -2462,12 +2611,47 @@ def import_zendesk_tagged(
                         "embedding": payload["embedding"],
                         "updated_at": payload["updated_at"],
                     }
-                    await supabase._exec(
-                        lambda: supabase.client.table("memories")
+                    existing_updated_at = existing_row.get("updated_at")
+                    update_builder = (
+                        supabase.client.table("memories")
                         .update(update_payload)
                         .eq("id", memory_id)
-                        .execute()
                     )
+                    # CAS guard to avoid clobbering a row that changed after we
+                    # performed the protection check.
+                    if isinstance(existing_updated_at, str) and existing_updated_at:
+                        update_builder = update_builder.eq(
+                            "updated_at", existing_updated_at
+                        )
+                    update_result = await supabase._exec(lambda: update_builder.execute())
+                    if not (update_result.data or []):
+                        latest_resp = await supabase._exec(
+                            lambda: supabase.client.table("memories")
+                            .select(
+                                "id,confidence_score,created_at,updated_at,reviewed_by,metadata"
+                            )
+                            .eq("id", memory_id)
+                            .limit(1)
+                            .execute()
+                        )
+                        latest_row = (latest_resp.data or [None])[0]
+                        if isinstance(latest_row, dict) and is_cleanup_protected_memory(
+                            latest_row,
+                            min_confidence=CLEANUP_PROTECTED_MIN_CONFIDENCE,
+                        ):
+                            skipped += 1
+                            logger.info(
+                                "zendesk_import_skip_protected_race "
+                                "ticket_id=%s memory_id=%s",
+                                ticket_id,
+                                memory_id,
+                            )
+                            continue
+                        _record_failure(
+                            ticket_id,
+                            "persist_conflict: existing memory changed during update",
+                        )
+                        continue
                 else:
                     await supabase._exec(
                         lambda: supabase.client.table("memories").insert(payload).execute()
@@ -2503,6 +2687,8 @@ def import_zendesk_tagged(
             "imported_memory_ids": imported_memory_ids,
             "failed_ticket_ids": failed_ticket_ids,
             "failure_reasons": failure_reasons,
+            "filters": effective_filters,
+            "warnings": warnings,
         }
 
     return asyncio.run(_run())

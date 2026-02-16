@@ -46,6 +46,8 @@ export type ReviewStatus =
   | "edited"
   | "pending";
 
+export type MemoryEditedState = "all" | "edited" | "unedited";
+
 // =============================================================================
 // Core Models
 // =============================================================================
@@ -285,6 +287,7 @@ export interface SearchMemoriesRequest {
   min_confidence?: number;
   agent_id?: string;
   tenant_id?: string;
+  edited_state?: MemoryEditedState;
 }
 
 export interface ListMemoriesRequest {
@@ -293,6 +296,7 @@ export interface ListMemoriesRequest {
   agent_id?: string;
   tenant_id?: string;
   source_type?: SourceType;
+  edited_state?: MemoryEditedState;
   sort_order?: "asc" | "desc";
   review_status?: ReviewStatus;
 }
@@ -310,6 +314,10 @@ export interface ImportMemorySourcesRequest {
 export interface ImportZendeskTaggedRequest {
   tag?: string;
   limit?: number;
+  date_field?: "created" | "updated";
+  date_after?: string | null;
+  date_before?: string | null;
+  status_scope?: "resolved_only" | "all";
 }
 
 export interface UpdateRelationshipRequest {
@@ -357,6 +365,12 @@ export interface ListMemoriesResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface MemorySearchResponse {
+  items: Memory[];
+  truncated: boolean;
+  scan_cap?: number | null;
 }
 
 export interface AddMemoryResponse {
@@ -452,6 +466,9 @@ export interface ImportZendeskTaggedTaskResult {
   imported_memory_ids?: string[];
   failed_ticket_ids?: string[];
   failure_reasons?: Record<string, string>;
+  filters?: Record<string, string | null>;
+  warnings?: string[];
+  error?: string | null;
 }
 
 export interface ImportZendeskTaggedTaskStatusResponse {
@@ -586,6 +603,7 @@ export interface MemoryFilters {
   entityTypes: EntityType[];
   minConfidence: number;
   sourceType: SourceType | null;
+  editedState: MemoryEditedState;
   sortBy: "confidence" | "created_at" | "retrieval_count";
   sortOrder: "asc" | "desc";
 }

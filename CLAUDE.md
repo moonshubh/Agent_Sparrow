@@ -198,6 +198,17 @@ The Memory UI provides a 3D knowledge graph visualization for managing agent mem
 
 **Key Components:**
 - Entity nodes and relationship edges in 3D space
+
+### Memory UI Safeguards (Feb 2026)
+
+- Cleanup/bulk-delete guard class is now codified in `app/memory/edit_state.py`:
+  - a memory is considered edited when `updated_at > created_at` and editor identity exists
+  - cleanup protection applies to edited memories with `confidence_score >= 0.6`.
+- Guarded cleanup helper for ID-based delete sets: `scripts/memory/guarded_cleanup_delete_ids.py` (dry-run by default; excludes protected rows automatically).
+- Guarded cleanup apply mode now uses atomic DB RPC `public.delete_memories_with_relationship_cleanup(uuid[])` (migration: `app/db/migrations/041_add_guarded_memory_delete_rpc.sql`) so duplicate refs are nulled, relationship pointers are detached, and memory deletes commit/rollback together per chunk.
+- Memory list API now supports edited-state filtering with `edited_state=all|edited|unedited` on `GET /api/v1/memory/list`.
+- Memory table UI includes matching filters (`All`, `Edited only`, `Unedited only`) and routes edited-state requests through backend reads for consistent pagination/counts.
+- Edited-state backend filtering has a scan safety cap (`MEMORY_EDITED_FILTER_SCAN_CAP`, default `20000`) to prevent unbounded full-table scans.
 - Confidence-based ordering and duplicate detection
 - Feedback loop: message thumbs up/down → memory confidence updates
 - Semantic search across memory content
@@ -217,6 +228,9 @@ Completed sprint upgrade focused on reliability, trust, and edit synchronization
 - **Feedback step guarantee (Feb 2026 follow-up)**: thumbs feedback confidence now changes in fixed 5% steps (`+0.05` for `thumbs_up`, `-0.05` for `thumbs_down`) in both UI optimistic updates and the DB RPC (`20260209124500_memory_feedback_confidence_step_five.sql`) to keep table percentages consistent with persisted values.
 - **Feedback table reflection hardening (Feb 2026 follow-up)**: memory table feedback handlers now safely coerce confidence/count values before optimistic math, prevent action-click propagation side effects, and sync selected detail panel confidence immediately from feedback responses.
 - **Import Knowledge reliability follow-up (Feb 2026)**: Zendesk `mb_playbook` imports now expose task status polling (`GET /api/v1/memory/import/zendesk-tagged/{task_id}`), return structured completion details (`processed_tickets`, `imported_memory_ids`, failure breakdown), and the Memory UI now polls queued imports to show completion/failure toasts, refresh data on completion, and focus the latest imported memory in table view.
+- **Tagged import filter controls (Feb 2026)**: `/api/v1/memory/import/zendesk-tagged` now accepts `date_field` (`created|updated`), `date_after`, `date_before` (`YYYY-MM-DD`), and `status_scope` (`resolved_only|all`) for deterministic import-window targeting.
+- **Import overwrite guard (Feb 2026)**: Zendesk tagged re-import now skips updating existing memories that are already in the protected class (edited + `confidence_score >= 0.6`) to avoid clobbering high-trust human-edited memories.
+- **Updated-window caveat (Feb 2026)**: imports filtered on `date_field=\"updated\"` are intentionally time-variant; ticket counts can drift after the selected window as newer updates move tickets out of the filter.
 - **Import resilience hardening**: import task now records per-ticket failure reasons and falls back to direct embedding generation when rate-limit infrastructure is temporarily unavailable (for example, Celery async loop lifecycle issues), reducing silent partial-import failures.
 - **Inline image resize persistence fix (Feb 2026 follow-up)**: Memory TipTap image nodes now persist `width`/`height` attributes explicitly across markdown parse/render, so resized imported-memory images remain resized after saving, closing, and reopening.
 - **`mb_playbook` section emphasis (Feb 2026 follow-up)**: in imported-memory edit mode, `Problem`, `Impact`, and `Environment` headings are now highlighted with stronger cyan styling and underline for clear visual scannability.

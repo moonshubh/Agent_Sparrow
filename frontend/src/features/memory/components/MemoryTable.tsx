@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useCallback, useEffect } from "react";
+import React, { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ChevronDown,
@@ -29,6 +29,7 @@ import { ConfidenceBadge } from "./ConfidenceBadge";
 import { SourceBadge } from "./SourceBadge";
 import { MemoryForm } from "./MemoryForm";
 import { getMemoryEditorDisplayName, isMemoryEdited } from "../lib/memoryFlags";
+import { toast } from "sonner";
 import type { Memory, MemoryFilters, FeedbackType } from "../types";
 
 interface MemoryTableProps {
@@ -127,6 +128,7 @@ export default function MemoryTable({
     Record<string, boolean>
   >({});
   const [listPage, setListPage] = useState(0);
+  const truncationNoticeKeyRef = useRef<string>("");
   const pageSize = 20;
 
   const isControlledSort = Boolean(filters && onSortChange);
@@ -143,6 +145,7 @@ export default function MemoryTable({
     isLoading: searchLoading,
     error: searchError,
   } = useMemorySearch(searchQuery || "", {
+    editedState: filters?.editedState ?? "all",
     enabled: Boolean(searchQuery && searchQuery.length >= 2),
   });
 
@@ -157,6 +160,7 @@ export default function MemoryTable({
       limit: pageSize,
       offset: listPage * pageSize,
       source_type: filters?.sourceType || undefined,
+      edited_state: filters?.editedState || "all",
       sort_order: sortField === "created_at" ? sortOrder : "desc",
     },
     {
@@ -171,8 +175,37 @@ export default function MemoryTable({
     setListPage((current) => Math.min(current, nextTotalPages - 1));
   }, [listResults, pageSize]);
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setListPage(0);
+  }, [filters?.editedState, filters?.sourceType]);
+
   // Use search when query is at least 2 characters, otherwise use list
-  const searchMemories = searchResults ?? EMPTY_MEMORIES;
+  const searchPayload =
+    searchResults ??
+    ({ items: EMPTY_MEMORIES, truncated: false, scan_cap: undefined } as const);
+  const searchMemories = searchPayload.items ?? EMPTY_MEMORIES;
+  const searchScanCap =
+    typeof searchPayload.scan_cap === "number" ? searchPayload.scan_cap : null;
+
+  useEffect(() => {
+    if (!isUsingSearch || !searchPayload.truncated) return;
+    const key = `${(searchQuery || "").trim()}|${filters?.editedState || "all"}|${searchScanCap ?? ""}`;
+    if (truncationNoticeKeyRef.current === key) return;
+    truncationNoticeKeyRef.current = key;
+    const capDetail =
+      typeof searchScanCap === "number" ? ` (scan cap ${searchScanCap})` : "";
+    toast.warning(
+      `Search results were truncated${capDetail}. Refine your search or filters for complete results.`,
+    );
+  }, [
+    isUsingSearch,
+    filters?.editedState,
+    searchPayload.truncated,
+    searchQuery,
+    searchScanCap,
+  ]);
+
   const listMemories = listResults?.items ?? EMPTY_MEMORIES;
   const listTotal = listResults?.total ?? listMemories.length;
   const totalCount = isUsingSearch ? searchMemories.length : listTotal;
@@ -310,7 +343,15 @@ export default function MemoryTable({
   const handleDelete = useCallback(
     async (memoryId: string) => {
       if (confirm("Are you sure you want to delete this memory?")) {
-        await deleteMemory.mutateAsync(memoryId);
+        try {
+          await deleteMemory.mutateAsync(memoryId);
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Failed to delete memory. Please try again.";
+          toast.error(message);
+        }
       }
     },
     [deleteMemory],
