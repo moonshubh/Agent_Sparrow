@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.5](https://github.com/moonshubh/Agent_Sparrow/compare/v0.2.4...v0.2.5) (2026-02-16)
+
+
+### Features
+
+* harden zendesk memory cleanup and edited-state filtering ([0a7f893](https://github.com/moonshubh/Agent_Sparrow/commit/0a7f8938b3245153698d808cbbbb98b555e88f21))
+* harden zendesk memory cleanup and edited-state filtering ([245a339](https://github.com/moonshubh/Agent_Sparrow/commit/245a3397dbaf98a0066ade0a2364a77340be8929))
+
+
+### Bug Fixes
+
+* **memory:** prevent edit 502s from unnecessary embedding refresh ([1193143](https://github.com/moonshubh/Agent_Sparrow/commit/1193143388b5100da399ca72bb399c1ebb16f3e8))
+
 ## [0.2.4](https://github.com/moonshubh/Agent_Sparrow/compare/v0.2.3...v0.2.4) (2026-02-11)
 
 
