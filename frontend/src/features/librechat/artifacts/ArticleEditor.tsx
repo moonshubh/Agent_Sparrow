@@ -11,6 +11,7 @@ import {
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/shared/lib/utils";
+import { LinkPreview } from "@/components/ui/link-preview";
 import type { Artifact } from "./types";
 import { useArtifactStore } from "./ArtifactContext";
 import { useAgent } from "@/features/librechat/AgentContext";
@@ -242,9 +243,13 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
         };
 
         if (isMissing || hasFailed) {
+          const previewTarget = resolveHttpUrl(pageUrl || srcString);
+          const primaryLink = previewTarget || undefined;
+          const linkedUrl = resolveHttpUrl(srcString);
+
           return (
-            <span className="block my-6 mx-auto max-w-full">
-              <span className="block relative rounded-xl border border-border/50 bg-secondary/30 p-8 text-center">
+            <span className="block my-6 mx-auto max-w-full w-full">
+              <span className="block relative rounded-xl border border-border/50 bg-secondary/30 p-6 text-center">
                 <ImageIcon className="h-12 w-12 mx-auto mb-3 text-muted-foreground/50" />
                 <span className="block text-sm text-muted-foreground">
                   {isMissing ? "Image unavailable" : "Image failed to load"}
@@ -254,6 +259,44 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
                     {caption}
                   </span>
                 )}
+
+                <span className="mt-4 flex flex-wrap items-center justify-center gap-3 text-xs">
+                  {primaryLink && (
+                    <a
+                      href={primaryLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-terracotta-400 hover:text-terracotta-300 underline underline-offset-2"
+                    >
+                      Open source
+                    </a>
+                  )}
+                  {linkedUrl && linkedUrl !== primaryLink && (
+                    <a
+                      href={linkedUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-muted-foreground hover:text-foreground underline underline-offset-2"
+                    >
+                      Open linked URL
+                    </a>
+                  )}
+                </span>
+
+                {primaryLink ? (
+                  <span className="mt-4 block">
+                    <LinkPreview url={primaryLink}>
+                      <a
+                        href={primaryLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                      >
+                        Preview source link
+                      </a>
+                    </LinkPreview>
+                  </span>
+                ) : null}
               </span>
             </span>
           );
@@ -465,20 +508,32 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
         ...props
       }: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
         node?: unknown;
-      }) => (
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          {...props}
-          className={cn(
-            "text-terracotta-400 hover:text-terracotta-300 underline underline-offset-2",
-            className,
-          )}
-        >
-          {children}
-        </a>
-      ),
+      }) => {
+        const isExternal =
+          typeof href === "string" &&
+          (href.startsWith("http://") || href.startsWith("https://"));
+
+        const anchor = (
+          <a
+            href={href}
+            target={isExternal ? "_blank" : undefined}
+            rel={isExternal ? "noopener noreferrer" : undefined}
+            {...props}
+            className={cn(
+              "text-terracotta-400 hover:text-terracotta-300 underline underline-offset-2",
+              className,
+            )}
+          >
+            {children}
+          </a>
+        );
+
+        if (isExternal && typeof href === "string") {
+          return <LinkPreview url={href}>{anchor}</LinkPreview>;
+        }
+
+        return anchor;
+      },
     }),
     [failedImages, resolveHttpUrl],
   );

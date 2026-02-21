@@ -2557,17 +2557,6 @@ class StreamEventHandler:
                 title=title,
                 images=normalized_images,
             )
-
-            # Emit individual image artifacts as a reliability fallback:
-            # even if article markdown rendering is missed client-side, users can still
-            # view/download images from the artifact panel.
-            for index, image in enumerate(normalized_images[:5], start=1):
-                self.emitter.emit_image_artifact(
-                    image_url=image.get("url"),
-                    title=f"{title} - Visual {index}",
-                    prompt=image.get("alt"),
-                    page_url=image.get("page_url"),
-                )
             logger.info(
                 "article_artifact_emitted: title=%s, content_length=%d, images=%d",
                 title,

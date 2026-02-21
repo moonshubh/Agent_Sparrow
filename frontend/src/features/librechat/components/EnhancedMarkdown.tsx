@@ -11,6 +11,7 @@ import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
 import { CopyCodeButton } from "./CopyCodeButton";
 import { cn } from "@/shared/lib/utils";
+import { LinkPreview } from "@/components/ui/link-preview";
 import {
   artifactPlugin,
   extractContent,
@@ -36,6 +37,8 @@ interface EnhancedMarkdownProps {
   messageId?: string;
   /** Whether to register artifacts (disabled during streaming to avoid partial artifacts) */
   registerArtifacts?: boolean;
+  /** Enable hover link previews for external links */
+  enableLinkPreviews?: boolean;
   /** Rendering variant for styling behavior */
   variant?: "default" | "librechat";
   /** Optional component overrides */
@@ -76,6 +79,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
   className,
   messageId = "unknown",
   registerArtifacts = true,
+  enableLinkPreviews = false,
   variant = "default",
   componentsOverride,
 }: EnhancedMarkdownProps) {
@@ -163,6 +167,54 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
   const components: ExtendedComponents = useMemo(() => {
     const isLibreChat = variant === "librechat";
     const artifactTheme = isLibreChat ? "librechat" : "default";
+
+    const renderLink = ({
+      href,
+      children,
+      className: anchorClassName,
+      ...props
+    }: any) => {
+      const isExternal = typeof href === "string" && href.startsWith("http");
+
+      // Keep clean domain rendering when the markdown link text is the raw URL.
+      let displayText = children;
+      const childStr = String(children);
+      if (isExternal && childStr === href) {
+        try {
+          const url = new URL(href);
+          displayText = url.hostname.replace("www.", "");
+        } catch {
+          // Keep original if URL parsing fails
+        }
+      }
+
+      const anchor = (
+        <a
+          {...props}
+          href={href}
+          target={isExternal ? "_blank" : undefined}
+          rel={isExternal ? "noopener noreferrer" : undefined}
+          className={cn(
+            isLibreChat
+              ? "lc-markdown-link"
+              : "text-primary hover:text-primary/80 underline underline-offset-2 transition-colors duration-200",
+            anchorClassName,
+          )}
+        >
+          {displayText}
+        </a>
+      );
+
+      if (isExternal && enableLinkPreviews && typeof href === "string") {
+        return (
+          <LinkPreview url={href} preload>
+            {anchor}
+          </LinkPreview>
+        );
+      }
+
+      return anchor;
+    };
 
     const baseComponents: ExtendedComponents = {
       // Code blocks with syntax highlighting, copy button, and artifact detection
@@ -617,6 +669,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
           </td>
         );
       },
+      a: renderLink,
     };
 
     if (!isLibreChat) {
@@ -660,40 +713,6 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
           <p {...props} className="mb-2 last:mb-0 leading-relaxed">
             {children}
           </p>
-        );
-      };
-
-      // Links - open in new tab for external, show clean domain names
-      baseComponents.a = ({ href, children, ...props }: any) => {
-        const isExternal = href?.startsWith("http");
-
-        // Extract clean display text if children is a raw URL
-        let displayText = children;
-        const childStr = String(children);
-
-        // If the link text is the same as the href (raw URL), show just the domain
-        if (childStr === href && href?.startsWith("http")) {
-          try {
-            const url = new URL(href);
-            displayText = url.hostname.replace("www.", "");
-          } catch {
-            // Keep original if URL parsing fails
-          }
-        }
-
-        return (
-          <a
-            {...props}
-            href={href}
-            target={isExternal ? "_blank" : undefined}
-            rel={isExternal ? "noopener noreferrer" : undefined}
-            className={cn(
-              "text-primary hover:text-primary/80 underline underline-offset-2",
-              "transition-colors duration-200",
-            )}
-          >
-            {displayText}
-          </a>
         );
       };
 
@@ -804,6 +823,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
     setArtifactsVisible,
     registerArtifacts,
     getNextArtifactIndex,
+    enableLinkPreviews,
   ]);
 
   // Empty state with optional cursor for streaming
