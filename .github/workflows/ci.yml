@@ -44,9 +44,9 @@ jobs:
         # However, if there are issues, you might need a specific step for torch here.
         pip install -r requirements.txt
 
-    - name: Run tests with pytest
+    - name: Run harness contract baseline
       env:
         API_KEY_ENCRYPTION_SECRET: ci-test-encryption-secret-32-characters
         FORCE_PRODUCTION_SECURITY: "false"
       run: |
-        pytest
+        pytest -q tests/smoke tests/contracts

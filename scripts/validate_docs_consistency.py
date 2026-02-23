@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC_FILES = [
     ROOT / "AGENTS.md",
     ROOT / "CLAUDE.md",
+    *sorted(ROOT.rglob("AGENTS.md")),
     *sorted((ROOT / "docs").rglob("*.md")),
 ]
 
@@ -51,6 +52,24 @@ def _is_path_token(token: str) -> bool:
     return token.startswith(PATH_PREFIXES) or token in KNOWN_PATH_TOKENS
 
 
+def _filtered_doc_files() -> list[Path]:
+    filtered: list[Path] = []
+    seen: set[Path] = set()
+
+    for path in DOC_FILES:
+        if path in seen:
+            continue
+        seen.add(path)
+
+        relative = path.relative_to(ROOT).as_posix()
+        if relative.startswith("docs/archive/"):
+            continue
+
+        filtered.append(path)
+
+    return filtered
+
+
 def _normalize_endpoint(path: str) -> str:
     path = path.rstrip("/") if path != "/api/v1/" else path
     return PARAM_RE.sub("{param}", path)
@@ -58,7 +77,7 @@ def _normalize_endpoint(path: str) -> str:
 
 def check_path_tokens() -> list[tuple[str, int, str]]:
     missing: list[tuple[str, int, str]] = []
-    for doc in DOC_FILES:
+    for doc in _filtered_doc_files():
         text = doc.read_text(encoding="utf-8", errors="ignore")
         for lineno, line in enumerate(text.splitlines(), start=1):
             for token in PATH_TOKEN_RE.findall(line):
@@ -104,7 +123,7 @@ def check_endpoint_mentions(routes: set[str]) -> list[tuple[str, int, str]]:
     normalized_routes = {_normalize_endpoint(route) for route in routes}
     unmatched: list[tuple[str, int, str]] = []
 
-    for doc in DOC_FILES:
+    for doc in _filtered_doc_files():
         text = doc.read_text(encoding="utf-8", errors="ignore")
         for lineno, line in enumerate(text.splitlines(), start=1):
             for endpoint in ENDPOINT_RE.findall(line):

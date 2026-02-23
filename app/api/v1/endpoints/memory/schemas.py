@@ -18,7 +18,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # =============================================================================
 # Enums
@@ -1258,6 +1258,49 @@ class ImportZendeskTaggedRequest(BaseModel):
     )
 
 
+class BackfillZendeskMemoriesV2Request(BaseModel):
+    """Admin request to queue V2 backfill for existing unedited Zendesk memories."""
+
+    limit: int = Field(
+        default=5000,
+        ge=1,
+        le=50000,
+        description="Maximum memories to scan during this backfill run.",
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="If true, only report candidate counts without writing updates.",
+    )
+    created_at_from: Optional[datetime] = Field(
+        default=None,
+        description=(
+            "Optional lower-bound (inclusive) filter for memory created_at timestamps. "
+            "Use UTC for deterministic date windows."
+        ),
+    )
+    created_at_to: Optional[datetime] = Field(
+        default=None,
+        description=(
+            "Optional upper-bound (exclusive) filter for memory created_at timestamps. "
+            "Use UTC for deterministic date windows."
+        ),
+    )
+    reprocess_mode: Literal["live_zendesk_refetch", "metadata_only"] = Field(
+        default="live_zendesk_refetch",
+        description=(
+            "Backfill strategy. live_zendesk_refetch performs ticket re-fetch + re-summary; "
+            "metadata_only reuses persisted memory metadata."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "BackfillZendeskMemoriesV2Request":
+        if self.created_at_from and self.created_at_to:
+            if self.created_at_from >= self.created_at_to:
+                raise ValueError("created_at_from must be earlier than created_at_to")
+        return self
+
+
 class ImportZendeskTaggedResponse(BaseModel):
     """Response for queued Zendesk import task."""
 
@@ -1281,6 +1324,19 @@ class ImportZendeskTaggedTaskResult(BaseModel):
     imported_memory_ids: List[str] = Field(default_factory=list)
     failed_ticket_ids: List[str] = Field(default_factory=list)
     failure_reasons: Dict[str, str] = Field(default_factory=dict)
+    candidate_memory_ids: List[str] = Field(default_factory=list)
+    updated_memory_ids: List[str] = Field(default_factory=list)
+    skipped_memory_ids: List[str] = Field(default_factory=list)
+    failed_memory_ids: List[str] = Field(default_factory=list)
+    would_update_memory_ids: List[str] = Field(default_factory=list)
+    eligible: Optional[int] = Field(default=None, ge=0)
+    dry_run: Optional[bool] = Field(default=None)
+    scan_limit: Optional[int] = Field(default=None, ge=0)
+    would_update: Optional[int] = Field(default=None, ge=0)
+    reprocess_mode: Optional[str] = Field(default=None)
+    created_at_from: Optional[str] = Field(default=None)
+    created_at_to: Optional[str] = Field(default=None)
+    run_id: Optional[str] = Field(default=None)
 
 
 class ImportZendeskTaggedTaskStatusResponse(BaseModel):

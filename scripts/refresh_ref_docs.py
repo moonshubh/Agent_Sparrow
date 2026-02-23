@@ -2,8 +2,8 @@
 """Generate deterministic documentation artifacts for Ref-first maintenance.
 
 Outputs:
-- docs/model-catalog.md
-- docs/dependency-watchlist.md
+- docs/generated/model-catalog.md
+- docs/generated/dependency-watchlist.md
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ MODELS_PATH = ROOT / "app" / "core" / "config" / "models.yaml"
 REQS_PATH = ROOT / "requirements.txt"
 PACKAGE_PATH = ROOT / "frontend" / "package.json"
 
-MODEL_CATALOG_PATH = ROOT / "docs" / "model-catalog.md"
-DEPENDENCY_WATCHLIST_PATH = ROOT / "docs" / "dependency-watchlist.md"
+MODEL_CATALOG_PATH = ROOT / "docs" / "generated" / "model-catalog.md"
+DEPENDENCY_WATCHLIST_PATH = ROOT / "docs" / "generated" / "dependency-watchlist.md"
 
 BACKEND_WATCHLIST = {
     "langgraph": "Core orchestration behavior and checkpoint APIs can shift across minors.",
@@ -224,10 +224,10 @@ def _render_dependency_watchlist(
             "",
             "## Related Docs",
             "",
-            "- `docs/ref-source-registry.md`",
-            "- `docs/ref-gaps.md`",
-            "- `docs/ref-index-plan.md`",
-            "- `docs/model-catalog.md`",
+            "- `docs/references/ref-source-registry.md`",
+            "- `docs/references/ref-gaps.md`",
+            "- `docs/references/ref-index-plan.md`",
+            "- `docs/generated/model-catalog.md`",
         ]
     )
 

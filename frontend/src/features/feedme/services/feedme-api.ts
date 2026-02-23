@@ -809,12 +809,15 @@ export class FeedMeApiClient {
 
   async getProcessingStatus(conversationId: number): Promise<ProcessingStatusResponse> {
     return requestJson<ProcessingStatusResponse>(`/conversations/${conversationId}/status`, {
+      auth: true,
       timeoutConfig: 'quick',
     });
   }
 
   async getConversationById(conversationId: number): Promise<UploadTranscriptResponse> {
-    return requestJson<UploadTranscriptResponse>(`/conversations/${conversationId}`);
+    return requestJson<UploadTranscriptResponse>(`/conversations/${conversationId}`, {
+      auth: true,
+    });
   }
 
   async getConversation(conversationId: number): Promise<UploadTranscriptResponse> {
@@ -860,9 +863,10 @@ export class FeedMeApiClient {
       params.append('folder_id', String(folderId));
     }
 
+    const headers = await buildHeaders({ auth: true, json: false });
     const response = await fetchWithRetry(
       `${this.baseUrl}/conversations?${params.toString()}`,
-      {},
+      { headers },
       TIMEOUT_CONFIGS.database.retries,
       TIMEOUT_CONFIGS.database.timeout,
       true,
@@ -1018,6 +1022,7 @@ export class FeedMeApiClient {
   async searchExamples(request: SearchExamplesRequest): Promise<SearchExamplesResponse> {
     return requestJson<SearchExamplesResponse>('/search/examples', {
       method: 'POST',
+      auth: true,
       body: request,
     });
   }

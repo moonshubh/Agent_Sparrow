@@ -1,212 +1,76 @@
 # CLAUDE.md
 
-Project guidance for Claude Code in this repository.
-Last updated: 2026-02-12
+Last updated: 2026-02-23
 
-## Mission
+Execution guide for agent work in this repository.
 
-Ship reliable product changes while keeping repository documentation current enough that the next agent can execute with minimal rediscovery.
+## Core Principle
 
-This file is intentionally concise. `AGENTS.md` is the map; `docs/` is the system of record.
+Humans steer intent; agents execute implementation. The repository is the single
+source of truth.
 
-## Start Here Every Run
+## Required Workflow
 
-Before writing code, bootstrap in this order:
+For each task:
 
-1. Read `AGENTS.md` for current structure, canonical doc paths, and task routing.
-2. Read relevant domain docs in `docs/`.
-3. For external APIs/libraries, verify with Ref MCP (`ref_search_documentation`, then `ref_read_url`).
-4. Validate assumptions in code with targeted `rg` + focused file reads.
-5. Implement changes.
+1. Bootstrap context from `AGENTS.md` and `docs/README.md`.
+2. Implement with focused changes.
+3. Update canonical docs in the same run.
+4. Run mandatory review loop (`scripts/harness/review_loop.py`).
+5. Ship only when loop passes.
 
-After implementation in the same run:
+## Mandatory Review Loop Contract
 
-1. Update affected docs in `docs/`.
-2. Update `AGENTS.md` if map/index/workflow changed.
-3. Update this file if runtime/ops guidance changed.
-4. Run docs maintenance checks:
-   - `python scripts/refresh_ref_docs.py` (if deps/models changed)
-   - `python scripts/validate_docs_consistency.py`
+The loop has three independent passes each cycle:
 
-Priority rule: if docs and code diverge, fix docs in the same run.
+1. Architecture reviewer (`docs/reviewers/architecture-reviewer.md`)
+2. Quality reviewer (`docs/reviewers/quality-reviewer.md`)
+3. Security reviewer (`docs/reviewers/security-reviewer.md`)
 
-## Ref-First External Docs Protocol
+Security pass is always required and must apply the installed
+`security-best-practices` skill.
 
-Ref MCP is the primary source for external framework/library API verification.
+Loop rules:
 
-Use Ref by default for fast-moving dependencies:
+- Max 3 cycles.
+- Stop only when all high/medium findings are resolved.
+- Write reports to `reports/reviews/<task-id>/`.
 
-- LangGraph / LangChain / provider integrations
-- AG-UI protocol
-- Next.js / React
-- Supabase / pgvector / vecs
-- TipTap / react-three-fiber / drei / Motion
+## Docs and Generated Artifacts
 
-If Ref coverage is missing or partial:
+Canonical docs live in `docs/`.
 
-1. Use official vendor docs directly.
-2. Validate against local code usage.
-3. Record the gap in `docs/ref-gaps.md` if persistent.
+Generated docs:
 
-Budget guardrails:
+- `docs/generated/model-catalog.md`
+- `docs/generated/dependency-watchlist.md`
 
-- Prefer event-driven lookups during active implementation.
-- Use biweekly verification cadence, not frequent broad sweeps.
-- Target docs-maintenance spend: ~150-250 credits/month.
-
-Reference docs:
-
-- `docs/ref-source-registry.md`
-- `docs/ref-gaps.md`
-- `docs/ref-index-plan.md`
-- `docs/dependency-watchlist.md`
-- `docs/model-catalog.md`
-
-## Project Snapshot
-
-Agent Sparrow is a multi-agent system with:
-
-- Backend: FastAPI + LangGraph + DeepAgents patterns
-- Frontend: Next.js 16 + React 19 + TypeScript
-- Data platform: Supabase (Postgres, Auth, Storage) + pgvector
-- Streaming: Native AG-UI protocol over SSE
-- Background jobs: Celery + Redis
-
-Canonical architecture docs:
-
-- `docs/backend-architecture.md`
-- `docs/backend-runtime-reference.md`
-- `docs/frontend-architecture.md`
-- `docs/frontend-reference.md`
-- `docs/database-schema.md`
-- `docs/database-schema-reference.md`
-- `docs/observability.md`
-
-Domain docs:
-
-- `docs/zendesk.md`
-- `docs/zendesk-operations.md`
-- `docs/memory-ui.md`
-- `docs/memory-ui-reference.md`
-- `docs/feedme-hardening-notes.md`
-
-## Repository Layout (High Signal)
-
-- `app/` backend services, agents, API endpoints, integrations
-- `frontend/src/` UI routes, feature modules, shared components, services
-- `app/core/config/models.yaml` single source of model configuration truth
-- `docs/` canonical documentation system
-- `scripts/` automation, startup, migrations, doc validators
-
-For full map and routing table, always use `AGENTS.md`.
-
-## Runtime Commands
-
-### Full System
-
-```bash
-./scripts/start_on_macos/start_system.sh
-./scripts/start_on_macos/stop_system.sh
-```
-
-### Backend
-
-```bash
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-ruff check .
-pytest -q
-```
-
-### Frontend
-
-```bash
-cd frontend/
-pnpm install
-pnpm dev
-pnpm lint
-pnpm typecheck
-```
-
-### Docs Maintenance
+Regenerate when dependencies or model registry changes:
 
 ```bash
 python scripts/refresh_ref_docs.py
+```
+
+Consistency check:
+
+```bash
 python scripts/validate_docs_consistency.py
 ```
 
-## Environment (Required)
+## Baseline Commands
 
-Minimum expected env groups:
+```bash
+# Backend
+ruff check .
+pytest -q
 
-- LLM/API: `GEMINI_API_KEY` (plus optional provider-specific keys)
-- Supabase: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`
-- Auth/security: `SUPABASE_JWT_SECRET`, production auth toggles
-- Search/tools as used: `TAVILY_API_KEY`, Firecrawl and related keys
-- Infra: Redis URLs for Celery/rate limiting
+# Frontend
+cd frontend && pnpm lint && pnpm typecheck
+```
 
-Use `docs/SECURITY.md` and `docs/DEVELOPMENT.md` for exact expectations and production guardrails.
+## Design and Planning Records
 
-## Architecture Contracts to Preserve
-
-1. AG-UI protocol is the primary streaming contract (`/api/v1/agui/stream`).
-2. `models.yaml` is the model registry source of truth; avoid hardcoding model behavior in docs or code comments.
-3. Supabase is the primary data/auth/storage platform.
-4. Feature-based frontend organization should remain intact (`frontend/src/features/`).
-5. Major backend logic should stay in service/agent layers rather than endpoint handlers.
-
-## Model Configuration Rules
-
-Model behavior, defaults, rate limits, and role assignments are defined in:
-
-- `app/core/config/models.yaml`
-
-When changing models:
-
-1. Update `models.yaml`.
-2. Regenerate derived docs: `python scripts/refresh_ref_docs.py`.
-3. Confirm docs consistency: `python scripts/validate_docs_consistency.py`.
-4. Update architecture docs if behavior/contracts changed.
-
-## Quality Gates
-
-For meaningful changes, run as relevant:
-
-- Backend: `ruff check .`, `pytest -q`
-- Frontend: `pnpm lint`, `pnpm typecheck`
-- Docs: `python scripts/refresh_ref_docs.py`, `python scripts/validate_docs_consistency.py`
-
-CI/pre-commit also enforce docs maintenance:
-
-- `.github/workflows/docs-consistency.yml`
-- `.github/workflows/docs-maintenance.yml`
-- `.pre-commit-config.yaml`
-
-## Documentation as Top Priority
-
-Agents should treat documentation updates as part of done criteria, not optional cleanup.
-
-Before any future run, agents should:
-
-1. Bootstrap from `AGENTS.md`.
-2. Read task-relevant docs from `docs/`.
-3. Verify external APIs with Ref.
-4. Then move to code exploration and implementation.
-
-This keeps autonomous coding quality high and reduces repeated onboarding work between sessions.
-
-## Quick Troubleshooting
-
-- API route/path docs drift: run `python scripts/validate_docs_consistency.py`.
-- Dependency/model drift in docs: run `python scripts/refresh_ref_docs.py`.
-- Missing external API clarity: use Ref first, then official vendor docs.
-- Deployment/runtime drift: check `docs/DEVELOPMENT.md` and `docs/SECURITY.md`.
-
-## Canonical References
-
-- Map/index: `AGENTS.md`
-- Principles: `docs/core-beliefs.md`
-- Standards: `docs/CODING_STANDARDS.md`, `docs/TESTING.md`, `docs/SECURITY.md`, `docs/RELIABILITY.md`
-- Architecture: `docs/backend-architecture.md`, `docs/backend-runtime-reference.md`, `docs/frontend-architecture.md`, `docs/frontend-reference.md`, `docs/database-schema.md`, `docs/database-schema-reference.md`, `docs/observability.md`
-- Domains: `docs/zendesk.md`, `docs/zendesk-operations.md`, `docs/memory-ui.md`, `docs/memory-ui-reference.md`, `docs/feedme-hardening-notes.md`
-- Operations: `docs/DEVELOPMENT.md`, `docs/CONTRIBUTING.md`, `docs/QUALITY_SCORE.md`, `docs/work-ledger/sessions.md`
+- Stable design decisions: `docs/design-docs/`
+- Active execution plans: `docs/exec-plans/active/`
+- Completed execution plans: `docs/exec-plans/completed/`
+- Technical debt ledger: `docs/exec-plans/tech-debt-tracker.md`

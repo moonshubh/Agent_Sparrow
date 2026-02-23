@@ -1,0 +1,22 @@
+{
+  "cycle": 1,
+  "blocking_findings": 0,
+  "findings": [],
+  "reviewers": [
+    {
+      "name": "architecture",
+      "summary": "Docs and API consistency checks passed",
+      "return_code": 0
+    },
+    {
+      "name": "quality",
+      "summary": "Contract and smoke checks passed",
+      "return_code": 0
+    },
+    {
+      "name": "security",
+      "summary": "Security doc gate checks passed",
+      "return_code": 0
+    }
+  ]
+}

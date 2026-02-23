@@ -3,7 +3,8 @@ import logging
 from types import ModuleType
 from typing import cast
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, Request
+import hmac
+from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -617,8 +618,21 @@ async def health_check():
 # The global exception handlers are working properly for all rate-limited endpoints
 
 
+def _require_internal_status_access(
+    x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
+) -> None:
+    """Require internal API token for security-status diagnostics."""
+    expected_token = (settings.internal_api_token or "").strip()
+    if not expected_token:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    provided_token = (x_internal_token or "").strip()
+    if not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
 @app.get("/security-status", tags=["General"])
-async def security_status():
+async def security_status(_authorized: None = Depends(_require_internal_status_access)):
     """
     Security configuration status endpoint for debugging and validation.
     Shows current security feature states.

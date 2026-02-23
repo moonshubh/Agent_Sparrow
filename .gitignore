@@ -734,6 +734,8 @@ frontend/tsconfig.tsbuildinfo
 !CLAUDE.md
 !AGENTS.md
 !docs/**/*.md
+!reports/reviews/**/*.md
+!reports/reviews/**/*.json
 !.sparrow/skills/**/SKILL.md
 !.sparrow/skills/**/reference/*.md
 *.xml

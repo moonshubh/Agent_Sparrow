@@ -26,6 +26,7 @@ from .approval import router as approval_router
 from .folders import router as folders_router
 from .analytics import router as analytics_router
 from .workflow import router as workflow_router
+from .search import router as search_router
 
 # Create main router with prefix
 router = APIRouter(
@@ -49,6 +50,7 @@ router.include_router(approval_router)
 router.include_router(folders_router)
 router.include_router(analytics_router)
 router.include_router(workflow_router)
+router.include_router(search_router)
 
 # Re-export commonly used items for backward compatibility
 from .schemas import (  # noqa: E402

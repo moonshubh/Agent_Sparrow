@@ -149,9 +149,12 @@ def _ensure_model(api_key: str) -> str:
 
 def _resolve_model_candidates(primary_model_name: str) -> list[str]:
     candidates = [primary_model_name]
+    if primary_model_name.strip().lower() == "minimax/minimax-m2.5":
+        candidates.append("minimax/MiniMax-M2.1")
     if primary_model_name != FALLBACK_FEEDME_MODEL_ID:
         candidates.append(FALLBACK_FEEDME_MODEL_ID)
-    return candidates
+    # Preserve order while removing accidental duplicates.
+    return list(dict.fromkeys(candidates))
 
 
 def _generate_content(model_name: str, parts: List[Any]) -> str:
@@ -188,8 +191,9 @@ def _generate_content(model_name: str, parts: List[Any]) -> str:
                     return candidate.content.parts[0].text or ""
         return ""
     else:
-        # Old SDK: use model.generate_content directly
-        resp = _genai_client.generate_content(parts)
+        # Old SDK: instantiate per candidate so fallback model selection is honored.
+        model = genai.GenerativeModel(model_name)  # type: ignore[attr-defined]
+        resp = model.generate_content(parts)
         text = getattr(resp, "text", None)
         if not text and getattr(resp, "candidates", None):
             text = (

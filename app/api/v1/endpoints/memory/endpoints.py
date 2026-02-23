@@ -69,6 +69,7 @@ from .schemas import (
     ImportMemorySourcesRequest,
     ImportMemorySourcesResponse,
     ImportZendeskTaggedRequest,
+    BackfillZendeskMemoriesV2Request,
     ImportZendeskTaggedResponse,
     ImportZendeskTaggedTaskResult,
     ImportZendeskTaggedTaskStatusResponse,
@@ -4446,6 +4447,67 @@ async def import_zendesk_tagged(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to queue Zendesk import",
+        ) from exc
+
+
+@router.post(
+    "/import/zendesk-tagged/backfill-v2",
+    response_model=ImportZendeskTaggedResponse,
+    summary="Queue Zendesk memory V2 backfill (Admin only)",
+    description=(
+        "Queue a background job to reprocess existing unedited Zendesk memories "
+        "to the structured_summary_v2 content/embedding format, with optional "
+        "date range targeting."
+    ),
+    responses={
+        200: {"description": "Backfill queued"},
+        401: {"description": "Authentication required"},
+        403: {"description": "Admin access required"},
+        500: {"description": "Internal server error"},
+    },
+)
+async def backfill_zendesk_memories_v2(
+    request: BackfillZendeskMemoriesV2Request,
+    _admin_user: Annotated[TokenPayload, Depends(require_admin)],
+) -> ImportZendeskTaggedResponse:
+    try:
+        supabase = get_supabase_client()
+        if not getattr(supabase.config, "service_key", None):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase service key required for Zendesk memory backfill.",
+            )
+        from app.feedme.tasks import backfill_zendesk_memories_v2 as backfill_task
+
+        task = backfill_task.delay(
+            limit=request.limit,
+            dry_run=request.dry_run,
+            created_at_from=(
+                request.created_at_from.isoformat() if request.created_at_from else None
+            ),
+            created_at_to=(
+                request.created_at_to.isoformat() if request.created_at_to else None
+            ),
+            reprocess_mode=request.reprocess_mode,
+        )
+        task_id = getattr(task, "id", None)
+        mode_label = "dry run" if request.dry_run else "write"
+        return ImportZendeskTaggedResponse(
+            queued=True,
+            task_id=task_id,
+            message=(
+                "Zendesk memory V2 backfill queued "
+                f"({request.reprocess_mode}, {mode_label})"
+            ),
+            status_url=(
+                f"/api/v1/memory/import/zendesk-tagged/{task_id}" if task_id else None
+            ),
+        )
+    except Exception as exc:
+        logger.exception("Failed to queue Zendesk memory V2 backfill")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to queue Zendesk memory V2 backfill",
         ) from exc
 
 

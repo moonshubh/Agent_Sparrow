@@ -9,6 +9,9 @@ on:
       - "scripts/refresh_ref_docs.py"
       - "scripts/validate_docs_consistency.py"
       - "AGENTS.md"
+      - "app/AGENTS.md"
+      - "frontend/AGENTS.md"
+      - "docs/AGENTS.md"
       - "CLAUDE.md"
       - "docs/**/*.md"
   push:
@@ -22,6 +25,9 @@ on:
       - "scripts/refresh_ref_docs.py"
       - "scripts/validate_docs_consistency.py"
       - "AGENTS.md"
+      - "app/AGENTS.md"
+      - "frontend/AGENTS.md"
+      - "docs/AGENTS.md"
       - "CLAUDE.md"
       - "docs/**/*.md"
   schedule:
@@ -61,4 +67,4 @@ jobs:
       - name: Ensure generated docs are committed
         if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
         run: |
-          git diff --exit-code docs/model-catalog.md docs/dependency-watchlist.md
+          git diff --exit-code docs/generated/model-catalog.md docs/generated/dependency-watchlist.md

@@ -1,62 +1,40 @@
-# Documentation System Guide
+# Agent Sparrow Documentation System
 
-This folder is the system of record for Agent Sparrow.
+Last updated: 2026-02-23
 
-## How Agents Should Read Docs
+This directory is the canonical knowledge base for humans and agents.
 
-1. Start at `AGENTS.md` for routing.
-2. Read architecture overview docs first.
-3. Read runtime/reference companion docs only for implementation details.
-4. Verify external APIs via Ref before coding.
+## Start Here
 
-## Split Strategy
+1. `../AGENTS.md`
+2. `../CLAUDE.md`
+3. This index
 
-Large docs are intentionally split into:
+## Canonical Top-Level Docs
 
-- **Architecture overview docs** (high-signal, faster context load)
-- **Runtime/reference docs** (dense endpoint/config/runbook details)
+- `DESIGN.md` - backend architecture, orchestration, runtime boundaries
+- `FRONTEND.md` - frontend architecture and implementation contracts
+- `PLANS.md` - planning and execution system
+- `PRODUCT_SENSE.md` - product intent and acceptance framing
+- `QUALITY_SCORE.md` - quality posture and current gaps
+- `RELIABILITY.md` - runtime resilience and fallback patterns
+- `SECURITY.md` - security controls and required practices
 
-Current split pairs:
+## Structured Knowledge Folders
 
-- `backend-architecture.md` + `backend-runtime-reference.md`
-- `frontend-architecture.md` + `frontend-reference.md`
-- `database-schema.md` + `database-schema-reference.md`
-- `zendesk.md` + `zendesk-operations.md`
-- `memory-ui.md` + `memory-ui-reference.md`
+- `design-docs/` stable design decisions and principles
+- `product-specs/` domain-level implementation specs
+- `exec-plans/` active/completed plans and debt ledger
+- `generated/` derived docs from source configs/manifests
+- `references/` external docs governance and source registry
+- `archive/` superseded docs with migration history
 
-## Core Architecture Docs
+## Mandatory Review Loop
 
-- `backend-architecture.md`
-- `frontend-architecture.md`
-- `database-schema.md`
-- `database-schema-reference.md`
-- `observability.md`
+All significant work must pass:
 
-## Runtime / Implementation References
+- Architecture reviewer
+- Quality reviewer
+- Security reviewer (`security-best-practices` skill)
 
-- `backend-runtime-reference.md`
-- `frontend-reference.md`
-- `zendesk-operations.md`
-- `memory-ui.md`
-- `memory-ui-reference.md`
-- `feedme-hardening-notes.md`
-
-## Governance and Drift Control
-
-- `ref-source-registry.md`
-- `ref-gaps.md`
-- `ref-index-plan.md`
-- `model-catalog.md` (generated)
-- `dependency-watchlist.md` (generated)
-
-Refresh generated docs:
-
-```bash
-python scripts/refresh_ref_docs.py
-```
-
-Validate docs consistency:
-
-```bash
-python scripts/validate_docs_consistency.py
-```
+Tooling entrypoint: `../scripts/harness/review_loop.py`

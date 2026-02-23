@@ -280,23 +280,13 @@ def format_zendesk_memory_content(
         lines.append("### Symptoms")
         lines.extend([f"- {item}" for item in symptoms])
 
-    timeline = summary.get("timeline_steps") or []
-    if timeline:
-        lines.append("")
-        lines.append("### Timeline")
-        for idx, item in enumerate(timeline, start=1):
-            lines.append(f"{idx}. {item}")
-
-    actions = summary.get("actions_taken") or []
-    if actions:
-        lines.append("")
-        lines.append("### Actions Taken")
-        lines.extend([f"- {item}" for item in actions])
-
     errors = summary.get("errors") or []
+    log_error_summary = str(summary.get("log_error_summary") or "").strip()
+    if log_error_summary and log_error_summary not in errors:
+        errors = [*errors, log_error_summary]
     if errors:
         lines.append("")
-        lines.append("### Errors Observed")
+        lines.append("### Errors")
         lines.extend([f"- {item}" for item in errors])
 
     resolution = summary.get("resolution")
@@ -308,47 +298,6 @@ def format_zendesk_memory_content(
     if root_cause:
         lines.append("")
         lines.append(f"### Root Cause\n{root_cause}")
-
-    contributing = summary.get("contributing_factors") or []
-    if contributing:
-        lines.append("")
-        lines.append("### Contributing Factors")
-        lines.extend([f"- {item}" for item in contributing])
-
-    prevention = summary.get("prevention") or []
-    if prevention:
-        lines.append("")
-        lines.append("### Prevention")
-        lines.extend([f"- {item}" for item in prevention])
-
-    follow_ups = summary.get("follow_ups") or []
-    if follow_ups:
-        lines.append("")
-        lines.append("### Follow-ups")
-        lines.extend([f"- {item}" for item in follow_ups])
-
-    key_settings = summary.get("key_settings") or []
-    if key_settings:
-        lines.append("")
-        lines.append("### Key Settings")
-        lines.extend([f"- {item}" for item in key_settings])
-
-    log_error_summary = summary.get("log_error_summary")
-    if log_error_summary or log_errors:
-        lines.append("")
-        lines.append("### Log Errors")
-        if log_error_summary:
-            lines.append(log_error_summary)
-        if log_errors:
-            lines.append("")
-            lines.append("```")
-            for entry in log_errors[:6]:
-                label = entry.get("first_line") or entry.get("signature") or "Error"
-                count = entry.get("count") or 1
-                file_name = entry.get("file_name")
-                prefix = f"{file_name}: " if file_name else ""
-                lines.append(f"{prefix}{label} (x{count})")
-            lines.append("```")
 
     if image_assets:
         lines.append("")
@@ -369,6 +318,125 @@ def format_zendesk_memory_content(
         lines.append(f"- URL: {zendesk_url}")
 
     return "\n".join(lines).strip()
+
+
+def build_zendesk_embedding_context(
+    summary: Dict[str, Any],
+    *,
+    subject: str,
+    ticket_id: str,
+    zendesk_url: str,
+    log_errors: List[Dict[str, Any]],
+    log_findings: List[Dict[str, Any]],
+    max_chars: int = 20000,
+) -> str:
+    """Build enriched embedding text while keeping UI-visible markdown concise.
+
+    This payload intentionally includes detail-rich sections (including those
+    hidden from visible markdown) to preserve retrieval quality for semantic
+    search.
+    """
+
+    def _as_items(values: Any, *, max_items: int = 12) -> List[str]:
+        if isinstance(values, list):
+            raw = values
+        elif isinstance(values, str):
+            raw = [values]
+        else:
+            raw = []
+        cleaned: List[str] = []
+        for value in raw:
+            text = str(value or "").strip()
+            if text:
+                cleaned.append(text[:500])
+            if len(cleaned) >= max_items:
+                break
+        return cleaned
+
+    lines: List[str] = []
+
+    problem = str(summary.get("problem") or "").strip() or subject or "Zendesk support ticket"
+    lines.append(f"Problem: {problem}")
+
+    impact = str(summary.get("impact") or "").strip()
+    if impact:
+        lines.append(f"Impact: {impact}")
+
+    environment = str(summary.get("environment") or "").strip()
+    if environment:
+        lines.append(f"Environment: {environment}")
+
+    core_sections = [
+        ("Symptoms", _as_items(summary.get("symptoms"))),
+        ("Actions Taken", _as_items(summary.get("actions_taken"))),
+        ("Timeline", _as_items(summary.get("timeline_steps"))),
+        ("Errors", _as_items(summary.get("errors"))),
+        ("Contributing Factors", _as_items(summary.get("contributing_factors"))),
+        ("Prevention", _as_items(summary.get("prevention"))),
+        ("Follow-ups", _as_items(summary.get("follow_ups"))),
+        ("Key Settings", _as_items(summary.get("key_settings"))),
+    ]
+    for title, items in core_sections:
+        if not items:
+            continue
+        lines.append("")
+        lines.append(f"{title}:")
+        for item in items:
+            lines.append(f"- {item}")
+
+    resolution = str(summary.get("resolution") or "").strip()
+    if resolution:
+        lines.append("")
+        lines.append("Resolution:")
+        lines.append(resolution)
+
+    root_cause = str(summary.get("root_cause") or "").strip()
+    if root_cause:
+        lines.append("")
+        lines.append("Root Cause:")
+        lines.append(root_cause)
+
+    log_error_summary = str(summary.get("log_error_summary") or "").strip()
+    if log_error_summary:
+        lines.append("")
+        lines.append("Log Error Summary:")
+        lines.append(log_error_summary)
+
+    if log_errors:
+        lines.append("")
+        lines.append("Log Error Signatures:")
+        for entry in log_errors[:8]:
+            label = str(entry.get("first_line") or entry.get("signature") or "").strip()
+            if not label:
+                continue
+            count = int(entry.get("count") or 1)
+            file_name = str(entry.get("file_name") or "").strip()
+            prefix = f"{file_name}: " if file_name else ""
+            lines.append(f"- {prefix}{label} (x{count})")
+
+    if log_findings:
+        lines.append("")
+        lines.append("Log Findings:")
+        for finding in log_findings[:8]:
+            file_name = str(finding.get("file_name") or "").strip()
+            summary_text = str(finding.get("summary") or "").strip()
+            if not summary_text:
+                continue
+            prefix = f"{file_name}: " if file_name else ""
+            lines.append(f"- {prefix}{summary_text}")
+
+    if ticket_id or zendesk_url:
+        lines.append("")
+        lines.append("Zendesk:")
+        if ticket_id:
+            lines.append(f"- Ticket: {ticket_id}")
+        if zendesk_url:
+            lines.append(f"- URL: {zendesk_url}")
+
+    text = "\n".join(lines).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
 
 
 def redact_pii_preserving_assets(text: str) -> str:
