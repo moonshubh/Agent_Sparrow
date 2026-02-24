@@ -7,7 +7,7 @@
 
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
   createSparrowAgent,
   type SparrowAgent,
@@ -22,12 +22,14 @@ import { modelsAPI, Provider } from "@/services/api/endpoints/models";
 import {
   AgentProvider,
   type SerializedArtifact,
+  type WebSearchMode,
 } from "@/features/librechat/AgentContext";
 import {
   ArtifactProvider,
   getGlobalArtifactStore,
 } from "@/features/librechat/artifacts";
 import { LibreChatView } from "./components/LibreChatView";
+import { toast } from "sonner";
 
 // Convert backend message format to frontend Message format
 function convertToMessage(record: ChatMessageRecord): Message {
@@ -178,7 +180,18 @@ interface Conversation {
   id: string;
   title: string;
   timestamp?: Date;
+  metadata?: Record<string, unknown>;
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const getWebSearchModeFromMetadata = (
+  metadata?: Record<string, unknown>,
+): WebSearchMode => {
+  const raw = metadata?.web_search_mode;
+  return raw === "on" ? "on" : "off";
+};
 
 export default function LibreChatClient() {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -195,10 +208,16 @@ export default function LibreChatClient() {
 
   // Conversation history
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const conversationsRef = useRef<Conversation[]>([]);
+  const latestWebModeIntentRef = useRef<Record<string, WebSearchMode>>({});
   const [currentConversationId, setCurrentConversationId] = useState<
     string | undefined
   >();
   const initializedRef = useRef(false);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   const getActiveModelSelection = useCallback((): {
     provider: Provider;
@@ -261,6 +280,7 @@ export default function LibreChatClient() {
           id: String(s.id),
           title: s.title || "Untitled Chat",
           timestamp: s.created_at ? new Date(s.created_at) : undefined,
+          metadata: isRecord(s.metadata) ? s.metadata : undefined,
         }));
 
         // Enforce conversation limit on load: delete oldest if over max
@@ -336,7 +356,9 @@ export default function LibreChatClient() {
         setCurrentConversationId(mostRecent.id);
       } else {
         // No existing sessions, create a new one in backend
-        const backendSession = await sessionsAPI.create("primary", "New Chat");
+        const backendSession = await sessionsAPI.create("primary", "New Chat", {
+          web_search_mode: "off",
+        });
         const newSessionId = String(backendSession.id);
         const newTraceId = `trace-${newSessionId}`;
 
@@ -357,6 +379,7 @@ export default function LibreChatClient() {
             id: newSessionId,
             title: "New Chat",
             timestamp: new Date(),
+            metadata: { web_search_mode: "off" },
           },
         ]);
       }
@@ -419,7 +442,9 @@ export default function LibreChatClient() {
       }
 
       // Create session in backend and use its ID
-      const backendSession = await sessionsAPI.create("primary", "New Chat");
+      const backendSession = await sessionsAPI.create("primary", "New Chat", {
+        web_search_mode: "off",
+      });
       const newSessionId = String(backendSession.id);
       const newTraceId = `trace-${newSessionId}`;
 
@@ -450,6 +475,7 @@ export default function LibreChatClient() {
           id: newSessionId,
           title: "New Chat",
           timestamp: new Date(),
+          metadata: { web_search_mode: "off" },
         },
         ...prev,
       ]);
@@ -532,31 +558,30 @@ export default function LibreChatClient() {
   // Handle conversation delete
   const handleDeleteConversation = useCallback(
     async (conversationId: string) => {
-      // Capture remaining conversations via functional update to avoid stale closure
-      let remainingConversations: Conversation[] = [];
-
-      // Remove from local state and capture the remaining list
-      setConversations((prev) => {
-        remainingConversations = prev.filter(
-          (conv) => conv.id !== conversationId,
-        );
-        return remainingConversations;
-      });
-
-      // Delete from backend
       try {
         await sessionsAPI.remove(conversationId);
       } catch (err) {
         console.error("Failed to delete conversation from backend:", err);
+        toast.error("Could not delete conversation", {
+          description: "Please try again.",
+        });
+        return;
       }
 
-      // If deleting current conversation, switch to another or create new
+      const latestConversations = conversationsRef.current;
+      const remainingConversations = latestConversations.filter(
+        (conversation) => conversation.id !== conversationId,
+      );
+      if (remainingConversations.length === latestConversations.length) return;
+
+      setConversations((prev) =>
+        prev.filter((conversation) => conversation.id !== conversationId),
+      );
+
       if (conversationId === currentConversationId) {
         if (remainingConversations.length > 0) {
-          // Switch to the first remaining conversation
           handleSelectConversation(remainingConversations[0].id);
         } else {
-          // Create a new chat if no conversations left
           handleNewChat();
         }
       }
@@ -581,6 +606,72 @@ export default function LibreChatClient() {
         await sessionsAPI.rename(currentConversationId, title);
       } catch (err) {
         console.debug("Failed to persist auto-name to backend:", err);
+      }
+    },
+    [currentConversationId],
+  );
+
+  const activeWebSearchMode = useMemo<WebSearchMode>(() => {
+    if (!currentConversationId) return "off";
+    const conversation = conversations.find(
+      (item) => item.id === currentConversationId,
+    );
+    return getWebSearchModeFromMetadata(conversation?.metadata);
+  }, [conversations, currentConversationId]);
+
+  const handleWebSearchModeChange = useCallback(
+    async (mode: WebSearchMode, targetSessionId?: string) => {
+      const conversationId = targetSessionId ?? currentConversationId;
+      if (!conversationId) return;
+
+      latestWebModeIntentRef.current[conversationId] = mode;
+
+      const existingConversation = conversationsRef.current.find(
+        (item) => item.id === conversationId,
+      );
+      const nextMetadata = {
+        ...(existingConversation?.metadata ?? {}),
+        web_search_mode: mode,
+      };
+      const previousMetadata = { ...(existingConversation?.metadata ?? {}) };
+
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.id === conversationId
+            ? { ...conversation, metadata: nextMetadata }
+            : conversation,
+        ),
+      );
+
+      try {
+        await sessionsAPI.update(conversationId, { metadata: nextMetadata });
+        const latestIntent = latestWebModeIntentRef.current[conversationId];
+        if (latestIntent && latestIntent !== mode) {
+          const latestConversation = conversationsRef.current.find(
+            (item) => item.id === conversationId,
+          );
+          const latestMetadata = {
+            ...(latestConversation?.metadata ?? {}),
+            web_search_mode: latestIntent,
+          };
+          await sessionsAPI.update(conversationId, { metadata: latestMetadata });
+        }
+      } catch (err) {
+        console.error("Failed to persist web search mode:", err);
+        const latestIntent = latestWebModeIntentRef.current[conversationId];
+        if (latestIntent !== mode) {
+          return;
+        }
+        setConversations((prev) =>
+          prev.map((conversation) =>
+            conversation.id === conversationId
+              ? { ...conversation, metadata: previousMetadata }
+              : conversation,
+          ),
+        );
+        toast.error("Could not save Web mode", {
+          description: "Your setting was restored. Please try again.",
+        });
       }
     },
     [currentConversationId],
@@ -643,7 +734,12 @@ export default function LibreChatClient() {
 
   return (
     <ArtifactProvider>
-      <AgentProvider agent={agent} sessionId={sessionId || undefined}>
+      <AgentProvider
+        agent={agent}
+        sessionId={sessionId || undefined}
+        initialWebSearchMode={activeWebSearchMode}
+        onWebSearchModeChange={handleWebSearchModeChange}
+      >
         <LibreChatView
           sessionId={sessionId || undefined}
           onNewChat={handleNewChat}

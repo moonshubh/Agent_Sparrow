@@ -358,6 +358,48 @@ class SubagentThinkingDeltaEvent:
         return result
 
 
+@dataclass
+class ObjectiveHintUpdateEvent:
+    """Event payload for objective_hint_update custom event.
+
+    Provides additive lane/objective lifecycle hints for the frontend thinking panel.
+    """
+
+    run_id: str
+    lane_id: str
+    objective_id: str
+    phase: Literal["plan", "gather", "execute", "synthesize"]
+    title: str
+    status: Literal["pending", "running", "done", "error", "unknown"]
+    summary: Optional[str] = None
+    tool_call_id: Optional[str] = None
+    subagent_type: Optional[str] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to JSON-safe dictionary with camelCase keys."""
+        result: Dict[str, Any] = {
+            "runId": self.run_id,
+            "laneId": self.lane_id,
+            "objectiveId": self.objective_id,
+            "phase": self.phase,
+            "title": self.title,
+            "status": self.status,
+        }
+        if self.summary is not None:
+            result["summary"] = self.summary
+        if self.tool_call_id is not None:
+            result["toolCallId"] = self.tool_call_id
+        if self.subagent_type is not None:
+            result["subagentType"] = self.subagent_type
+        if self.started_at is not None:
+            result["startedAt"] = self.started_at
+        if self.ended_at is not None:
+            result["endedAt"] = self.ended_at
+        return result
+
+
 # Utility functions
 
 

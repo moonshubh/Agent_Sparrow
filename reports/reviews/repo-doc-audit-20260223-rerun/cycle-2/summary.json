@@ -1,0 +1,44 @@
+{
+  "cycle": 2,
+  "blocking_findings": 3,
+  "findings": [
+    {
+      "id": "SEC-SECRETS-001",
+      "severity": "high",
+      "title": "Potential committed secret file detected: ./.env.local",
+      "path": "./.env.local",
+      "status": "open"
+    },
+    {
+      "id": "SEC-SECRETS-001",
+      "severity": "high",
+      "title": "Potential committed secret file detected: ./.env",
+      "path": "./.env",
+      "status": "open"
+    },
+    {
+      "id": "SEC-SECRETS-001",
+      "severity": "high",
+      "title": "Potential committed secret file detected: ./frontend/.env.local",
+      "path": "./frontend/.env.local",
+      "status": "open"
+    }
+  ],
+  "reviewers": [
+    {
+      "name": "architecture",
+      "summary": "Docs and API consistency checks passed",
+      "return_code": 0
+    },
+    {
+      "name": "quality",
+      "summary": "Contract and smoke checks passed",
+      "return_code": 0
+    },
+    {
+      "name": "security",
+      "summary": "Security checks found issues",
+      "return_code": 0
+    }
+  ]
+}

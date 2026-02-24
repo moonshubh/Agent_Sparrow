@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core.settings import settings
-from app.core.security import TokenPayload
+from app.core.security import TokenPayload, get_current_user
 from app.feedme.security import limiter
 from app.feedme.schemas import (
     FeedMeConversation,
@@ -49,8 +49,10 @@ async def list_conversations(
     ),
     uploaded_by: Optional[str] = Query(None, description="Filter by uploader"),
     folder_id: Optional[int] = Query(None, description="Filter by folder ID"),
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Retrieve a paginated list of conversations with optional filtering."""
+    _ = current_user
     if not settings.feedme_enabled:
         raise HTTPException(
             status_code=503, detail="FeedMe service is currently disabled"
@@ -92,8 +94,12 @@ async def list_conversations(
 
 
 @router.get("/conversations/{conversation_id}", response_model=FeedMeConversation)
-async def get_conversation(conversation_id: int):
+async def get_conversation(
+    conversation_id: int,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Retrieve a conversation by its unique ID."""
+    _ = current_user
     if not settings.feedme_enabled:
         raise HTTPException(
             status_code=503, detail="FeedMe service is currently disabled"
@@ -186,8 +192,12 @@ async def delete_conversation(
     "/conversations/{conversation_id}/status",
     response_model=ConversationProcessingStatus,
 )
-async def get_processing_status(conversation_id: int):
+async def get_processing_status(
+    conversation_id: int,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Retrieve the processing status and progress for a conversation."""
+    _ = current_user
     if not settings.feedme_enabled:
         raise HTTPException(
             status_code=503, detail="FeedMe service is currently disabled"

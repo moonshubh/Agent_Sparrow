@@ -19,9 +19,10 @@ import os
 import re
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from pypdf import PdfReader
 
@@ -43,6 +44,7 @@ from app.feedme.zendesk_import_utils import (
     normalize_summary,
     fallback_summary_from_text,
     format_zendesk_memory_content,
+    build_zendesk_embedding_context,
 )
 from app.memory.edit_state import (
     CLEANUP_PROTECTED_MIN_CONFIDENCE,
@@ -137,9 +139,136 @@ def _embed_content(api_key: str, model_name: str, content: str) -> list:
 
 def _resolve_model_candidates(primary_model_name: str) -> list[str]:
     candidates = [primary_model_name]
+    if primary_model_name.strip().lower() == "minimax/minimax-m2.5":
+        candidates.append("minimax/MiniMax-M2.1")
     if primary_model_name != FEEDME_FALLBACK_MODEL_ID:
         candidates.append(FEEDME_FALLBACK_MODEL_ID)
-    return candidates
+    # Preserve order while removing accidental duplicates.
+    return list(dict.fromkeys(candidates))
+
+
+_EDITOR_METADATA_KEYS: tuple[str, ...] = (
+    "edited_by_email",
+    "updated_by_email",
+    "editor_email",
+    "edited_by",
+    "updated_by",
+    "edited_by_name",
+    "updated_by_name",
+)
+
+_BACKFILL_MODE_LIVE = "live_zendesk_refetch"
+_BACKFILL_MODE_METADATA_ONLY = "metadata_only"
+_BACKFILL_MODES = {_BACKFILL_MODE_LIVE, _BACKFILL_MODE_METADATA_ONLY}
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            return datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _metadata_text(metadata: Any, key: str) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    value = metadata.get(key)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
+def _memory_has_editor_identity(memory_row: dict[str, Any]) -> bool:
+    reviewed_by = memory_row.get("reviewed_by")
+    if isinstance(reviewed_by, str) and reviewed_by.strip():
+        return True
+
+    metadata = memory_row.get("metadata")
+    return any(_metadata_text(metadata, key) for key in _EDITOR_METADATA_KEYS)
+
+
+def _is_memory_edited(memory_row: dict[str, Any]) -> bool:
+    created_at = _parse_iso_datetime(memory_row.get("created_at"))
+    updated_at = _parse_iso_datetime(memory_row.get("updated_at"))
+    if created_at is None or updated_at is None:
+        return False
+    if updated_at <= created_at:
+        return False
+    return _memory_has_editor_identity(memory_row)
+
+
+def _is_backfill_candidate(
+    memory_row: dict[str, Any],
+    *,
+    include_v2_rows: bool = True,
+) -> bool:
+    metadata = memory_row.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    if str(metadata.get("source") or "").strip().lower() != "zendesk_mb_playbook":
+        return False
+    if (
+        not include_v2_rows
+        and str(metadata.get("import_version") or "").strip() == "structured_summary_v2"
+    ):
+        return False
+
+    return not _is_memory_edited(memory_row)
+
+
+def _coerce_utc_datetime(value: Any) -> datetime | None:
+    parsed = _parse_iso_datetime(value)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _as_utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat()
+
+
+def _flatten_log_errors(raw_log_errors: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_log_errors, list):
+        return []
+
+    flattened: list[dict[str, Any]] = []
+    for item in raw_log_errors:
+        if not isinstance(item, dict):
+            continue
+        nested_errors = item.get("errors")
+        file_name = item.get("file_name")
+        if isinstance(nested_errors, list):
+            for error in nested_errors:
+                if not isinstance(error, dict):
+                    continue
+                record = dict(error)
+                if file_name and not record.get("file_name"):
+                    record["file_name"] = file_name
+                flattened.append(record)
+            continue
+
+        record = dict(item)
+        if file_name and not record.get("file_name"):
+            record["file_name"] = file_name
+        flattened.append(record)
+
+    flattened.sort(key=lambda entry: entry.get("count", 0), reverse=True)
+    return flattened
 
 
 # Feature flags / behavior toggles
@@ -1654,6 +1783,7 @@ def save_examples_to_temp_db(
     if not examples:
         return 0
 
+    client = None
     try:
         client = get_supabase_client()
 
@@ -1693,7 +1823,7 @@ def save_examples_to_temp_db(
         return len(supabase_examples)
     except Exception as e:
         try:
-            if client._record_missing_table("feedme_examples", e):
+            if client is not None and client._record_missing_table("feedme_examples", e):
                 logger.warning(
                     "feedme_examples table missing; skipping example persistence"
                 )
@@ -1732,6 +1862,7 @@ ZENDESK_IMPORT_IMAGE_BUCKET = (
 )
 ZENDESK_LOG_READ_CHARS = int(os.getenv("ZENDESK_LOG_READ_CHARS", "120000"))
 ZENDESK_PUBLIC_EXCERPT_CHARS = int(os.getenv("ZENDESK_PUBLIC_EXCERPT_CHARS", "20000"))
+ZENDESK_LOG_SUMMARY_CHARS = int(os.getenv("ZENDESK_LOG_SUMMARY_CHARS", "12000"))
 
 
 def _normalize_zendesk_import_date(
@@ -1838,12 +1969,7 @@ async def _summarize_ticket_with_llm(
     subject: str,
     public_conversation: str,
     log_summary: str,
-) -> str:
-    from app.agents.unified.provider_factory import (
-        build_chat_model,
-        build_summarization_model,
-    )
-    from app.agents.unified.minimax_tools import is_minimax_available
+) -> "ZendeskImportSummaryResult":
 
     def _extract_response_text(response: Any) -> str:
         text = getattr(response, "content", "") if response is not None else ""
@@ -1926,23 +2052,66 @@ async def _summarize_ticket_with_llm(
         "Log findings:\n{log_summary}\n"
     )
 
-    try:
-        if is_minimax_available():
-            model = build_chat_model(
-                "minimax", "minimax/MiniMax-M2.1", role="summarization"
-            )
-        else:
-            model = build_summarization_model()
+    model_candidates = _build_zendesk_summary_models()
+    model_attempts: list[str] = []
+    model_used: str | None = None
+    fallback_used = False
+    active_model_index = 0
 
+    def _record_attempt(label: str) -> None:
+        if label not in model_attempts:
+            model_attempts.append(label)
+
+    async def _invoke_with_fallback(prompt: str, *, stage: str) -> str:
+        nonlocal active_model_index, model_used, fallback_used
+        last_error: Exception | None = None
+
+        for idx in range(active_model_index, len(model_candidates)):
+            label, model = model_candidates[idx]
+            _record_attempt(label)
+            try:
+                response = await model.ainvoke(prompt)
+                text = _extract_response_text(response)
+                active_model_index = idx
+                model_used = label
+                if idx > 0:
+                    fallback_used = True
+                logger.info(
+                    "zendesk_import_summary_model_selected ticket_id=%s stage=%s model=%s fallback=%s",
+                    ticket_id,
+                    stage,
+                    label,
+                    "true" if fallback_used else "false",
+                )
+                return text
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                logger.warning(
+                    "zendesk_import_summary_model_failed ticket_id=%s stage=%s model=%s error=%s",
+                    ticket_id,
+                    stage,
+                    label,
+                    str(exc)[:180],
+                )
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("No summary models available")
+
+    try:
         chunks = _chunk_text(public_conversation)
         if len(chunks) <= 1:
-            response = await model.ainvoke(single_prompt)
-            return _extract_response_text(response)
+            response_text = await _invoke_with_fallback(single_prompt, stage="single")
+            return ZendeskImportSummaryResult(
+                text=response_text,
+                model_used=model_used,
+                model_attempts=model_attempts,
+                fallback_used=fallback_used,
+            )
 
         map_summaries: list[str] = []
-        for chunk in chunks:
-            response = await model.ainvoke(map_prompt + chunk)
-            text = _extract_response_text(response)
+        for idx, chunk in enumerate(chunks):
+            text = await _invoke_with_fallback(map_prompt + chunk, stage=f"map-{idx + 1}")
             if not text:
                 continue
             lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -1960,15 +2129,67 @@ async def _summarize_ticket_with_llm(
             bullets=bullets or "No bullet summaries available.",
             log_summary=log_summary,
         ).strip()
-        response = await model.ainvoke(reduce_prompt)
-        return _extract_response_text(response)
+        response_text = await _invoke_with_fallback(reduce_prompt, stage="reduce")
+        return ZendeskImportSummaryResult(
+            text=response_text,
+            model_used=model_used,
+            model_attempts=model_attempts,
+            fallback_used=fallback_used,
+        )
     except Exception as exc:
         logger.debug(
             "zendesk_import_summary_failed ticket_id=%s error=%s",
             ticket_id,
             str(exc)[:180],
         )
-        return ""
+        return ZendeskImportSummaryResult(
+            text="",
+            model_used=model_used,
+            model_attempts=model_attempts,
+            fallback_used=fallback_used,
+        )
+
+
+@dataclass
+class ZendeskImportSummaryResult:
+    text: str
+    model_used: str | None
+    model_attempts: list[str]
+    fallback_used: bool
+
+
+def _build_zendesk_summary_models() -> list[tuple[str, Any]]:
+    """Build ordered summary models for Zendesk imports (with fallbacks)."""
+    from app.agents.unified.provider_factory import (
+        build_chat_model,
+        build_summarization_model,
+    )
+    from app.agents.unified.minimax_tools import is_minimax_available
+
+    candidates: list[tuple[str, Any]] = []
+    if is_minimax_available():
+        for model_id in ("minimax/MiniMax-M2.5", "minimax/MiniMax-M2.1"):
+            try:
+                model = build_chat_model("minimax", model_id, role="summarization")
+                candidates.append((model_id, model))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "zendesk_import_summary_model_init_failed model=%s error=%s",
+                    model_id,
+                    str(exc)[:180],
+                )
+
+    summarizer_model_id = get_models_config().internal["summarizer"].model_id
+    try:
+        candidates.append((summarizer_model_id, build_summarization_model()))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "zendesk_import_summary_model_init_failed model=%s error=%s",
+            summarizer_model_id,
+            str(exc)[:180],
+        )
+
+    return candidates
 
 
 async def _analyze_log_file(
@@ -2359,18 +2580,28 @@ def import_zendesk_tagged(
                 line = f"- {item.get('file_name')}: {item.get('summary')}"
                 log_summary_lines.append(line)
             log_summary = redact_pii("\n".join(log_summary_lines).strip())
+            if log_summary and len(log_summary) > ZENDESK_LOG_SUMMARY_CHARS:
+                logger.info(
+                    "zendesk_import_log_summary_truncated ticket_id=%s original_chars=%d max_chars=%d",
+                    ticket_id,
+                    len(log_summary),
+                    ZENDESK_LOG_SUMMARY_CHARS,
+                )
+                log_summary = (
+                    log_summary[: ZENDESK_LOG_SUMMARY_CHARS - 1].rstrip() + "…"
+                )
 
-            summary_text = await _summarize_ticket_with_llm(
+            summary_result = await _summarize_ticket_with_llm(
                 ticket_id=ticket_id,
                 subject=subject,
                 public_conversation=public_conversation,
                 log_summary=log_summary,
             )
-            summary_payload = parse_summary_json(summary_text)
+            summary_payload = parse_summary_json(summary_result.text)
             if summary_payload:
                 summary = normalize_summary(summary_payload)
             else:
-                summary = fallback_summary_from_text(summary_text, subject=subject)
+                summary = fallback_summary_from_text(summary_result.text, subject=subject)
             if log_summary and not summary.get("log_error_summary"):
                 summary["log_error_summary"] = log_summary
             if not summary.get("problem"):
@@ -2428,6 +2659,15 @@ def import_zendesk_tagged(
             if not content:
                 skipped += 1
                 continue
+            embedding_context_text = build_zendesk_embedding_context(
+                summary,
+                subject=subject,
+                ticket_id=ticket_id,
+                zendesk_url=zendesk_url,
+                log_errors=flat_errors,
+                log_findings=log_findings,
+            )
+            embedding_context_text = redact_pii(embedding_context_text) or content
 
             public_excerpt = public_conversation
             if public_excerpt and len(public_excerpt) > ZENDESK_PUBLIC_EXCERPT_CHARS:
@@ -2494,12 +2734,20 @@ def import_zendesk_tagged(
                             else:
                                 redacted_sections.append(section)
                         clean["relevant_log_sections"] = redacted_sections
+                    concerns = clean.get("priority_concerns")
+                    if isinstance(concerns, list):
+                        clean["priority_concerns"] = [
+                            redact_pii(str(concern))
+                            if isinstance(concern, str)
+                            else concern
+                            for concern in concerns
+                        ]
                     redacted_entries.append(clean)
                 return redacted_entries
 
             metadata = {
                 "source": "zendesk_mb_playbook",
-                "import_version": "structured_summary_v1",
+                "import_version": "structured_summary_v2",
                 "zendesk_ticket_id": ticket_id,
                 "zendesk_url": zendesk_url,
                 "tags": tags_list,
@@ -2511,10 +2759,16 @@ def import_zendesk_tagged(
                 "last_public_comment_at": last_public_comment_at,
                 "imported_at": datetime.now(timezone.utc).isoformat(),
             }
+            if summary_result.model_used:
+                metadata["summary_model_used"] = summary_result.model_used
+            if summary_result.model_attempts:
+                metadata["summary_model_attempts"] = summary_result.model_attempts
+            if summary_result.fallback_used:
+                metadata["summary_fallback_used"] = True
             metadata = ensure_memory_title(metadata, content=content)
 
             try:
-                embedding = await service.generate_embedding(content)
+                embedding = await service.generate_embedding(embedding_context_text)
             except Exception as exc:
                 error_text = str(exc)
                 error_text_lower = error_text.lower()
@@ -2542,7 +2796,7 @@ def import_zendesk_tagged(
                     embedding = await loop.run_in_executor(
                         None,
                         model.embed_query,
-                        content,
+                        embedding_context_text,
                     )
                     assert_dim(embedding, context="zendesk_import_fallback")
                 except Exception as fallback_exc:  # noqa: BLE001
@@ -2690,6 +2944,697 @@ def import_zendesk_tagged(
             "filters": effective_filters,
             "warnings": warnings,
         }
+
+    return asyncio.run(_run())
+
+
+@celery_app.task(
+    bind=True,
+    base=CallbackTask,
+    name="app.feedme.tasks.backfill_zendesk_memories_v2",
+)
+def backfill_zendesk_memories_v2(
+    self,
+    limit: int = 5000,
+    dry_run: bool = False,
+    created_at_from: str | datetime | None = None,
+    created_at_to: str | datetime | None = None,
+    reprocess_mode: Literal[
+        "live_zendesk_refetch", "metadata_only"
+    ] = _BACKFILL_MODE_LIVE,
+) -> dict[str, Any]:
+    """Backfill existing unedited Zendesk memories to structured_summary_v2."""
+
+    async def _run() -> dict[str, Any]:
+        from app.integrations.zendesk.attachments import (
+            cleanup_attachments,
+            fetch_ticket_attachments,
+        )
+        from app.integrations.zendesk.client import ZendeskClient, ZendeskRateLimitError
+        from app.memory.memory_ui_service import get_memory_ui_service
+        from app.memory.title import ensure_memory_title
+        from app.security.pii_redactor import redact_pii
+
+        requested_mode = str(reprocess_mode or _BACKFILL_MODE_LIVE).strip().lower()
+        selected_mode = (
+            requested_mode if requested_mode in _BACKFILL_MODES else _BACKFILL_MODE_LIVE
+        )
+        max_scan = max(1, min(int(limit), 50000))
+        page_size = 200
+        offset = 0
+
+        requested_from = _coerce_utc_datetime(created_at_from)
+        requested_to = _coerce_utc_datetime(created_at_to)
+        from_is_provided = created_at_from is not None
+        to_is_provided = created_at_to is not None
+
+        base_result: dict[str, Any] = {
+            "imported": 0,
+            "skipped": 0,
+            "failed": 0,
+            "tag": "backfill_v2",
+            "processed_tickets": 0,
+            "imported_memory_ids": [],
+            "failed_ticket_ids": [],
+            "failure_reasons": {},
+            "candidate_memory_ids": [],
+            "updated_memory_ids": [],
+            "skipped_memory_ids": [],
+            "failed_memory_ids": [],
+            "would_update_memory_ids": [],
+            "eligible": 0,
+            "dry_run": bool(dry_run),
+            "scan_limit": max_scan,
+            "reprocess_mode": selected_mode,
+            "created_at_from": _as_utc_iso(requested_from),
+            "created_at_to": _as_utc_iso(requested_to),
+            "run_id": str(getattr(getattr(self, "request", None), "id", "") or ""),
+        }
+
+        if from_is_provided and requested_from is None:
+            base_result["error"] = "Invalid created_at_from timestamp"
+            return base_result
+        if to_is_provided and requested_to is None:
+            base_result["error"] = "Invalid created_at_to timestamp"
+            return base_result
+        if requested_from is not None and requested_to is not None:
+            if requested_from >= requested_to:
+                base_result["error"] = (
+                    "created_at_from must be earlier than created_at_to"
+                )
+                return base_result
+
+        supabase = get_supabase_client()
+        if not getattr(supabase.config, "service_key", None):
+            base_result["error"] = "SUPABASE_SERVICE_KEY is required for memory backfill"
+            return base_result
+
+        service = get_memory_ui_service()
+        settings = current_settings()
+        zendesk_client: ZendeskClient | None = None
+        if selected_mode == _BACKFILL_MODE_LIVE:
+            if not (
+                settings.zendesk_subdomain
+                and settings.zendesk_email
+                and settings.zendesk_api_token
+            ):
+                base_result["error"] = "Zendesk credentials missing"
+                return base_result
+            zendesk_client = ZendeskClient(
+                subdomain=str(settings.zendesk_subdomain),
+                email=str(settings.zendesk_email),
+                api_token=str(settings.zendesk_api_token),
+                dry_run=bool(getattr(settings, "zendesk_dry_run", True)),
+            )
+
+        processed = 0
+        eligible = 0
+        imported = 0
+        skipped = 0
+        failed = 0
+        candidate_memory_ids: list[str] = []
+        updated_memory_ids: list[str] = []
+        would_update_memory_ids: list[str] = []
+        skipped_memory_ids: list[str] = []
+        failed_memory_ids: list[str] = []
+        failure_reasons: dict[str, str] = {}
+
+        def _record_skip(memory_id: str, reason: str) -> None:
+            nonlocal skipped
+            skipped += 1
+            if memory_id:
+                skipped_memory_ids.append(memory_id)
+                failure_reasons[memory_id] = reason[:240]
+
+        def _record_failure(memory_id: str, reason: str) -> None:
+            nonlocal failed
+            failed += 1
+            if memory_id:
+                failed_memory_ids.append(memory_id)
+                failure_reasons[memory_id] = reason[:240]
+
+        def _redact_summary_value(value: Any) -> Any:
+            if isinstance(value, list):
+                return [redact_pii(str(item)) for item in value if isinstance(item, str)]
+            if isinstance(value, str):
+                return redact_pii(str(value))
+            return value
+
+        def _redact_log_errors(
+            entries: list[dict[str, Any]],
+        ) -> list[dict[str, Any]]:
+            redacted_entries: list[dict[str, Any]] = []
+            for entry in entries:
+                file_name = entry.get("file_name")
+                errors = []
+                for err in entry.get("errors") or []:
+                    clean = dict(err)
+                    for field in ("first_line", "sample", "signature"):
+                        if isinstance(clean.get(field), str):
+                            clean[field] = redact_pii(clean[field])
+                    errors.append(clean)
+                redacted_entries.append(
+                    {
+                        "file_name": file_name,
+                        "errors": errors,
+                    }
+                )
+            return redacted_entries
+
+        def _redact_log_findings(
+            entries: list[dict[str, Any]],
+        ) -> list[dict[str, Any]]:
+            redacted_entries: list[dict[str, Any]] = []
+            for entry in entries:
+                clean = dict(entry)
+                if isinstance(clean.get("summary"), str):
+                    clean["summary"] = redact_pii(clean["summary"])
+                issues = clean.get("identified_issues")
+                if isinstance(issues, list):
+                    redacted_issues = []
+                    for issue in issues:
+                        if isinstance(issue, dict):
+                            issue_clean = dict(issue)
+                            for field in ("title", "details"):
+                                if isinstance(issue_clean.get(field), str):
+                                    issue_clean[field] = redact_pii(issue_clean[field])
+                            redacted_issues.append(issue_clean)
+                        else:
+                            redacted_issues.append(issue)
+                    clean["identified_issues"] = redacted_issues
+                sections = clean.get("relevant_log_sections")
+                if isinstance(sections, list):
+                    redacted_sections = []
+                    for section in sections:
+                        if isinstance(section, dict):
+                            section_clean = dict(section)
+                            if isinstance(section_clean.get("content"), str):
+                                section_clean["content"] = redact_pii(
+                                    section_clean["content"]
+                                )
+                            redacted_sections.append(section_clean)
+                        else:
+                            redacted_sections.append(section)
+                    clean["relevant_log_sections"] = redacted_sections
+                concerns = clean.get("priority_concerns")
+                if isinstance(concerns, list):
+                    clean["priority_concerns"] = [
+                        redact_pii(str(concern)) if isinstance(concern, str) else concern
+                        for concern in concerns
+                    ]
+                redacted_entries.append(clean)
+            return redacted_entries
+
+        while processed < max_scan:
+            rows_remaining = max_scan - processed
+            query_limit = min(page_size, rows_remaining)
+
+            def _build_scan_query():
+                query = (
+                    supabase.client.table("memories")
+                    .select(
+                        "id,content,metadata,review_status,reviewed_by,confidence_score,"
+                        "created_at,updated_at,agent_id,tenant_id"
+                    )
+                    .contains("metadata", {"source": "zendesk_mb_playbook"})
+                    .order("created_at", desc=True)
+                    .range(offset, offset + query_limit - 1)
+                )
+                created_at_from_iso = _as_utc_iso(requested_from)
+                if created_at_from_iso:
+                    query = query.gte("created_at", created_at_from_iso)
+                created_at_to_iso = _as_utc_iso(requested_to)
+                if created_at_to_iso:
+                    query = query.lt("created_at", created_at_to_iso)
+                return query
+
+            response = await supabase._exec(
+                lambda: _build_scan_query().execute()
+            )
+            rows = list(response.data or [])
+            if not rows:
+                break
+
+            offset += len(rows)
+            for row in rows:
+                if processed >= max_scan:
+                    break
+                processed += 1
+
+                memory_id = str(row.get("id") or "")
+                if not memory_id:
+                    skipped += 1
+                    continue
+
+                if not _is_backfill_candidate(row, include_v2_rows=True):
+                    _record_skip(memory_id, "not_unedited_zendesk_candidate")
+                    continue
+                eligible += 1
+                candidate_memory_ids.append(memory_id)
+
+                metadata = row.get("metadata")
+                if not isinstance(metadata, dict):
+                    _record_skip(memory_id, "metadata_missing_or_invalid")
+                    continue
+
+                ticket_id = str(metadata.get("zendesk_ticket_id") or "")
+                if selected_mode == _BACKFILL_MODE_LIVE and not ticket_id:
+                    _record_skip(memory_id, "missing_zendesk_ticket_id")
+                    continue
+
+                if dry_run:
+                    would_update_memory_ids.append(memory_id)
+                    continue
+
+                subject = str(metadata.get("title") or "").strip() or "Zendesk support ticket"
+                image_assets = (
+                    metadata.get("image_assets")
+                    if isinstance(metadata.get("image_assets"), list)
+                    else []
+                )
+
+                summary_model_used = str(metadata.get("summary_model_used") or "").strip()
+                summary_model_attempts = metadata.get("summary_model_attempts")
+                summary_fallback_used = bool(metadata.get("summary_fallback_used"))
+                if not isinstance(summary_model_attempts, list):
+                    summary_model_attempts = []
+
+                tags_list = (
+                    [t for t in metadata.get("tags") if isinstance(t, str)]
+                    if isinstance(metadata.get("tags"), list)
+                    else []
+                )
+                last_public_comment_at = str(metadata.get("last_public_comment_at") or "")
+                public_excerpt = str(metadata.get("public_conversation_excerpt") or "")
+                zendesk_url = str(metadata.get("zendesk_url") or "")
+
+                summary: dict[str, Any]
+                metadata_log_errors: list[dict[str, Any]] = []
+                redacted_log_findings: list[dict[str, Any]] = []
+                flat_errors: list[dict[str, Any]] = []
+
+                if selected_mode == _BACKFILL_MODE_METADATA_ONLY:
+                    summary_raw = metadata.get("summary_structured")
+                    if isinstance(summary_raw, dict):
+                        summary = normalize_summary(summary_raw)
+                    else:
+                        summary = fallback_summary_from_text(
+                            str(row.get("content") or ""),
+                            subject=subject,
+                        )
+
+                    raw_log_errors = (
+                        metadata.get("log_errors")
+                        if isinstance(metadata.get("log_errors"), list)
+                        else []
+                    )
+                    raw_log_findings = (
+                        metadata.get("log_findings")
+                        if isinstance(metadata.get("log_findings"), list)
+                        else []
+                    )
+                    metadata_log_errors = _redact_log_errors(
+                        [entry for entry in raw_log_errors if isinstance(entry, dict)]
+                    )
+                    redacted_log_findings = _redact_log_findings(
+                        [entry for entry in raw_log_findings if isinstance(entry, dict)]
+                    )
+                    flat_errors = _flatten_log_errors(metadata_log_errors)
+                else:
+                    ticket: dict[str, Any] = {}
+                    try:
+                        assert zendesk_client is not None
+                        ticket = await asyncio.to_thread(zendesk_client.get_ticket, ticket_id)
+                    except ZendeskRateLimitError as exc:
+                        _record_failure(memory_id, f"zendesk_rate_limited: {exc}")
+                        continue
+                    except Exception as exc:
+                        logger.warning(
+                            "zendesk_backfill_get_ticket_failed ticket_id=%s error=%s",
+                            ticket_id,
+                            str(exc)[:180],
+                        )
+                        ticket = {}
+
+                    subject = (
+                        str(ticket.get("subject") or "").strip()
+                        or str(metadata.get("title") or "").strip()
+                        or "Zendesk support ticket"
+                    )
+                    if isinstance(ticket.get("tags"), list):
+                        tags_list = [
+                            t for t in cast(list[Any], ticket.get("tags")) if isinstance(t, str)
+                        ]
+
+                    comments: list[dict[str, Any]] = []
+                    try:
+                        assert zendesk_client is not None
+                        comments = await asyncio.to_thread(
+                            zendesk_client.get_ticket_comments_all,
+                            ticket_id,
+                            public_only=True,
+                        )
+                    except ZendeskRateLimitError as exc:
+                        _record_failure(memory_id, f"zendesk_rate_limited: {exc}")
+                        continue
+                    except Exception as exc:
+                        logger.warning(
+                            "zendesk_backfill_get_comments_failed ticket_id=%s error=%s",
+                            ticket_id,
+                            str(exc)[:180],
+                        )
+                        comments = []
+
+                    last_public_comment_at = _extract_last_public_comment_at(comments) or ""
+
+                    public_comments: list[str] = []
+                    for comment in comments:
+                        if not isinstance(comment, dict):
+                            continue
+                        text = _extract_public_comment_text(comment)
+                        if text:
+                            public_comments.append(text)
+
+                    public_conversation_lines: list[str] = []
+                    for idx, comment_text in enumerate(public_comments, start=1):
+                        cleaned = redact_pii(comment_text).strip()
+                        if cleaned:
+                            public_conversation_lines.append(
+                                f"### Public Comment {idx}\n{cleaned}"
+                            )
+                    if not public_conversation_lines:
+                        description = str(ticket.get("description") or "").strip()
+                        if description:
+                            cleaned_description = redact_pii(description).strip()
+                            if cleaned_description:
+                                public_conversation_lines = [
+                                    f"### Ticket Description\n{cleaned_description}"
+                                ]
+
+                    public_conversation = "\n\n".join(public_conversation_lines).strip()
+                    public_excerpt = public_conversation
+                    if public_excerpt and len(public_excerpt) > ZENDESK_PUBLIC_EXCERPT_CHARS:
+                        public_excerpt = (
+                            public_excerpt[: ZENDESK_PUBLIC_EXCERPT_CHARS - 1].rstrip()
+                            + "…"
+                        )
+
+                    log_findings: list[dict[str, Any]] = []
+                    log_errors: list[dict[str, Any]] = []
+                    attachments = []
+                    try:
+                        attachments = await asyncio.to_thread(
+                            fetch_ticket_attachments,
+                            ticket_id,
+                            (".log", ".txt"),
+                            10 * 1024 * 1024,
+                            True,
+                        )
+                        for att in attachments:
+                            if not att.local_path:
+                                continue
+                            try:
+                                with open(
+                                    att.local_path,
+                                    "r",
+                                    encoding="utf-8",
+                                    errors="ignore",
+                                ) as log_file:
+                                    raw = log_file.read(ZENDESK_LOG_READ_CHARS)
+                                if not raw:
+                                    continue
+                                errors = extract_log_errors(raw)
+                                if errors:
+                                    log_errors.append(
+                                        {
+                                            "file_name": att.file_name,
+                                            "errors": errors,
+                                        }
+                                    )
+                                excerpt = build_log_excerpt(errors, raw, max_chars=6000)
+                                question = (
+                                    f"Summarize the most relevant errors for ticket {ticket_id}: "
+                                    f"{subject}"
+                                )
+                                analysis = await _analyze_log_file(
+                                    file_name=att.file_name or "ticket.log",
+                                    content=excerpt,
+                                    question=question,
+                                )
+                                analysis_summary = str(
+                                    analysis.get("overall_summary") or ""
+                                ).strip()
+                                if analysis_summary:
+                                    log_findings.append(
+                                        {
+                                            "file_name": att.file_name,
+                                            "summary": redact_pii(analysis_summary),
+                                            "priority_concerns": analysis.get(
+                                                "priority_concerns"
+                                            )
+                                            or [],
+                                            "identified_issues": analysis.get(
+                                                "identified_issues"
+                                            )
+                                            or [],
+                                            "relevant_log_sections": analysis.get(
+                                                "relevant_log_sections"
+                                            )
+                                            or [],
+                                        }
+                                    )
+                            except Exception as exc:
+                                logger.warning(
+                                    "zendesk_backfill_log_analyze_failed ticket_id=%s file=%s error=%s",
+                                    ticket_id,
+                                    att.file_name,
+                                    str(exc)[:180],
+                                )
+                    finally:
+                        if attachments:
+                            cleanup_attachments(attachments)
+
+                    log_summary_lines: list[str] = []
+                    for entry in log_errors:
+                        file_name = entry.get("file_name") or "log"
+                        for error in entry.get("errors") or []:
+                            first_line = str(
+                                error.get("first_line") or error.get("signature") or ""
+                            ).strip()
+                            if not first_line:
+                                continue
+                            count = error.get("count") or 1
+                            log_summary_lines.append(
+                                f"- {file_name}: {first_line} (x{count})"
+                            )
+                    for item in log_findings:
+                        line = f"- {item.get('file_name')}: {item.get('summary')}"
+                        log_summary_lines.append(line)
+                    log_summary = redact_pii("\n".join(log_summary_lines).strip())
+                    if log_summary and len(log_summary) > ZENDESK_LOG_SUMMARY_CHARS:
+                        log_summary = (
+                            log_summary[: ZENDESK_LOG_SUMMARY_CHARS - 1].rstrip() + "…"
+                        )
+
+                    summary_result = await _summarize_ticket_with_llm(
+                        ticket_id=ticket_id,
+                        subject=subject,
+                        public_conversation=public_conversation,
+                        log_summary=log_summary,
+                    )
+                    summary_payload = parse_summary_json(summary_result.text)
+                    if summary_payload:
+                        summary = normalize_summary(summary_payload)
+                    else:
+                        summary = fallback_summary_from_text(
+                            summary_result.text,
+                            subject=subject,
+                        )
+
+                    if log_summary and not summary.get("log_error_summary"):
+                        summary["log_error_summary"] = log_summary
+                    summary_model_used = summary_result.model_used or summary_model_used
+                    summary_model_attempts = (
+                        summary_result.model_attempts or summary_model_attempts
+                    )
+                    summary_fallback_used = (
+                        summary_result.fallback_used or summary_fallback_used
+                    )
+
+                    metadata_log_errors = _redact_log_errors(
+                        [entry for entry in log_errors if isinstance(entry, dict)]
+                    )
+                    redacted_log_findings = _redact_log_findings(
+                        [entry for entry in log_findings if isinstance(entry, dict)]
+                    )
+                    flat_errors = _flatten_log_errors(metadata_log_errors)
+
+                    subdomain = str(settings.zendesk_subdomain or "").strip()
+                    if subdomain:
+                        zendesk_url = (
+                            f"https://{subdomain}.zendesk.com/agent/tickets/{ticket_id}"
+                        )
+
+                if not summary.get("problem"):
+                    summary["problem"] = subject
+                summary = {
+                    key: _redact_summary_value(value) for key, value in summary.items()
+                }
+
+                for entry in flat_errors:
+                    for field in ("first_line", "sample", "signature"):
+                        if isinstance(entry.get(field), str):
+                            entry[field] = redact_pii(entry[field])
+
+                content = format_zendesk_memory_content(
+                    summary,
+                    subject=subject,
+                    ticket_id=ticket_id,
+                    zendesk_url=zendesk_url,
+                    log_errors=flat_errors,
+                    image_assets=image_assets,
+                )
+                if not content:
+                    _record_skip(memory_id, "rendered_content_empty")
+                    continue
+
+                embedding_context_text = build_zendesk_embedding_context(
+                    summary,
+                    subject=subject,
+                    ticket_id=ticket_id,
+                    zendesk_url=zendesk_url,
+                    log_errors=flat_errors,
+                    log_findings=redacted_log_findings,
+                )
+                embedding_context_text = redact_pii(embedding_context_text) or content
+
+                try:
+                    embedding = await service.generate_embedding(embedding_context_text)
+                except Exception as exc:
+                    error_text = str(exc)
+                    error_text_lower = error_text.lower()
+                    fallback_eligible = (
+                        "rate limiting service unavailable" in error_text_lower
+                        or "event loop is closed" in error_text_lower
+                    )
+                    if not fallback_eligible:
+                        _record_failure(memory_id, f"embedding_failed: {error_text}")
+                        continue
+
+                    try:
+                        model = service._get_embedding_model()
+                        loop = asyncio.get_running_loop()
+                        embedding = await loop.run_in_executor(
+                            None,
+                            model.embed_query,
+                            embedding_context_text,
+                        )
+                        assert_dim(embedding, context="zendesk_backfill_fallback")
+                    except Exception as fallback_exc:  # noqa: BLE001
+                        _record_failure(
+                            memory_id,
+                            f"embedding_fallback_failed: {fallback_exc!s}",
+                        )
+                        continue
+
+                metadata_update = dict(metadata)
+                metadata_update["import_version"] = "structured_summary_v2"
+                metadata_update["summary_structured"] = summary
+                metadata_update["log_errors"] = metadata_log_errors
+                metadata_update["log_findings"] = redacted_log_findings
+                if tags_list:
+                    metadata_update["tags"] = tags_list
+                if last_public_comment_at:
+                    metadata_update["last_public_comment_at"] = last_public_comment_at
+                if public_excerpt:
+                    metadata_update["public_conversation_excerpt"] = redact_pii(
+                        public_excerpt
+                    )
+                if zendesk_url:
+                    metadata_update["zendesk_url"] = zendesk_url
+                if summary_model_used:
+                    metadata_update["summary_model_used"] = summary_model_used
+                if summary_model_attempts:
+                    metadata_update["summary_model_attempts"] = summary_model_attempts
+                if summary_fallback_used:
+                    metadata_update["summary_fallback_used"] = True
+
+                now_iso = datetime.now(timezone.utc).isoformat()
+                metadata_update["backfilled_to_v2_at"] = now_iso
+                metadata_update["reprocessed_at"] = now_iso
+                metadata_update["reprocess_mode"] = selected_mode
+                if base_result["run_id"]:
+                    metadata_update["reprocess_run_id"] = base_result["run_id"]
+                metadata_update = ensure_memory_title(
+                    metadata_update,
+                    content=content,
+                )
+
+                payload = {
+                    "content": redact_pii(content),
+                    "metadata": metadata_update,
+                    "embedding": embedding,
+                    "updated_at": now_iso,
+                }
+
+                try:
+                    expected_updated_at = row.get("updated_at")
+                    expected_review_status = row.get("review_status")
+
+                    def _build_update_query():
+                        query = (
+                            supabase.client.table("memories")
+                            .update(payload)
+                            .eq("id", memory_id)
+                        )
+                        if (
+                            isinstance(expected_updated_at, str)
+                            and expected_updated_at.strip()
+                        ):
+                            query = query.eq("updated_at", expected_updated_at)
+                        if (
+                            isinstance(expected_review_status, str)
+                            and expected_review_status.strip()
+                        ):
+                            query = query.eq("review_status", expected_review_status)
+                        return query
+
+                    update_response = await supabase._exec(
+                        lambda: _build_update_query().execute()
+                    )
+                    if not update_response.data:
+                        _record_skip(memory_id, "stale_row_or_concurrent_update")
+                        continue
+                    imported += 1
+                    updated_memory_ids.append(memory_id)
+                except Exception as exc:
+                    _record_failure(memory_id, f"persist_failed: {str(exc)}")
+
+        result: dict[str, Any] = {
+            "imported": imported,
+            "skipped": skipped,
+            "failed": failed,
+            "tag": "backfill_v2",
+            "processed_tickets": processed,
+            "imported_memory_ids": updated_memory_ids,
+            "failed_ticket_ids": failed_memory_ids,
+            "failure_reasons": failure_reasons,
+            "candidate_memory_ids": candidate_memory_ids,
+            "updated_memory_ids": updated_memory_ids,
+            "skipped_memory_ids": skipped_memory_ids,
+            "failed_memory_ids": failed_memory_ids,
+            "would_update_memory_ids": would_update_memory_ids,
+            "eligible": eligible,
+            "dry_run": bool(dry_run),
+            "scan_limit": max_scan,
+            "reprocess_mode": selected_mode,
+            "created_at_from": _as_utc_iso(requested_from),
+            "created_at_to": _as_utc_iso(requested_to),
+            "run_id": base_result["run_id"],
+        }
+        if dry_run:
+            result["would_update"] = len(would_update_memory_ids)
+        return result
 
     return asyncio.run(_run())
 

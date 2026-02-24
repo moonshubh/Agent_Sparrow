@@ -18,7 +18,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # =============================================================================
 # Enums
@@ -870,14 +870,6 @@ class MemoryListResponse(BaseModel):
     offset: int
 
 
-class MemorySearchResponse(BaseModel):
-    """Response for memory text search with truncation metadata."""
-
-    items: List[MemoryRecord] = Field(default_factory=list)
-    truncated: bool = False
-    scan_cap: int | None = None
-
-
 class MemoryEntityRecord(BaseModel):
     """Read model for memory_entities rows."""
 
@@ -1264,65 +1256,49 @@ class ImportZendeskTaggedRequest(BaseModel):
         le=2000,
         description="Max tickets to enqueue for processing.",
     )
-    date_field: Literal["created", "updated"] = Field(
-        default="created",
-        description=(
-            "Zendesk ticket date field used for date filtering. "
-            "Use 'created' for creation-time windows or 'updated' for update-time windows."
-        ),
+
+
+class BackfillZendeskMemoriesV2Request(BaseModel):
+    """Admin request to queue V2 backfill for existing unedited Zendesk memories."""
+
+    limit: int = Field(
+        default=5000,
+        ge=1,
+        le=50000,
+        description="Maximum memories to scan during this backfill run.",
     )
-    date_after: Optional[str] = Field(
+    dry_run: bool = Field(
+        default=False,
+        description="If true, only report candidate counts without writing updates.",
+    )
+    created_at_from: Optional[datetime] = Field(
         default=None,
         description=(
-            "Optional inclusive start date (YYYY-MM-DD) applied to date_field "
-            "using Zendesk search syntax (>=)."
+            "Optional lower-bound (inclusive) filter for memory created_at timestamps. "
+            "Use UTC for deterministic date windows."
         ),
     )
-    date_before: Optional[str] = Field(
+    created_at_to: Optional[datetime] = Field(
         default=None,
         description=(
-            "Optional inclusive end date (YYYY-MM-DD) applied to date_field "
-            "using Zendesk search syntax (<=)."
+            "Optional upper-bound (exclusive) filter for memory created_at timestamps. "
+            "Use UTC for deterministic date windows."
         ),
     )
-    status_scope: Literal["resolved_only", "all"] = Field(
-        default="resolved_only",
+    reprocess_mode: Literal["live_zendesk_refetch", "metadata_only"] = Field(
+        default="live_zendesk_refetch",
         description=(
-            "Ticket status scope. 'resolved_only' searches solved+closed tickets; "
-            "'all' searches all statuses."
+            "Backfill strategy. live_zendesk_refetch performs ticket re-fetch + re-summary; "
+            "metadata_only reuses persisted memory metadata."
         ),
     )
 
-    @field_validator("date_after", "date_before")
-    @classmethod
-    def validate_date_filter_format(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        raw = v.strip()
-        if not raw:
-            return None
-        try:
-            parsed = datetime.strptime(raw, "%Y-%m-%d")
-        except ValueError as exc:
-            raise ValueError("Date must be in YYYY-MM-DD format") from exc
-        normalized = parsed.strftime("%Y-%m-%d")
-        if raw != normalized:
-            raise ValueError("Date must use zero-padded YYYY-MM-DD format")
-        return normalized
-
-    @field_validator("date_before")
-    @classmethod
-    def validate_date_range_order(
-        cls, date_before: Optional[str], info
-    ) -> Optional[str]:
-        date_after = info.data.get("date_after")
-        if not date_after or not date_before:
-            return date_before
-        after_dt = datetime.strptime(date_after, "%Y-%m-%d").date()
-        before_dt = datetime.strptime(date_before, "%Y-%m-%d").date()
-        if after_dt > before_dt:
-            raise ValueError("date_after must be less than or equal to date_before")
-        return date_before
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "BackfillZendeskMemoriesV2Request":
+        if self.created_at_from and self.created_at_to:
+            if self.created_at_from >= self.created_at_to:
+                raise ValueError("created_at_from must be earlier than created_at_to")
+        return self
 
 
 class ImportZendeskTaggedResponse(BaseModel):
@@ -1348,9 +1324,22 @@ class ImportZendeskTaggedTaskResult(BaseModel):
     imported_memory_ids: List[str] = Field(default_factory=list)
     failed_ticket_ids: List[str] = Field(default_factory=list)
     failure_reasons: Dict[str, str] = Field(default_factory=dict)
+    candidate_memory_ids: List[str] = Field(default_factory=list)
+    updated_memory_ids: List[str] = Field(default_factory=list)
+    skipped_memory_ids: List[str] = Field(default_factory=list)
+    failed_memory_ids: List[str] = Field(default_factory=list)
+    would_update_memory_ids: List[str] = Field(default_factory=list)
+    eligible: Optional[int] = Field(default=None, ge=0)
+    dry_run: Optional[bool] = Field(default=None)
+    scan_limit: Optional[int] = Field(default=None, ge=0)
+    would_update: Optional[int] = Field(default=None, ge=0)
+    reprocess_mode: Optional[str] = Field(default=None)
+    created_at_from: Optional[str] = Field(default=None)
+    created_at_to: Optional[str] = Field(default=None)
     filters: Dict[str, Optional[str]] = Field(default_factory=dict)
     warnings: List[str] = Field(default_factory=list)
     error: Optional[str] = Field(default=None)
+    run_id: Optional[str] = Field(default=None)
 
 
 class ImportZendeskTaggedTaskStatusResponse(BaseModel):

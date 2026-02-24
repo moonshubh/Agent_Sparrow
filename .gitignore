@@ -729,10 +729,13 @@ dev-debug.log
 !frontend/lib/api.ts
 !frontend/lib/types/logAnalysis.ts
 frontend/tsconfig.tsbuildinfo
-# Markdown files - ignore all except CLAUDE.md, AGENTS.md, and skills
+# Markdown files - ignore all except CLAUDE.md, AGENTS.md, docs, and skills
 *.md
 !CLAUDE.md
 !AGENTS.md
+!docs/**/*.md
+!reports/reviews/**/*.md
+!reports/reviews/**/*.json
 !.sparrow/skills/**/SKILL.md
 !.sparrow/skills/**/reference/*.md
 *.xml
