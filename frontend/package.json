@@ -1,6 +1,6 @@
 {
   "name": "agent-sparrow-frontend",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "private": true,
   "packageManager": "pnpm@10.12.1",
   "engines": {

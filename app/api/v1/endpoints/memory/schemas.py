@@ -1336,6 +1336,9 @@ class ImportZendeskTaggedTaskResult(BaseModel):
     reprocess_mode: Optional[str] = Field(default=None)
     created_at_from: Optional[str] = Field(default=None)
     created_at_to: Optional[str] = Field(default=None)
+    filters: Dict[str, Optional[str]] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+    error: Optional[str] = Field(default=None)
     run_id: Optional[str] = Field(default=None)
 
 

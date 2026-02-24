@@ -9,9 +9,10 @@ for feedback, merge, duplicate detection, and statistics.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from postgrest.base_request_builder import CountMethod
 from uuid import UUID
@@ -22,6 +23,11 @@ from app.core.rate_limiting.exceptions import RateLimitExceededException
 from app.core.settings import settings
 from app.db.embedding_config import EXPECTED_DIM, MODEL_NAME
 from app.db.supabase.client import get_supabase_client, SupabaseClient
+from app.memory.edit_state import (
+    CLEANUP_PROTECTED_MIN_CONFIDENCE,
+    is_memory_edited,
+    partition_cleanup_candidates,
+)
 from app.memory.title import ensure_memory_title
 from app.security.pii_redactor import redact_pii, redact_pii_from_dict
 
@@ -29,6 +35,23 @@ logger = get_logger(__name__)
 
 COUNT_EXACT: CountMethod = CountMethod.exact
 ZERO_UUID = UUID("00000000-0000-0000-0000-000000000000")
+EMBEDDING_SYNC_TIMEOUT_SECONDS = 12.0
+EMBEDDING_DEFERRED_TIMEOUT_SECONDS = 45.0
+DEFAULT_EDITED_FILTER_SCAN_CAP = 20000
+
+
+def _load_edited_filter_scan_cap() -> int:
+    raw = os.getenv("MEMORY_EDITED_FILTER_SCAN_CAP", str(DEFAULT_EDITED_FILTER_SCAN_CAP))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_EDITED_FILTER_SCAN_CAP
+    return value if value > 0 else DEFAULT_EDITED_FILTER_SCAN_CAP
+
+
+EDITED_FILTER_SCAN_CAP = _load_edited_filter_scan_cap()
+DELETE_MEMORIES_RPC = "delete_memories_with_relationship_cleanup"
+LIST_MEMORIES_EDITED_RPC = "list_memories_with_edited_state"
 
 
 class MemoryUIService:
@@ -45,11 +68,14 @@ class MemoryUIService:
         "retrieval_count,last_retrieved_at,feedback_positive,feedback_negative,"
         "resolution_success_count,resolution_failure_count,agent_id,tenant_id,created_at,updated_at"
     )
+    # Used for edited-state scans to avoid loading large content payloads.
+    EDIT_STATE_SCAN_COLUMNS = "id,created_at,updated_at,reviewed_by,metadata"
 
     def __init__(self) -> None:
         self._supabase: Optional[SupabaseClient] = None
         self._embedding_model = None
         self._lock = asyncio.Lock()
+        self._embedding_refresh_tasks: dict[str, asyncio.Task[None]] = {}
 
     def _get_supabase(self) -> SupabaseClient:
         """Get or initialize Supabase client."""
@@ -133,6 +159,94 @@ class MemoryUIService:
         except Exception as exc:
             logger.error("Failed to generate embedding: %s", exc)
             raise
+
+    def _schedule_embedding_refresh(
+        self,
+        memory_id: str,
+        content: str,
+        expected_updated_at: str | None,
+    ) -> None:
+        """Schedule a best-effort background embedding refresh for a memory."""
+        active_task = self._embedding_refresh_tasks.get(memory_id)
+        if active_task and not active_task.done():
+            active_task.cancel()
+
+        async def _runner() -> None:
+            await self._refresh_embedding_for_memory(
+                memory_id=memory_id,
+                content=content,
+                expected_updated_at=expected_updated_at,
+            )
+
+        try:
+            task = asyncio.create_task(_runner())
+        except RuntimeError as exc:
+            logger.warning(
+                "Failed to schedule deferred embedding refresh for memory %s: %s",
+                memory_id,
+                exc,
+            )
+            return
+
+        self._embedding_refresh_tasks[memory_id] = task
+        task.add_done_callback(
+            lambda completed_task: self._clear_embedding_refresh_task(
+                memory_id, completed_task
+            )
+        )
+
+    def _clear_embedding_refresh_task(
+        self, memory_id: str, completed_task: asyncio.Task[None]
+    ) -> None:
+        current_task = self._embedding_refresh_tasks.get(memory_id)
+        if current_task is completed_task:
+            self._embedding_refresh_tasks.pop(memory_id, None)
+
+    async def _refresh_embedding_for_memory(
+        self,
+        memory_id: str,
+        content: str,
+        expected_updated_at: str | None,
+    ) -> None:
+        """Regenerate and persist embedding in the background (best effort)."""
+        try:
+            embedding = await asyncio.wait_for(
+                self.generate_embedding(content),
+                timeout=EMBEDDING_DEFERRED_TIMEOUT_SECONDS,
+            )
+            supabase = self._get_supabase()
+            response = await supabase._exec(
+                lambda: (
+                    supabase.client.table("memories")
+                    .update({"embedding": embedding})
+                    .eq("id", memory_id)
+                    .eq("updated_at", expected_updated_at)
+                    .execute()
+                    if expected_updated_at
+                    else supabase.client.table("memories")
+                    .update({"embedding": embedding})
+                    .eq("id", memory_id)
+                    .execute()
+                )
+            )
+            if not response.data:
+                logger.info(
+                    "Skipped deferred embedding refresh for memory %s because a newer update exists",
+                    memory_id,
+                )
+                return
+            logger.info(
+                "Deferred embedding refresh completed for memory %s", memory_id
+            )
+        except asyncio.CancelledError:
+            logger.debug("Deferred embedding refresh cancelled for memory %s", memory_id)
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Deferred embedding refresh failed for memory %s: %s",
+                memory_id,
+                exc,
+            )
 
     async def add_memory(
         self,
@@ -291,13 +405,28 @@ class MemoryUIService:
                     reviewer_id_str,
                 )
 
+        defer_embedding_refresh = False
+
         # Regenerate embedding if content changed
         if content != existing_content:
-            embedding = await self.generate_embedding(content)
-            update_payload["embedding"] = embedding
-            logger.info(
-                "Content changed for memory %s, regenerated embedding", memory_id_str
-            )
+            try:
+                embedding = await asyncio.wait_for(
+                    self.generate_embedding(content),
+                    timeout=EMBEDDING_SYNC_TIMEOUT_SECONDS,
+                )
+                update_payload["embedding"] = embedding
+                logger.info(
+                    "Content changed for memory %s, regenerated embedding",
+                    memory_id_str,
+                )
+            except Exception as exc:
+                # Fail open for edit durability; refresh embedding in background.
+                defer_embedding_refresh = True
+                logger.warning(
+                    "Embedding regeneration deferred for memory %s after sync failure: %s",
+                    memory_id_str,
+                    exc,
+                )
 
         try:
             response = await supabase._exec(
@@ -310,6 +439,21 @@ class MemoryUIService:
             if response.data:
                 memory = response.data[0]
                 logger.info("Updated memory: %s", memory_id_str)
+                if defer_embedding_refresh:
+                    expected_updated_at = (
+                        memory.get("updated_at")
+                        if isinstance(memory.get("updated_at"), str)
+                        else update_payload.get("updated_at")
+                    )
+                    self._schedule_embedding_refresh(
+                        memory_id=memory_id_str,
+                        content=content,
+                        expected_updated_at=(
+                            str(expected_updated_at)
+                            if expected_updated_at is not None
+                            else None
+                        ),
+                    )
                 return memory
 
             raise RuntimeError(f"Memory {memory_id_str} not found for update")
@@ -330,21 +474,46 @@ class MemoryUIService:
         supabase = self._get_supabase()
         memory_id_str = str(memory_id)
 
-        # First, check for related entities that might become orphaned
-        # This is a simplified version; the actual cleanup logic may be in a DB function
         orphaned_count = 0
         relationships_count = 0
 
         try:
-            # Delete the memory
-            response = await supabase._exec(
-                lambda: supabase.client.table("memories")
-                .delete()
-                .eq("id", memory_id_str)
-                .execute()
-            )
+            deleted_memories = 0
+            try:
+                rpc_response = await supabase._exec(
+                    lambda: supabase.rpc(
+                        DELETE_MEMORIES_RPC, {"p_memory_ids": [memory_id_str]}
+                    ).execute()
+                )
+                rpc_rows = rpc_response.data or []
+                rpc_row = rpc_rows[0] if rpc_rows else {}
+                deleted_memories = int(rpc_row.get("deleted_memories") or 0)
+                relationships_count = int(rpc_row.get("deleted_relationships") or 0)
+            except Exception as rpc_exc:
+                message = str(rpc_exc).lower()
+                rpc_missing = (
+                    DELETE_MEMORIES_RPC in message
+                    and (
+                        "not found" in message
+                        or "does not exist" in message
+                        or "could not find the function" in message
+                        or "schema cache" in message
+                    )
+                )
+                if not rpc_missing:
+                    raise
+                logger.error(
+                    "delete_memory_rpc_unavailable_blocked id=%s error=%s",
+                    memory_id_str,
+                    str(rpc_exc)[:200],
+                )
+                raise RuntimeError(
+                    f"{DELETE_MEMORIES_RPC} is required for safe deletion. "
+                    "Apply migration 041_add_guarded_memory_delete_rpc.sql "
+                    "before deleting memories."
+                )
 
-            if response.data:
+            if deleted_memories > 0:
                 logger.info("Deleted memory: %s", memory_id_str)
             else:
                 logger.warning("Memory %s not found for deletion", memory_id_str)
@@ -357,6 +526,30 @@ class MemoryUIService:
         except Exception as exc:
             logger.error("Failed to delete memory %s: %s", memory_id_str, exc)
             raise
+
+    async def partition_cleanup_delete_candidates(
+        self,
+        memory_rows: Sequence[dict[str, Any]],
+        *,
+        min_confidence: float = CLEANUP_PROTECTED_MIN_CONFIDENCE,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """
+        Safety guard for bulk cleanup paths.
+
+        Splits candidate rows into:
+        - deletable rows
+        - protected rows (edited + confidence >= threshold)
+        """
+        deletable, protected = partition_cleanup_candidates(
+            memory_rows, min_confidence=min_confidence
+        )
+        if protected:
+            logger.warning(
+                "memory_cleanup_guard_excluded protected_count=%d threshold=%.2f",
+                len(protected),
+                float(min_confidence),
+            )
+        return deletable, protected
 
     async def submit_feedback(
         self,
@@ -605,6 +798,7 @@ class MemoryUIService:
         agent_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
         source_type: Optional[str] = None,
+        edited_state: Literal["all", "edited", "unedited"] = "all",
         limit: int = 50,
         offset: int = 0,
         sort_order: str = "desc",
@@ -616,46 +810,30 @@ class MemoryUIService:
             agent_id: Filter by agent ID.
             tenant_id: Filter by tenant ID.
             source_type: Filter by source type.
+            edited_state: Optional edited-state filter ("all", "edited", "unedited").
             limit: Maximum number of results.
             offset: Number of results to skip.
 
         Returns:
             A list of memory records.
         """
-        supabase = self._get_supabase()
-
-        sort_order_norm = (sort_order or "desc").lower()
-        if sort_order_norm not in ("asc", "desc"):
-            sort_order_norm = "desc"
-
-        try:
-            query = supabase.client.table("memories").select(self.MEMORY_SELECT_COLUMNS)
-
-            if agent_id:
-                query = query.eq("agent_id", agent_id)
-            if tenant_id:
-                query = query.eq("tenant_id", tenant_id)
-            if source_type:
-                query = query.eq("source_type", source_type)
-
-            query = query.order("created_at", desc=sort_order_norm == "desc").range(
-                offset, offset + limit - 1
-            )
-
-            response = await supabase._exec(lambda: query.execute())
-
-            memories = response.data if response.data else []
-            logger.debug("Listed %d memories", len(memories))
-            return memories
-        except Exception as exc:
-            logger.error("Failed to list memories: %s", exc)
-            raise
+        memories, _total = await self.list_memories_with_total(
+            agent_id=agent_id,
+            tenant_id=tenant_id,
+            source_type=source_type,
+            edited_state=edited_state,
+            limit=limit,
+            offset=offset,
+            sort_order=sort_order,
+        )
+        return memories
 
     async def list_memories_with_total(
         self,
         agent_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
         source_type: Optional[str] = None,
+        edited_state: Literal["all", "edited", "unedited"] = "all",
         limit: int = 50,
         offset: int = 0,
         sort_order: str = "desc",
@@ -671,6 +849,9 @@ class MemoryUIService:
         sort_order_norm = (sort_order or "desc").lower()
         if sort_order_norm not in ("asc", "desc"):
             sort_order_norm = "desc"
+        edited_state_norm = (edited_state or "all").lower()
+        if edited_state_norm not in {"all", "edited", "unedited"}:
+            edited_state_norm = "all"
 
         def apply_filters(query):
             if agent_id:
@@ -681,7 +862,146 @@ class MemoryUIService:
                 query = query.eq("source_type", source_type)
             return query
 
+        def matches_edit_state(memory_row: dict[str, Any]) -> bool:
+            if edited_state_norm == "all":
+                return True
+            edited = is_memory_edited(memory_row)
+            return edited if edited_state_norm == "edited" else not edited
+
+        async def list_with_python_fallback() -> tuple[list[dict[str, Any]], int]:
+            count_query = apply_filters(
+                supabase.client.table("memories").select("id", count=COUNT_EXACT, head=True)
+            )
+            count_response = await supabase._exec(lambda: count_query.execute())
+            base_total = int(count_response.count or 0)
+            if base_total > EDITED_FILTER_SCAN_CAP:
+                raise ValueError(
+                    "edited_state filter scan limit exceeded "
+                    f"({base_total} rows > {EDITED_FILTER_SCAN_CAP} cap). "
+                    "Narrow the query with source_type/agent_id/tenant_id filters "
+                    "or increase MEMORY_EDITED_FILTER_SCAN_CAP."
+                )
+
+            batch_size = max(200, min(1000, int(limit) * 5))
+            fetched = 0
+            matched_total = 0
+            page_ids: list[str] = []
+            page_start = int(offset)
+            page_end = page_start + int(limit)
+
+            while fetched < base_total:
+                page_query = (
+                    apply_filters(
+                        supabase.client.table("memories").select(self.EDIT_STATE_SCAN_COLUMNS)
+                    )
+                    .order("created_at", desc=sort_order_norm == "desc")
+                    .range(fetched, fetched + batch_size - 1)
+                )
+                page_response = await supabase._exec(lambda: page_query.execute())
+                batch = page_response.data if page_response.data else []
+                if not batch:
+                    break
+                for row in batch:
+                    if not matches_edit_state(row):
+                        continue
+                    memory_id = row.get("id")
+                    if not isinstance(memory_id, str) or not memory_id:
+                        continue
+                    if page_start <= matched_total < page_end:
+                        page_ids.append(memory_id)
+                    matched_total += 1
+                fetched += len(batch)
+                if len(batch) < batch_size:
+                    break
+
+            total = matched_total
+            paged_rows: list[dict[str, Any]] = []
+            if page_ids:
+                row_query = apply_filters(
+                    supabase.client.table("memories").select(self.MEMORY_SELECT_COLUMNS)
+                ).in_("id", page_ids)
+                row_response = await supabase._exec(lambda: row_query.execute())
+                rows = row_response.data if row_response.data else []
+                row_map: dict[str, dict[str, Any]] = {}
+                for row in rows:
+                    row_id = row.get("id")
+                    if isinstance(row_id, str):
+                        row_map[row_id] = row
+                paged_rows = [row_map[row_id] for row_id in page_ids if row_id in row_map]
+            logger.warning(
+                "list_memories_edited_state_using_python_fallback edited_state=%s total=%d",
+                edited_state_norm,
+                total,
+            )
+            return paged_rows, total
+
         try:
+            if edited_state_norm != "all":
+                try:
+                    rpc_response = await supabase._exec(
+                        lambda: supabase.rpc(
+                            LIST_MEMORIES_EDITED_RPC,
+                            {
+                                "p_agent_id": agent_id,
+                                "p_tenant_id": tenant_id,
+                                "p_source_type": source_type,
+                                "p_edited_state": edited_state_norm,
+                                "p_limit": int(limit),
+                                "p_offset": int(offset),
+                                "p_sort_order": sort_order_norm,
+                            },
+                        ).execute()
+                    )
+                except Exception as rpc_exc:
+                    message = str(rpc_exc).lower()
+                    rpc_missing = LIST_MEMORIES_EDITED_RPC in message and (
+                        "not found" in message
+                        or "does not exist" in message
+                        or "could not find the function" in message
+                        or "schema cache" in message
+                    )
+                    if rpc_missing:
+                        logger.warning(
+                            "list_memories_edited_state_rpc_unavailable_fallback error=%s",
+                            str(rpc_exc)[:200],
+                        )
+                        return await list_with_python_fallback()
+                    raise
+
+                rpc_rows = list(rpc_response.data or [])
+                total = int(rpc_rows[0].get("total_count") or 0) if rpc_rows else 0
+                if not rpc_rows and int(offset) > 0:
+                    summary_response = await supabase._exec(
+                        lambda: supabase.rpc(
+                            LIST_MEMORIES_EDITED_RPC,
+                            {
+                                "p_agent_id": agent_id,
+                                "p_tenant_id": tenant_id,
+                                "p_source_type": source_type,
+                                "p_edited_state": edited_state_norm,
+                                "p_limit": 1,
+                                "p_offset": 0,
+                                "p_sort_order": sort_order_norm,
+                            },
+                        ).execute()
+                    )
+                    summary_rows = list(summary_response.data or [])
+                    total = int(summary_rows[0].get("total_count") or 0) if summary_rows else 0
+                paged_rows: list[dict[str, Any]] = []
+                for row in rpc_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    normalized = dict(row)
+                    normalized.pop("total_count", None)
+                    paged_rows.append(normalized)
+                logger.debug(
+                    "Listed %d memories (total=%d, edited_state=%s)",
+                    len(paged_rows),
+                    total,
+                    edited_state_norm,
+                )
+                return paged_rows, total
+
             data_query = (
                 apply_filters(
                     supabase.client.table("memories").select(self.MEMORY_SELECT_COLUMNS)
@@ -703,9 +1023,10 @@ class MemoryUIService:
             total = int(count_response.count or 0)
 
             logger.debug(
-                "Listed %d memories (total=%d)",
+                "Listed %d memories (total=%d, edited_state=%s)",
                 len(memories),
                 total,
+                edited_state_norm,
             )
             return memories, total
         except Exception as exc:

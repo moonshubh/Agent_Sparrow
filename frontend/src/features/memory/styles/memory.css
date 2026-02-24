@@ -712,6 +712,12 @@
   gap: 10px;
 }
 
+.memory-header-sort-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .memory-header-sort__label {
   font-size: 12px;
   font-weight: 600;
@@ -5092,8 +5098,10 @@
 
 /* Collapsible Metadata Panel */
 .add-memory-meta-panel {
-  overflow: hidden;
   flex-shrink: 0;
+  padding: 0 24px 12px;
+  background: var(--memory-surface);
+  border-top: 1px solid var(--memory-border);
 }
 
 .add-memory-meta-panel-inner {
@@ -5109,7 +5117,9 @@
 }
 
 .add-memory-meta-panel .add-memory-metadata-textarea {
-  min-height: 60px;
+  min-height: 140px;
+  max-height: min(34vh, 320px);
+  overflow-y: auto;
 }
 
 .add-memory-meta-toolbar {
@@ -5864,6 +5874,10 @@
     flex-direction: column;
     gap: 16px;
     padding: 16px;
+  }
+
+  .add-memory-meta-panel {
+    padding: 0 16px 12px;
   }
 
   .memory-header-left,

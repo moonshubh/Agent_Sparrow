@@ -29,6 +29,7 @@ import type {
   FeedbackType,
   ListMemoriesRequest,
   ListMemoriesResponse,
+  MemorySearchResponse,
   ImportMemorySourcesRequest,
   ImportZendeskTaggedRequest,
   UpdateRelationshipRequest,
@@ -39,6 +40,7 @@ import type {
   SplitRelationshipCommitResponse,
   RelationshipAnalysisRequest,
   RelationshipAnalysisResponse,
+  MemoryEditedState,
 } from "../types";
 
 // =============================================================================
@@ -65,7 +67,12 @@ export const memoryKeys = {
   duplicates: (status: "pending" | "all") =>
     [...memoryKeys.duplicatesBase(), status] as const,
   searches: () => [...memoryKeys.all, "search"] as const,
-  search: (query: string) => [...memoryKeys.searches(), query] as const,
+  search: (
+    query: string,
+    editedState: MemoryEditedState,
+    limit: number,
+    minConfidence: number,
+  ) => [...memoryKeys.searches(), query, editedState, limit, minConfidence] as const,
 };
 
 // =============================================================================
@@ -157,14 +164,21 @@ export function useMemorySearch(
   options?: {
     limit?: number;
     minConfidence?: number;
+    editedState?: MemoryEditedState;
     enabled?: boolean;
   },
 ) {
-  const { limit = 20, minConfidence = 0, enabled = true } = options || {};
+  const {
+    limit = 20,
+    minConfidence = 0,
+    editedState = "all",
+    enabled = true,
+  } = options || {};
 
   return useQuery({
-    queryKey: memoryKeys.search(query),
-    queryFn: () => memoryAPI.searchMemories(query, limit, minConfidence),
+    queryKey: memoryKeys.search(query, editedState, limit, minConfidence),
+    queryFn: () =>
+      memoryAPI.searchMemories(query, limit, minConfidence, undefined, editedState),
     enabled: enabled && query.length >= 2,
     staleTime: 30 * 1000,
   });
@@ -318,7 +332,7 @@ export function useSubmitFeedback() {
         queryKey: memoryKeys.lists(),
         type: "all",
       });
-      const previousSearches = queryClient.getQueriesData<Memory[]>({
+      const previousSearches = queryClient.getQueriesData<MemorySearchResponse>({
         queryKey: memoryKeys.searches(),
         type: "all",
       });
@@ -378,9 +392,14 @@ export function useSubmitFeedback() {
 
       queryClient.setQueriesData(
         { queryKey: memoryKeys.searches(), type: "all" },
-        (prev: Memory[] | undefined) => {
+        (prev: MemorySearchResponse | undefined) => {
           if (!prev) return prev;
-          return prev.map((m) => (m.id === memoryId ? applyFeedbackCounts(m) : m));
+          return {
+            ...prev,
+            items: prev.items.map((m) =>
+              m.id === memoryId ? applyFeedbackCounts(m) : m,
+            ),
+          };
         },
       );
 
@@ -426,9 +445,12 @@ export function useSubmitFeedback() {
 
       queryClient.setQueriesData(
         { queryKey: memoryKeys.searches(), type: "all" },
-        (prev: Memory[] | undefined) => {
+        (prev: MemorySearchResponse | undefined) => {
           if (!prev) return prev;
-          return prev.map((m) => (m.id === memoryId ? applyConfidence(m) : m));
+          return {
+            ...prev,
+            items: prev.items.map((m) => (m.id === memoryId ? applyConfidence(m) : m)),
+          };
         },
       );
     },

@@ -33,8 +33,10 @@ from fastapi.responses import RedirectResponse, Response
 from app.core.security import get_current_user, TokenPayload
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client, SupabaseClient
+from app.memory.edit_state import is_memory_edited
 from app.memory.title import derive_memory_title
 from app.memory.memory_ui_service import (
+    EDITED_FILTER_SCAN_CAP,
     MemoryUIService,
     get_memory_ui_service as _get_service,
 )
@@ -62,6 +64,7 @@ from .schemas import (
     MemoryStatsResponse,
     MemoryRecord,
     MemoryListResponse,
+    MemorySearchResponse,
     MemoryEntityRecord,
     GraphDataResponse,
     MemoryRelationshipRecord,
@@ -279,55 +282,9 @@ GRAPH_ENTITY_COLORS: dict[str, str] = {
 }
 
 
-def _metadata_text(metadata: Any, key: str) -> str:
-    if not isinstance(metadata, dict):
-        return ""
-    value = metadata.get(key)
-    if isinstance(value, str):
-        return value.strip()
-    return ""
-
-
-def _memory_has_editor_identity(memory_row: dict[str, Any]) -> bool:
-    reviewed_by = memory_row.get("reviewed_by")
-    if isinstance(reviewed_by, str) and reviewed_by.strip():
-        return True
-
-    metadata = memory_row.get("metadata")
-    editor_keys = (
-        "edited_by_email",
-        "updated_by_email",
-        "editor_email",
-        "edited_by",
-        "updated_by",
-        "edited_by_name",
-        "updated_by_name",
-    )
-    return any(_metadata_text(metadata, key) for key in editor_keys)
-
-
 def _is_memory_edited(memory_row: dict[str, Any]) -> bool:
-    created_at = memory_row.get("created_at")
-    updated_at = memory_row.get("updated_at")
-
-    def _coerce_datetime(value: Any) -> datetime | None:
-        if isinstance(value, datetime):
-            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-        if isinstance(value, str):
-            try:
-                return datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-        return None
-
-    created_dt = _coerce_datetime(created_at)
-    updated_dt = _coerce_datetime(updated_at)
-    if created_dt is None or updated_dt is None:
-        return False
-
-    if updated_dt <= created_dt:
-        return False
-    return _memory_has_editor_identity(memory_row)
+    # Keep thin wrapper so the graph path and list filter share one canonical rule.
+    return is_memory_edited(memory_row)
 
 
 @router.get(
@@ -349,6 +306,7 @@ async def list_memories(
     agent_id: str | None = Query(default=None),
     tenant_id: str | None = Query(default=None),
     source_type: str | None = Query(default=None),
+    edited_state: Literal["all", "edited", "unedited"] = Query(default="all"),
     sort_order: Literal["asc", "desc"] = Query(default="desc"),
 ) -> MemoryListResponse:
     try:
@@ -356,6 +314,7 @@ async def list_memories(
             agent_id=agent_id,
             tenant_id=tenant_id,
             source_type=source_type,
+            edited_state=edited_state,
             limit=int(limit),
             offset=int(offset),
             sort_order=sort_order,
@@ -367,6 +326,11 @@ async def list_memories(
             limit=int(limit),
             offset=int(offset),
         )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         logger.exception("Error listing memories: %s", exc)
         raise HTTPException(
@@ -377,7 +341,7 @@ async def list_memories(
 
 @router.get(
     "/search",
-    response_model=List[MemoryRecord],
+    response_model=MemorySearchResponse,
     summary="Search memories (text)",
     description="Text search memories by content (case-insensitive). Requires authentication.",
     responses={
@@ -394,32 +358,113 @@ async def search_memories_text(
     min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
     agent_id: str | None = Query(default=None),
     tenant_id: str | None = Query(default=None),
-) -> List[MemoryRecord]:
-    supabase = service._get_supabase()
+    edited_state: Literal["all", "edited", "unedited"] = Query(default="all"),
+) -> MemorySearchResponse:
     trimmed = (query or "").strip()
     if not trimmed:
-        return []
+        return MemorySearchResponse(items=[], truncated=False)
+    supabase = service._get_supabase()
+    edited_state_norm = (edited_state or "all").lower()
+    if edited_state_norm not in {"all", "edited", "unedited"}:
+        edited_state_norm = "all"
 
     escaped = _escape_like_pattern(trimmed)
     pattern = f"%{escaped}%"
 
+    def apply_filters(query_builder):
+        if agent_id:
+            query_builder = query_builder.eq("agent_id", agent_id)
+        if tenant_id:
+            query_builder = query_builder.eq("tenant_id", tenant_id)
+        return query_builder
+
+    def matches_edit_state(memory_row: dict[str, Any]) -> bool:
+        if edited_state_norm == "all":
+            return True
+        edited = _is_memory_edited(memory_row)
+        return edited if edited_state_norm == "edited" else not edited
+
     try:
-        q = (
+        if edited_state_norm == "all":
+            q = apply_filters(
+                supabase.client.table("memories")
+                .select(service.MEMORY_SELECT_COLUMNS)
+                .ilike("content", pattern)
+                .gte("confidence_score", float(min_confidence))
+                .order("confidence_score", desc=True)
+                .limit(int(limit))
+            )
+            resp = await supabase._exec(lambda: q.execute())
+            rows = list(resp.data or [])
+            return MemorySearchResponse(items=rows, truncated=False)
+
+        scan_cap = min(EDITED_FILTER_SCAN_CAP, max(int(limit) * 20, int(limit)))
+        batch_size = max(100, min(500, int(limit) * 10))
+        fetched = 0
+        matched_ids: list[str] = []
+        scan_cap_reached = False
+
+        while fetched < scan_cap and len(matched_ids) < int(limit):
+            batch_query = apply_filters(
+                supabase.client.table("memories")
+                .select(service.EDIT_STATE_SCAN_COLUMNS)
+                .ilike("content", pattern)
+                .gte("confidence_score", float(min_confidence))
+                .order("confidence_score", desc=True)
+                .range(fetched, fetched + batch_size - 1)
+            )
+            batch_response = await supabase._exec(lambda: batch_query.execute())
+            batch_rows = list(batch_response.data or [])
+            if not batch_rows:
+                break
+            for row in batch_rows:
+                if not matches_edit_state(row):
+                    continue
+                memory_id = row.get("id")
+                if not isinstance(memory_id, str) or not memory_id:
+                    continue
+                matched_ids.append(memory_id)
+                if len(matched_ids) >= int(limit):
+                    break
+            fetched += len(batch_rows)
+            if len(batch_rows) < batch_size:
+                break
+
+        if fetched >= scan_cap and len(matched_ids) < int(limit):
+            scan_cap_reached = True
+            logger.warning(
+                "search_memories_edited_scan_cap_reached query=%r limit=%d scan_cap=%d edited_state=%s",
+                trimmed[:80],
+                int(limit),
+                int(scan_cap),
+                edited_state_norm,
+            )
+
+        if not matched_ids:
+            return MemorySearchResponse(
+                items=[],
+                truncated=scan_cap_reached,
+                scan_cap=int(scan_cap) if scan_cap_reached else None,
+            )
+
+        rows_query = apply_filters(
             supabase.client.table("memories")
             .select(service.MEMORY_SELECT_COLUMNS)
-            .ilike("content", pattern)
-            .gte("confidence_score", float(min_confidence))
-            .order("confidence_score", desc=True)
-            .limit(int(limit))
+            .in_("id", matched_ids)
         )
-        if agent_id:
-            q = q.eq("agent_id", agent_id)
-        if tenant_id:
-            q = q.eq("tenant_id", tenant_id)
-
-        resp = await supabase._exec(lambda: q.execute())
-        rows = list(resp.data or [])
-        return rows  # type: ignore[return-value]
+        rows_response = await supabase._exec(lambda: rows_query.execute())
+        rows = list(rows_response.data or [])
+        row_map: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            row_id = row.get("id")
+            if isinstance(row_id, str):
+                row_map[row_id] = row
+        ordered_rows = [row_map[row_id] for row_id in matched_ids if row_id in row_map]
+        return MemorySearchResponse(
+            items=ordered_rows,
+            truncated=scan_cap_reached,
+            scan_cap=int(scan_cap) if scan_cap_reached else None,
+        )
     except Exception as exc:
         logger.exception("Error searching memories: %s", exc)
         raise HTTPException(
@@ -3788,6 +3833,14 @@ async def delete_memory(
 
     except HTTPException:
         raise
+    except RuntimeError as e:
+        message = str(e)
+        if "delete_memories_with_relationship_cleanup" in message:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=message,
+            ) from e
+        raise
     except Exception as e:
         logger.exception(f"Error deleting memory {memory_id}: {e}")
         raise HTTPException(
@@ -4409,8 +4462,9 @@ async def import_memory_sources(
     response_model=ImportZendeskTaggedResponse,
     summary="Queue Zendesk tagged ticket import (Admin only)",
     description=(
-        "Queue a background job to ingest solved/closed Zendesk tickets tagged for mb_playbook "
-        "learning into the Memory UI."
+        "Queue a background job to ingest Zendesk tickets tagged for mb_playbook learning "
+        "into the Memory UI. Status scope defaults to solved/closed and can be widened via "
+        "`status_scope=all`."
     ),
     responses={
         200: {"description": "Import queued"},
@@ -4432,7 +4486,28 @@ async def import_zendesk_tagged(
             )
         from app.feedme.tasks import import_zendesk_tagged as import_task
 
-        task = import_task.delay(tag=request.tag, limit=request.limit)
+        task_kwargs: dict[str, object] = {
+            "tag": request.tag,
+            "limit": request.limit,
+        }
+        # Keep legacy payload shape for default imports so API-first deploys remain
+        # compatible with workers that may not yet accept new kwargs.
+        if (
+            request.date_field != "created"
+            or request.date_after is not None
+            or request.date_before is not None
+            or request.status_scope != "resolved_only"
+        ):
+            task_kwargs.update(
+                {
+                    "date_field": request.date_field,
+                    "date_after": request.date_after,
+                    "date_before": request.date_before,
+                    "status_scope": request.status_scope,
+                }
+            )
+
+        task = import_task.delay(**task_kwargs)
         task_id = getattr(task, "id", None)
         return ImportZendeskTaggedResponse(
             queued=True,
@@ -4442,6 +4517,8 @@ async def import_zendesk_tagged(
                 f"/api/v1/memory/import/zendesk-tagged/{task_id}" if task_id else None
             ),
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Failed to queue Zendesk import")
         raise HTTPException(
@@ -4535,19 +4612,35 @@ async def get_import_zendesk_tagged_status(
         ready = bool(payload.get("ready"))
         successful = bool(payload.get("successful"))
         failed = bool(payload.get("failed"))
+        soft_error: str | None = None
 
         parsed_result: ImportZendeskTaggedTaskResult | None = None
         raw_result = payload.get("result")
         if isinstance(raw_result, dict):
             try:
                 parsed_result = ImportZendeskTaggedTaskResult.model_validate(raw_result)
-            except Exception:
+            except Exception as parse_exc:
+                logger.warning(
+                    "zendesk_import_status_result_parse_failed task_id=%s error=%s keys=%s",
+                    task_id,
+                    str(parse_exc)[:160],
+                    sorted(str(k) for k in raw_result.keys())[:20],
+                )
                 parsed_result = None
+            raw_result_error = raw_result.get("error")
+            if raw_result_error:
+                soft_error = str(raw_result_error)
+        if parsed_result and parsed_result.error:
+            soft_error = parsed_result.error
 
         error: str | None = None
         raw_error = payload.get("error")
         if raw_error:
             error = str(raw_error)
+        if soft_error:
+            failed = True
+            successful = False
+            error = soft_error
         if failed and not error:
             info = payload.get("info")
             if info:
@@ -4558,7 +4651,7 @@ async def get_import_zendesk_tagged_status(
         if status_value in {"PENDING", "RECEIVED", "STARTED"}:
             message = "Import is running."
         elif status_value in {"SUCCESS"}:
-            message = "Import completed."
+            message = "Import failed." if failed else "Import completed."
         elif status_value in {"FAILURE", "REVOKED"}:
             message = "Import failed."
         else:

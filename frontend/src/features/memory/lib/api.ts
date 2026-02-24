@@ -42,7 +42,9 @@ import type {
   ApproveMemoryResponse,
   ListMemoriesRequest,
   ListMemoriesResponse,
+  MemorySearchResponse,
   EntityType,
+  MemoryEditedState,
   ReviewStatus,
   UpdateRelationshipRequest,
   MergeRelationshipsRequest,
@@ -293,7 +295,8 @@ export async function exportMemories(
 }
 
 /**
- * Import solved Zendesk tickets tagged for MB_playbook learning (admin only)
+ * Queue Zendesk tagged import for Memory UI (admin only).
+ * Defaults to resolved tickets but supports date/status filters.
  */
 export async function importZendeskTagged(
   request: ImportZendeskTaggedRequest = {},
@@ -469,19 +472,21 @@ export async function listMemories(
     agent_id,
     tenant_id,
     source_type,
+    edited_state = "all",
     review_status,
     sort_order = "desc",
   } = params;
 
   // For review_status filtering (e.g., pending_review) always use backend reads so
   // admin-only gating works consistently across environments.
-  if (review_status || (await shouldUseBackendReads())) {
+  if (review_status || edited_state !== "all" || (await shouldUseBackendReads())) {
     const qs = buildQueryString({
       limit,
       offset,
       agent_id,
       tenant_id,
       source_type: source_type || undefined,
+      edited_state: edited_state || undefined,
       review_status: review_status || undefined,
       sort_order,
     });
@@ -576,20 +581,33 @@ export async function searchMemories(
   limit: number = API_LIMITS.SEARCH_RESULTS,
   minConfidence: number = 0,
   reviewStatus?: ReviewStatus,
-): Promise<Memory[]> {
+  editedState: MemoryEditedState = "all",
+): Promise<MemorySearchResponse> {
   const trimmed = (query || "").trim();
   if (!trimmed) {
-    return [];
+    return { items: [], truncated: false };
   }
 
-  if (reviewStatus || (await shouldUseBackendReads())) {
+  if (reviewStatus || editedState !== "all" || (await shouldUseBackendReads())) {
     const qs = buildQueryString({
       query: trimmed,
       limit,
       min_confidence: minConfidence,
       review_status: reviewStatus || undefined,
+      edited_state: editedState || undefined,
     });
-    return apiClient.get<Memory[]>(`${MEMORY_API_BASE}/search${qs}`);
+    const response = await apiClient.get<Memory[] | MemorySearchResponse>(
+      `${MEMORY_API_BASE}/search${qs}`,
+    );
+    if (Array.isArray(response)) {
+      return { items: response, truncated: false };
+    }
+    return {
+      items: Array.isArray(response?.items) ? response.items : [],
+      truncated: Boolean(response?.truncated),
+      scan_cap:
+        typeof response?.scan_cap === "number" ? response.scan_cap : undefined,
+    };
   }
 
   const escapedQuery = escapeLikePattern(trimmed);
@@ -608,7 +626,7 @@ export async function searchMemories(
     throw new Error(error.message);
   }
 
-  return (data || []) as Memory[];
+  return { items: (data || []) as Memory[], truncated: false };
 }
 
 /**
@@ -776,8 +794,12 @@ export async function getDuplicateCandidates(
 
   const memoryIds = new Set<string>();
   candidates.forEach((candidate) => {
-    memoryIds.add(candidate.memory_id_1);
-    memoryIds.add(candidate.memory_id_2);
+    if (candidate.memory_id_1) {
+      memoryIds.add(candidate.memory_id_1);
+    }
+    if (candidate.memory_id_2) {
+      memoryIds.add(candidate.memory_id_2);
+    }
   });
 
   if (memoryIds.size > 0) {
